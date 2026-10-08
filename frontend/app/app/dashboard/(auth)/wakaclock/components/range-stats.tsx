@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BreakdownChart } from '@/components/wakaclock/breakdown-chart';
+import { IncompleteTimeBadge } from '@/components/wakaclock/delivery-status-notice';
 import { EvidenceSplitPanel } from '@/components/wakaclock/evidence-split';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { StatTile } from '@/components/wakaclock/stat-tile';
@@ -51,6 +52,7 @@ export function RangeStats() {
   return (
     <Card>
       <CardHeader>
+        <IncompleteTimeBadge />
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Stats</CardTitle>

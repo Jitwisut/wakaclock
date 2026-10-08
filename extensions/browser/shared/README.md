@@ -1,13 +1,13 @@
-# AtoAxis browser tracking core
+# Shared browser core
 
-This WebExtension core is shared by Chrome/Edge/Brave, Firefox and Safari adapters.
+`tracker.ts` validates consent/settings, excludes private/local domains, matches local
+project rules and constructs the sole outbound heartbeat shape. URLs, titles and page
+content never cross that boundary. Tracking is off until explicitly enabled. Default
+AFK is 5 minutes. Domain rules can include subdomains; path rules use segment boundaries.
 
-- Domain-only tracking is the default.
-- URL paths and tab titles require explicit opt-in.
-- Incognito/private windows are disabled by default.
-- Password-manager, banking and healthcare hostnames are denied before payload creation.
-- AFK timeout defaults to 15 minutes and is user-configurable.
-- The payload never contains page HTML, form values, cookies, prompts or source code.
-
-Each browser adapter is responsible only for permissions, storage and the device-code
-flow. `buildHeartbeat` is the single payload boundary shared by all adapters.
+`src/tracking.ts` closes measured foreground checkpoints and splits local-day totals.
+`src/database.ts` commits queue/checkpoint/totals in one IndexedDB transaction.
+`src/api.ts` owns device authorization and single-flight rotating refresh tokens.
+`src/delivery.ts` acknowledges individual bulk results and retains records on failures.
+Browser-specific idle/focus/native APIs stay in `src/background.ts`; manifests and
+Safari native sources are separate adapters. Tests use a fake clock/IndexedDB/transport.

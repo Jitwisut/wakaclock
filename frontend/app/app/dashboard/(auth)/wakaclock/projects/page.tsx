@@ -170,7 +170,7 @@ function ProjectsAnalytics() {
                 {firstPage.totals.comparable_seconds !== undefined && (
                   <>
                     {' · '}
-                    {formatDurationShort(firstPage.totals.comparable_seconds)} WakaTime-comparable
+                    {formatDurationShort(firstPage.totals.comparable_seconds)} Editor-only activity
                     {' · '}
                     {formatDurationShort(firstPage.totals.ai_additional_seconds ?? 0)} additional AI
                   </>

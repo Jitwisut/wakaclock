@@ -104,6 +104,12 @@ export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
     description: 'Per-day summary rows for the selected range.',
   },
   {
+    id: 'overview.browsing',
+    page: OVERVIEW,
+    label: 'Browsing',
+    description: 'Measured foreground website time by domain, project and day.',
+  },
+  {
     id: 'overview.duration-timeline',
     page: OVERVIEW,
     label: 'Duration timeline',

@@ -282,6 +282,7 @@ export interface DurationBlock {
   end: number;
   entity: string;
   heartbeat_count: number;
+  heartbeat_ids?: string[];
   language: null | string;
   project: null | string;
   start: number;
@@ -303,6 +304,7 @@ export interface DurationsResponse {
   date: string;
   range_end?: number;
   range_start?: number;
+  timeout_seconds?: number;
   timezone?: string;
   total: number;
   total_seconds?: number;
@@ -791,6 +793,14 @@ export interface DashboardAnalyticsResponse {
     models: Breakdown;
     operating_systems: Breakdown;
     weekdays: Breakdown;
+  };
+  /** Additive field: older API deployments omit browser metrics. */
+  browsing?: {
+    calculation_version: 'browser_foreground_v1';
+    daily: Array<{ name: string; seconds: number }>;
+    domains: Array<{ name: string; seconds: number }>;
+    projects: Array<{ name: string; seconds: number }>;
+    total_seconds: number;
   };
   coverage: {
     attributed_changes: number;

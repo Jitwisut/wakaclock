@@ -139,6 +139,8 @@ mod tests {
         let captured_at = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
         DeliveryQueueSnapshot {
             schema_version: 1,
+            details: None,
+            capture: None,
             device_id: "device-a".to_string(),
             queue_id: "a".repeat(64),
             sequence,

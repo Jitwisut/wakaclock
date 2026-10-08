@@ -249,7 +249,21 @@ export interface VerifyResult {
   error?: string | null;
 }
 
+export interface DeliveryQueueDetails {
+    eligible: number;
+    leased: number;
+    next_retry_at: string | null;
+    oldest_event_at: string | null;
+    accepted_total: number;
+    backlog_error: { kind: string; http_status: number | null; message_code: string; failed_at: string } | null;
+}
+
 export interface StatusBarSnapshot {
+    deliveryDetails?: DeliveryQueueDetails;
+    dataIncomplete?: boolean;
+    capture?: { status: string; checked_at?: string; last_scan_success_at?: string; pending?: number; parser_errors?: number; incomplete?: boolean };
+    deadLetter?: number;
+    oldestPendingAt?: string;
     humanReadable: string;
     totalSeconds: number;
     heartbeatCount: number;

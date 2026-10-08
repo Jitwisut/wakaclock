@@ -167,7 +167,7 @@ function DetailPanel() {
               {detail.summary.comparable_seconds !== undefined && (
                 <>
                   <Metric
-                    label="WakaTime-comparable activity"
+                    label="Editor-only activity"
                     value={formatDurationShort(detail.summary.comparable_seconds)}
                   />
                   <Metric

@@ -146,6 +146,7 @@ pub struct AppState {
     /// `handlers/v1/orgs.rs` for the exact boundary.
     pub org_service: Arc<OrgService>,
     pub organizations_service: Arc<OrganizationsService>,
+    pub team_insights_service: Arc<crate::services::team_insights::TeamInsightsService>,
     pub oauth_service: Arc<OAuthService>,
     pub team_service: Arc<TeamService>,
     /// Group co-working sessions (plan.md 7.4).
@@ -461,6 +462,18 @@ pub async fn create_app_state() -> Result<AppState> {
         authorization_service.clone(),
         presence_repo.clone(),
     ));
+    let team_insights_service = Arc::new(crate::services::team_insights::TeamInsightsService::new(
+        postgres.clone().map(|pg| {
+            Arc::new(
+                crate::repository::team_insights::TeamInsightsRepository::new(
+                    pg,
+                    clickhouse.clone(),
+                ),
+            )
+        }),
+        authorization_service.clone(),
+        config.team_enabled,
+    ));
     let oauth_service = Arc::new(OAuthService::new(postgres.clone()));
     let team_service = Arc::new(TeamService::new(team_repo.clone(), org_service.clone()));
     let coworking_session_service =
@@ -531,6 +544,7 @@ pub async fn create_app_state() -> Result<AppState> {
         wakatime_import_service,
         org_service,
         organizations_service,
+        team_insights_service,
         oauth_service,
         team_service,
         coworking_session_service,

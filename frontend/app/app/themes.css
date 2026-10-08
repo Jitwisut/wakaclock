@@ -23,12 +23,10 @@ body {
 /* Theme presets */
 
 /*
- * Retro Pixel 3D — the dashboard's default preset (see `lib/themes.ts`). A single warm
- * "wood cabinet / parchment" hue (~78°) carries the whole base scale from cream (light
- * mode) down to near-black (dark mode), the same one-hue-across-the-scale approach every
- * other preset here uses — it just means light and dark read as "arcade cabinet by day"
- * vs "by night" instead of two unrelated palettes. Primary is a saturated arcade red,
- * secondary an amber/gold accent. `--radius: 0rem` plus the `border-radius: 0 !important`
+ * Retro Pixel 3D — the dashboard's default preset (see `lib/themes.ts`). Green carries
+ * the base scale and primary accents, with a lime secondary accent. Light-mode cards,
+ * muted surfaces and borders use neutral white/gray; dark mode keeps the green base
+ * scale. `--radius: 0rem` plus the `border-radius: 0 !important`
  * safety net further down (`--radius-xl`'s calc() would otherwise still leave 4px of
  * rounding, and `rounded-full` circles ignore `--radius` entirely) commit fully to sharp
  * pixel corners. Display and body tokens resolve through the local bundled sans/mono
@@ -77,7 +75,7 @@ body {
 
   --background: var(--base-50);
   --foreground: var(--base-900);
-  --card: var(--base-100);
+  --card: oklch(1 0 0);
   --card-foreground: var(--base-900);
   --popover: var(--base-100);
   --popover-foreground: var(--base-900);
@@ -85,12 +83,12 @@ body {
   --primary-foreground: var(--color-white);
   --secondary: var(--secondary-600);
   --secondary-foreground: var(--base-950);
-  --muted: var(--base-200);
+  --muted: oklch(0.96 0 0);
   --muted-foreground: var(--base-600);
   --accent: var(--base-200);
   --accent-foreground: var(--base-900);
   --destructive: oklch(0.55 0.22 10);
-  --border: var(--base-300);
+  --border: oklch(0.888 0 0);
   --input: var(--base-300);
   --ring: var(--primary-700);
   --chart-1: var(--primary-700);

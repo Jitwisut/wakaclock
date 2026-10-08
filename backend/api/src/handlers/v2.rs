@@ -13,7 +13,6 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration, NaiveDate, Utc};
 use clickhouse::Row;
-use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -47,6 +46,8 @@ use crate::model::profile::{
 };
 use crate::model::report::{CreateReportScheduleRequest, ReportSchedule};
 
+mod team_insights;
+mod team_webhooks;
 mod work_sessions;
 
 const WAKATIME_ROUTE_INVENTORY: &str = include_str!("../../../../wakatime-api-routes.json");
@@ -89,6 +90,11 @@ pub struct AccountDeletionConfirmation {
 #[derive(Debug, Serialize)]
 pub struct CapabilityData {
     pub api_version: &'static str,
+    pub delivery_snapshot_versions: Vec<u8>,
+    pub capture_activity_versions: Vec<u8>,
+    pub capture_status_supported: bool,
+    pub team_weekly_aggregates_supported: bool,
+    pub team_measurement_health_supported: bool,
     pub product: &'static str,
     pub transactional_store: &'static str,
     pub analytics_store: &'static str,
@@ -371,6 +377,16 @@ pub struct WakaTimeImportJob {
 
 pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/team/webhooks/github", post(team_webhooks::github))
+        .route("/organizations/:organization_id/measurement-health", get(team_insights::measurement_health))
+        .route("/organizations/:organization_id/launch-readiness", get(team_insights::readiness))
+        .route("/organizations/:organization_id/work-items/:repository_id/:work_item_id/receipt", get(team_insights::receipt))
+        .route("/organizations/:organization_id/insights", get(team_insights::insights))
+        .route("/organizations/:organization_id/exports/team.csv", get(team_insights::export))
+        .route("/organizations/:organization_id/me/consent", get(team_insights::consent))
+        .route("/organizations/:organization_id/work-items", get(team_insights::work_items))
+        .route("/organizations/:organization_id/me/session-links", get(team_insights::links).post(team_insights::propose))
+        .route("/organizations/:organization_id/me/session-links/:link_id", put(team_insights::decide))
         .route("/capabilities", get(capabilities))
         .route("/me", get(me).delete(account_delete))
         .route("/me/analytics", get(analytics))
@@ -685,7 +701,7 @@ fn feature_available(
     }
 
     match key {
-        "ai_human_follow_up" => false,
+        "ai_human_follow_up" | "organization_analytics" => false,
         "ai_human_follow_up_events" | "work_session_receipts" => true,
         "data_exports" => export_available && postgres,
         "postgres_transactional_store"
@@ -693,7 +709,6 @@ fn feature_available(
         | "goals_crud"
         | "oauth_pkce_and_device_flow"
         | "git_commit_pr_analytics"
-        | "organization_analytics"
         | "resumable_wakatime_import"
         | "delivery_queue_status"
         | "measurement_repair" => postgres,
@@ -766,6 +781,11 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
     Json(envelope(
         CapabilityData {
             api_version: "2",
+            delivery_snapshot_versions: vec![1, 2],
+            capture_activity_versions: vec![2],
+            capture_status_supported: true,
+            team_weekly_aggregates_supported: state.config.team_enabled && state.postgres.is_some(),
+            team_measurement_health_supported: state.postgres.is_some(),
             product: "AtoAxis",
             transactional_store: if state.postgres.is_some() {
                 "postgresql"
@@ -1197,7 +1217,7 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
     const MAX_COUNTER: u32 = 1_000_000;
     const MAX_SEQUENCE: u64 = 9_000_000_000_000_000_000;
     let now = Utc::now();
-    if snapshot.schema_version != 1
+    if ![1, 2].contains(&snapshot.schema_version)
         || snapshot.device_id.trim().is_empty()
         || snapshot.device_id.len() > 128
         || !snapshot.device_id.is_ascii()
@@ -1218,6 +1238,7 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
                 || snapshot.retry.is_some()
                 || snapshot.dead_letter.is_some()
                 || snapshot.oldest_pending_at.is_some()
+                || snapshot.details.is_some()
             {
                 return Err(ApiError::bad_request(
                     "unavailable queue snapshots must not contain counts",
@@ -1244,6 +1265,42 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
             }
         }
     }
+    if snapshot.schema_version == 1 && snapshot.details.is_some() {
+        return Err(ApiError::bad_request(
+            "v1 snapshots cannot contain v2 details",
+        ));
+    }
+    if snapshot.schema_version == 2 && snapshot.read_status == QueueReadStatus::Available {
+        let details = snapshot
+            .details
+            .as_ref()
+            .ok_or_else(|| ApiError::bad_request("v2 snapshots require queue details"))?;
+        if details.eligible.saturating_add(details.leased) > snapshot.pending.unwrap_or(0)
+            || details.accepted_total > MAX_SEQUENCE
+            || details.backlog_error.as_ref().is_some_and(|error| {
+                ![
+                    "auth_401",
+                    "payment_402",
+                    "network",
+                    "validation",
+                    "server_error",
+                    "other",
+                ]
+                .contains(&error.kind.as_str())
+                    || error.message_code.len() > 80
+                    || !error
+                        .message_code
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                    || error
+                        .http_status
+                        .is_some_and(|status| !(400..=599).contains(&status))
+                    || error.failed_at > snapshot.captured_at
+            })
+        {
+            return Err(ApiError::bad_request("invalid delivery queue details"));
+        }
+    }
     if snapshot
         .oldest_pending_at
         .is_some_and(|value| value > snapshot.captured_at)
@@ -1254,6 +1311,21 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
         return Err(ApiError::bad_request(
             "delivery timestamps cannot be later than captured_at",
         ));
+    }
+    if let Some(capture) = &snapshot.capture {
+        if snapshot.schema_version != 2
+            || capture.schema_version != 1
+            || !["fresh", "unavailable", "parser_failure", "disabled"]
+                .contains(&capture.status.as_str())
+            || capture.pending > MAX_COUNTER
+            || capture.parser_errors > MAX_COUNTER
+            || capture.captured_at > now + Duration::minutes(5)
+            || capture
+                .last_scan_success_at
+                .is_some_and(|v| v > capture.captured_at)
+        {
+            return Err(ApiError::bad_request("invalid capture health snapshot"));
+        }
     }
     Ok(())
 }
@@ -2766,99 +2838,21 @@ pub async fn organization_analytics(
         .analytics(user_id, organization_id)
         .await
         .map_err(ApiError::service_unavailable)?;
-    let members = state
-        .organizations_service
-        .consenting_analytics_members(user_id, organization_id)
-        .await
-        .map_err(ApiError::service_unavailable)?;
-    let consenting_members = members.len();
-    let results = stream::iter(members.into_iter().map(|(member_id, share_individual)| {
-        let state = state.clone();
-        let start = start.clone();
-        let end = end.clone();
-        let timezone = query.timezone.clone();
-        async move {
-            let summary = state
-                .summary_service
-                .get_range_in_timezone(member_id, &start, &end, timezone.as_deref())
-                .await?;
-            let stats = state
-                .ai_stats_service
-                .get_range_in_timezone(member_id, &start, &end, timezone.as_deref())
-                .await?;
-            let seconds = summary
-                .days
-                .iter()
-                .map(|day| day.grand_total.total_seconds)
-                .sum::<f64>();
-            let proven = summary
-                .days
-                .iter()
-                .map(|day| day.grand_total.evidence.proven_seconds)
-                .sum::<f64>();
-            let inferred = summary
-                .days
-                .iter()
-                .map(|day| day.grand_total.evidence.inferred_seconds)
-                .sum::<f64>();
-            Ok::<_, anyhow::Error>((
-                member_id,
-                share_individual,
-                seconds,
-                proven,
-                inferred,
-                stats.data.coverage.attributed_line_changes,
-                stats.data.coverage.line_change_denominator,
-            ))
-        }
-    }))
-    .buffer_unordered(8)
-    .collect::<Vec<_>>()
-    .await;
-    let mut total_seconds = 0.0;
-    let mut proven_seconds = 0.0;
-    let mut inferred_seconds = 0.0;
-    let mut attributed_line_changes = 0;
-    let mut line_change_denominator = 0;
-    let mut individual = Vec::new();
-    for result in results {
-        let (member_id, share_individual, seconds, proven, inferred, attributed, denominator) =
-            result.map_err(ApiError::internal)?;
-        total_seconds += seconds;
-        proven_seconds += proven;
-        inferred_seconds += inferred;
-        attributed_line_changes += attributed;
-        line_change_denominator += denominator;
-        if share_individual {
-            individual.push(IndividualMeasurement {
-                user_id: member_id,
-                total_seconds: seconds,
-                attributed_line_changes: attributed,
-                line_change_denominator: denominator,
-            });
-        }
-    }
-    individual.sort_by_key(|entry| entry.user_id);
-    let status = if consenting_members == 0 {
-        "no_consented_members"
-    } else if total_seconds == 0.0 && line_change_denominator == 0 {
-        "no_observed_activity"
-    } else {
-        "observed"
-    };
+    // This legacy report has no event-time consent projection or complementary
+    // suppression. Preserve its wire shape while closing the alternate read path.
     let measurement = OrganizationMeasurement {
         start,
         end,
         timezone: query.timezone.clone().unwrap_or_else(|| "UTC".to_string()),
-        status,
-        consenting_members,
-        total_seconds: (consenting_members > 0).then_some(total_seconds),
-        proven_seconds: (consenting_members > 0).then_some(proven_seconds),
-        inferred_seconds: (consenting_members > 0).then_some(inferred_seconds),
-        attributed_line_changes,
-        line_change_denominator,
-        individual,
-        small_team_inference_warning: consenting_members < 3 && consenting_members > 0,
+        status: "unavailable_privacy_projection",
+        consenting_members: 0,
+        total_seconds: None,
+        proven_seconds: None,
+        inferred_seconds: None,
+        attributed_line_changes: 0,
+        line_change_denominator: 0,
+        individual: vec![],
+        small_team_inference_warning: false,
     };
     Ok(Json(envelope(
         OrganizationAnalyticsData {
@@ -2867,7 +2861,7 @@ pub async fn organization_analytics(
         },
         query.timezone.as_deref().unwrap_or("UTC"),
         Some(
-            json!({ "analytics": "consented_members_only", "attribution_date_basis": "heartbeat_timestamp_in_requested_timezone" }),
+            json!({ "analytics": "unavailable_privacy_projection", "reason": "use_team_insights_when_enabled" }),
         ),
     )))
 }
@@ -4057,5 +4051,90 @@ mod organization_error_tests {
             organization_error(anyhow::anyhow!("PostgreSQL is not configured")).status,
             StatusCode::SERVICE_UNAVAILABLE
         );
+    }
+}
+
+#[cfg(test)]
+mod delivery_snapshot_tests {
+    use super::*;
+    use wakaclock_core::queue::{DeliveryErrorSummary, DeliveryQueueDetails};
+    fn available(version: u8) -> DeliveryQueueSnapshot {
+        DeliveryQueueSnapshot {
+            schema_version: version,
+            capture: None,
+            device_id: "device".into(),
+            queue_id: "a".repeat(64),
+            sequence: 1,
+            captured_at: Utc::now(),
+            read_status: QueueReadStatus::Available,
+            pending: Some(1191),
+            retry: Some(1191),
+            dead_letter: Some(0),
+            oldest_pending_at: Some(Utc::now() - Duration::hours(1)),
+            last_successful_delivery_at: None,
+            details: (version == 2).then_some(DeliveryQueueDetails {
+                eligible: 100,
+                leased: 0,
+                next_retry_at: Some(Utc::now() + Duration::minutes(1)),
+                oldest_event_at: Some(Utc::now() - Duration::days(2)),
+                accepted_total: 1,
+                backlog_error: Some(DeliveryErrorSummary {
+                    kind: "network".into(),
+                    http_status: None,
+                    message_code: "connect_failed".into(),
+                    failed_at: Utc::now() - Duration::minutes(1),
+                }),
+            }),
+        }
+    }
+    #[test]
+    fn v1_and_v2_are_supported_and_missing_details_are_not_zero() {
+        assert!(validate_delivery_snapshot(&available(1)).is_ok());
+        assert!(validate_delivery_snapshot(&available(2)).is_ok());
+        let mut invalid = available(2);
+        invalid.details = None;
+        assert!(validate_delivery_snapshot(&invalid).is_err());
+        let unavailable = DeliveryQueueSnapshot::unavailable("device".into(), "a".repeat(64), 2);
+        assert!(validate_delivery_snapshot(&unavailable).is_ok());
+        assert_eq!(unavailable.pending, None);
+    }
+    #[test]
+    fn capture_health_is_additive_bounded_and_metadata_only() {
+        let mut snapshot = available(2);
+        let at = snapshot.captured_at;
+        snapshot.capture = Some(wakaclock_core::queue::CaptureHealthSnapshot {
+            schema_version: 1,
+            captured_at: at,
+            enabled: true,
+            status: "fresh".into(),
+            last_scan_success_at: Some(at),
+            parser_errors: 0,
+            pending: 0,
+        });
+        assert!(validate_delivery_snapshot(&snapshot).is_ok());
+        let mut value = serde_json::to_value(&snapshot).unwrap();
+        value["capture"]["prompt"] = serde_json::json!("secret");
+        assert!(serde_json::from_value::<DeliveryQueueSnapshot>(value).is_err());
+        snapshot.capture.as_mut().unwrap().status = "free form secret".into();
+        assert!(validate_delivery_snapshot(&snapshot).is_err());
+        snapshot.capture.as_mut().unwrap().status = "fresh".into();
+        snapshot.schema_version = 1;
+        assert!(validate_delivery_snapshot(&snapshot).is_err());
+    }
+    #[test]
+    fn diagnostics_refuse_freeform_content_and_invalid_counts() {
+        let mut invalid = available(2);
+        invalid
+            .details
+            .as_mut()
+            .unwrap()
+            .backlog_error
+            .as_mut()
+            .unwrap()
+            .message_code = "secret file contents".into();
+        assert!(validate_delivery_snapshot(&invalid).is_err());
+        invalid = available(2);
+        invalid.details.as_mut().unwrap().leased = 1191;
+        assert!(validate_delivery_snapshot(&invalid).is_err());
     }
 }

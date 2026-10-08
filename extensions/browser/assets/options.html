@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width" />
+        <title>AtoAxis Browser Settings</title>
+        <link rel="stylesheet" href="ui.css" />
+    </head>
+    <body class="options">
+        <header>
+            <img src="icons/icon-48.png" width="32" height="32" alt="" />
+            <h1>AtoAxis Browser Settings</h1>
+        </header>
+        <p id="connection"></p>
+        <p id="state" class="badge"></p>
+        <p>
+            Current website: <span id="domain">—</span> · Project:
+            <span id="project">—</span>
+        </p>
+        <p>
+            Today in this browser: <span id="seconds"></span> ·
+            <span id="pending"></span>
+        </p>
+        <p id="device" role="status"></p>
+        <p id="error" role="alert"></p>
+        <p id="privacy">
+            Enabling tracking sends domains, project names and measured time to
+            your AtoAxis account. Website paths are matched locally. Titles,
+            page content and private windows are never collected.
+        </p>
+        <div class="actions">
+            <button id="connect">Connect account</button
+            ><button id="disconnect" hidden>Disconnect</button
+            ><button id="toggle">Enable tracking</button
+            ><button id="exclude">Do not track this website</button
+            ><button id="retry">Retry delivery</button
+            ><button id="dashboard">Open dashboard</button>
+        </div>
+        <section>
+            <h2>Idle and exclusions</h2>
+            <label
+                >Stop after system inactivity (minutes)<input
+                    id="afk"
+                    type="number"
+                    min="1"
+                    max="1440"
+                    value="5" /></label
+            ><label
+                >Excluded domains · one per line<textarea
+                    id="denylist"
+                    rows="5"
+                    placeholder="example.com"
+                ></textarea>
+            </label>
+            <p>
+                Exclusions include subdomains. Local networks and private
+                windows are always excluded. Initial sensitive-hostname
+                exclusions are a heuristic; add sensitive websites you use here.
+            </p>
+        </section>
+        <section>
+            <h2>Project rules</h2>
+            <p>
+                The longest matching path wins. Excluded websites always take
+                priority.
+            </p>
+            <label
+                >Domain<input
+                    id="rule-domain"
+                    placeholder="github.com" /></label
+            ><label
+                >Path prefix<input
+                    id="rule-path"
+                    placeholder="/team/project"
+                    value="/" /></label
+            ><label class="check"
+                ><input type="checkbox" id="rule-subdomains" /> Include
+                subdomains</label
+            ><label
+                >AtoAxis project<select id="rule-project">
+                    <option value="">Load your projects first</option>
+                </select></label
+            >
+            <div class="actions">
+                <button id="load-projects">Load projects</button
+                ><button id="add-rule">Add rule</button>
+            </div>
+            <ul id="rules"></ul>
+        </section>
+        <button id="save" class="primary">Save settings</button>
+        <p id="saved" role="status"></p>
+        <section>
+            <h2>Transfer settings</h2>
+            <p>
+                Transfer rules manually between browsers. Export contains no
+                credentials or activity. Import pauses tracking.
+            </p>
+            <button id="export">Export rules</button
+            ><label
+                >Import rules<input
+                    id="import"
+                    type="file"
+                    accept="application/json,.json"
+            /></label>
+        </section>
+        <footer>
+            Safari requires the included macOS companion to remain running.
+            Firefox may stop on AFK rather than immediately at screen lock if
+            focus loss is not reported.
+        </footer>
+        <script src="ui.js"></script>
+    </body>
+</html>

@@ -6,6 +6,47 @@ export const wakaclockKeys = {
   all: ['wakaclock'] as const,
   // No userId: describes the server deployment, not an account — see useCapabilities.
   capabilities: () => [...wakaclockKeys.all, 'capabilities'] as const,
+  organizations: (userId: string) => ['organizations', userId] as const,
+  teamReceipt: (
+    userId: string,
+    organizationId: string,
+    repositoryId: string,
+    itemId: number,
+    teamId?: string
+  ) =>
+    [
+      ...wakaclockKeys.all,
+      'team-receipt',
+      userId,
+      organizationId,
+      repositoryId,
+      itemId,
+      teamId,
+    ] as const,
+  teamHealth: (userId: string, organizationId: string) =>
+    [...wakaclockKeys.all, 'team-health', userId, organizationId] as const,
+  teamConsent: (userId: string, organizationId: string) =>
+    [...wakaclockKeys.all, 'team-consent', userId, organizationId] as const,
+  teamInsights: (
+    userId: string,
+    organizationId: string,
+    start: string,
+    end: string,
+    timezone: string,
+    teamId?: string
+  ) =>
+    [
+      ...wakaclockKeys.all,
+      'team-insights',
+      userId,
+      organizationId,
+      start,
+      end,
+      timezone,
+      teamId,
+    ] as const,
+  teamWorkItems: (userId: string, organizationId: string, teamId?: string) =>
+    [...wakaclockKeys.all, 'team-work-items', userId, organizationId, teamId] as const,
   organizationTeams: (userId: string, organizationId: string) =>
     [...wakaclockKeys.all, 'organization-teams', userId, organizationId] as const,
   organizationMembers: (userId: string, organizationId: string) =>

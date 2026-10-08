@@ -75,6 +75,14 @@ cross-page product components go in `components/wakaclock/`.
 
 ## Existing Convention — Repository-wide
 
+**Protected `main` — owner instruction, 2026-10-08.** Never push to `main`
+unless the owner explicitly authorizes updating `main` for the current action.
+A generic "commit and push" request does not grant that permission, regardless
+of the current branch or its upstream. For authorized Git work, use a task
+branch; Codex-created branches use the `codex/` prefix. Do not bypass this rule
+through `HEAD:main`, force-push, or a PR merge. Prior permission for one push
+does not authorize future updates to `main`.
+
 **Commits.** Conventional Commits, enforced by commitlint
 ([../frontend/app/commitlint.config.cjs](../frontend/app/commitlint.config.cjs)):
 `feat|fix|docs|refactor|test|chore|ci|build(scope): message`, 100-char header.

@@ -169,8 +169,11 @@ export function EvidenceSplitPanel({ evidence }: { evidence: EvidenceSplitData }
           evidence.ai_additional_seconds !== undefined && (
             <dl className="grid gap-3 text-sm sm:grid-cols-2">
               <div>
-                <dt>WakaTime-comparable activity</dt>
+                <dt>Editor-only activity</dt>
                 <dd>{Math.round(evidence.comparable_seconds / 60)} min</dd>
+                <p className="text-muted-foreground text-xs">
+                  Excludes all AI Coding; can be zero while Measured Active is positive.
+                </p>
               </div>
               <div>
                 <dt>Additional measured AI time</dt>

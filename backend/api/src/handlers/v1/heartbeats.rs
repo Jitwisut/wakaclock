@@ -1075,15 +1075,34 @@ fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat,
     Ok(heartbeat)
 }
 
+fn has_explicit_browser_project(heartbeat: &Heartbeat) -> bool {
+    heartbeat.category == wakaclock_core::heartbeat::Category::Browsing
+        && heartbeat
+            .project
+            .as_deref()
+            .is_some_and(|name| !name.trim().is_empty())
+        && heartbeat.activity_segments.iter().any(|segment| {
+            segment
+                .source
+                .as_deref()
+                .is_some_and(|source| source.eq_ignore_ascii_case("browser_foreground_v1"))
+        })
+}
+
 async fn resolve_heartbeat_project(
     state: &Arc<AppState>,
     user_id: Uuid,
     mut heartbeat: Heartbeat,
 ) -> anyhow::Result<Heartbeat> {
-    heartbeat.project = state
-        .project_rule_service
-        .resolve_project(user_id, &heartbeat.entity, heartbeat.project.clone())
-        .await?;
+    // Browser paths never leave the client; server domain regexes cannot recover
+    // that local mapping. Preserve an explicit browser project, then resolve its ID
+    // server-side exactly like any other project. All other clients keep rule precedence.
+    if !has_explicit_browser_project(&heartbeat) {
+        heartbeat.project = state
+            .project_rule_service
+            .resolve_project(user_id, &heartbeat.entity, heartbeat.project.clone())
+            .await?;
+    }
 
     // Identity is resolved after the name rules, not before: a rule can change which
     // project a heartbeat belongs to, and the id must follow the resolved name.  A
@@ -1664,6 +1683,31 @@ mod tests {
         assert_eq!(labelled.actor_type, coding.actor_type);
         assert_eq!(labelled.actor_confidence, coding.actor_confidence);
         assert_eq!(labelled.ai_agent, coding.ai_agent);
+    }
+
+    #[test]
+    fn browser_payload_preserves_local_mapping_and_unknown_authorship() {
+        let payload: HeartbeatPayload = serde_json::from_value(json!({
+            "entity": "example.com", "entity_type": "domain", "time": 160.0,
+            "category": "browsing", "project": "Documentation", "actor_type": "unknown",
+            "is_write": false, "heartbeat_id": "stable-browser-id",
+            "activity_segments": [{ "segment_id": "stable-browser-id", "start": 100.0,
+                "end": 160.0, "source": "browser_foreground_v1" }]
+        }))
+        .unwrap();
+        let heartbeat = payload_to_heartbeat(payload, Uuid::nil()).unwrap();
+        assert!(super::has_explicit_browser_project(&heartbeat));
+        assert_eq!(heartbeat.actor_type, ActorType::Unknown);
+        assert_eq!(
+            bulk_responses(std::slice::from_ref(&heartbeat))[0].0["data"]["id"],
+            "stable-browser-id"
+        );
+        let mut unmapped = heartbeat.clone();
+        unmapped.project = None;
+        assert!(!super::has_explicit_browser_project(&unmapped));
+        let mut other = heartbeat;
+        other.activity_segments.clear();
+        assert!(!super::has_explicit_browser_project(&other));
     }
 
     #[test]

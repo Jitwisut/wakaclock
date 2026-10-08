@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { IncompleteTimeBadge } from '@/components/wakaclock/delivery-status-notice';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
 import { getBrowserTimezone, getSummaries } from '@/lib/wakaclock/endpoints';
@@ -60,10 +61,7 @@ export function SummariesPanel() {
     (sum, day) => sum + (day.grand_total.comparable_seconds ?? 0),
     0
   );
-  const aiAdditionalSeconds = days.reduce(
-    (sum, day) => sum + (day.grand_total.ai_additional_seconds ?? 0),
-    0
-  );
+  const timeoutSeconds = days.reduce((sum, day) => sum + day.grand_total.total_seconds, 0);
   const hasDurationV2 = days.some((day) => day.grand_total.comparable_seconds !== undefined);
   const activeSeconds = days.reduce(
     (sum, day) =>
@@ -76,6 +74,7 @@ export function SummariesPanel() {
   return (
     <Card>
       <CardHeader>
+        <IncompleteTimeBadge />
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>Daily summaries</CardTitle>
@@ -139,26 +138,30 @@ export function SummariesPanel() {
               <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-3">
                 {hasActive && (
                   <div className="border-primary/30 bg-primary/5 rounded-md border p-3">
-                    <dt className="text-muted-foreground text-xs">Active coding (primary)</dt>
+                    <dt className="text-muted-foreground text-xs">Measured Active</dt>
                     <dd className="text-lg font-semibold tabular-nums">
                       {formatDurationShort(activeSeconds)}
                     </dd>
                   </div>
                 )}
                 <div className="rounded-md border p-3">
-                  <dt className="text-muted-foreground text-xs">WakaTime-comparable activity</dt>
+                  <dt className="text-muted-foreground text-xs">Editor-only activity</dt>
                   <dd className="text-lg font-semibold tabular-nums">
                     {formatDurationShort(comparableSeconds)}
                   </dd>
                 </div>
                 <div className="rounded-md border p-3">
-                  <dt className="text-muted-foreground text-xs">Additional measured AI time</dt>
+                  <dt className="text-muted-foreground text-xs">Activity with timeout</dt>
                   <dd className="text-lg font-semibold tabular-nums">
-                    {formatDurationShort(aiAdditionalSeconds)}
+                    {formatDurationShort(timeoutSeconds)}
                   </dd>
                 </div>
               </dl>
             )}
+            <p className="text-muted-foreground text-xs">
+              Measured Active and Activity with timeout overlap; never add them together.
+              Editor-only activity excludes all AI Coding and can be zero.
+            </p>
 
             <Collapsible>
               <CollapsibleTrigger className={styles.disclosure}>

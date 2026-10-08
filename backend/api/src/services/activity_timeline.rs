@@ -403,6 +403,9 @@ impl ActivityTimelineService {
                     Some(source) if source.eq_ignore_ascii_case("ai_tool_v1") => {
                         MAX_AI_TOOL_DURATION_SECONDS
                     }
+                    Some(source) if source.eq_ignore_ascii_case("browser_foreground_v1") => {
+                        wakaclock_core::heartbeat::MAX_BROWSER_INTERVAL_SECONDS
+                    }
                     _ => MAX_ACTIVITY_GAP_SECONDS,
                 };
                 let clamped_start = segment.start.max(segment.end - max_span);
@@ -1046,6 +1049,8 @@ pub struct Timeline {
     /// derived without treating idle bridge time as AI coding.
     pub measured: Vec<CanonicalInterval>,
     pub bridged: Vec<CanonicalInterval>,
+    /// Measured browser foreground union; never bridged or added to Coding/AI totals.
+    pub browsing: Vec<CanonicalInterval>,
     /// Strict Active v1 duration, derived only from explicit 15-second editor
     /// leases and completed AI tool intervals. Legacy/WakaTime-compatible rows
     /// are intentionally excluded from this union.
@@ -1115,6 +1120,23 @@ impl Timeline {
         // `combined_v2` defines the headline as union(editor, measured AI). Keep generic
         // unknown/integration rows in `raw` for audit and project attribution, but do not
         // let them inflate the duration evidence partition or re-enter the combined sweep.
+        let coding_intervals: Vec<ActivityInterval> = intervals
+            .iter()
+            .filter(|interval| {
+                interval.category != "browsing" && interval.source != "browser_foreground_v1"
+            })
+            .cloned()
+            .collect();
+        let browsing = canonicalize(
+            &intervals
+                .iter()
+                .filter(|interval| {
+                    interval.category == "browsing" && interval.source == "browser_foreground_v1"
+                })
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        let intervals = coding_intervals.as_slice();
         let duration_intervals: Vec<ActivityInterval> = if bridge.combined_v2 {
             intervals
                 .iter()
@@ -1242,6 +1264,7 @@ impl Timeline {
             proven_seconds,
             measured,
             bridged,
+            browsing,
             active_seconds,
             active_human_seconds,
             active_ai_seconds,
@@ -1284,6 +1307,11 @@ impl Timeline {
             .ai_ranges
             .into_iter()
             .filter_map(|range| clip_range(range, start, end))
+            .collect();
+        timeline.browsing = timeline
+            .browsing
+            .into_iter()
+            .filter_map(|interval| clip_canonical_interval(interval, start, end))
             .collect();
         timeline.proven_seconds = total_seconds(&timeline.measured);
         timeline.comparable_seconds = union_ranges(&timeline.comparable_ranges);
@@ -1863,6 +1891,50 @@ mod tests {
             operating_system: "macos".to_string(),
             machine: "test".to_string(),
         }
+    }
+
+    #[test]
+    fn browser_union_has_no_bridges_and_never_changes_coding_metrics() {
+        let mut a = interval("browser-a", "browser_foreground_v1", 100.0, 160.0);
+        a.category = "browsing".into();
+        a.entity = "example.com".into();
+        let mut b = a.clone();
+        b.segment_id = "browser-b".into();
+        b.heartbeat_id = "browser-b".into();
+        b.start = 130.0;
+        b.end = 190.0;
+        let mut c = a.clone();
+        c.segment_id = "browser-c".into();
+        c.heartbeat_id = "browser-c".into();
+        c.start = 400.0;
+        c.end = 460.0;
+        let coding = interval("code", "editor_active_v1", 120.0, 135.0);
+        for bridge in [
+            BridgeConfig::from(900.0),
+            BridgeConfig {
+                combined_v2: true,
+                ..BridgeConfig::from(900.0)
+            },
+        ] {
+            let before = Timeline::build(std::slice::from_ref(&coding), bridge);
+            let after = Timeline::build(&[a.clone(), b.clone(), c.clone(), coding.clone()], bridge);
+            assert_eq!(total_seconds(&after.browsing), 150.0);
+            assert_eq!(after.active_seconds, before.active_seconds);
+            assert_eq!(after.comparable_seconds, before.comparable_seconds);
+            assert_eq!(
+                total_seconds(&after.bridged),
+                total_seconds(&before.bridged)
+            );
+        }
+    }
+
+    #[test]
+    fn browser_union_is_clipped_at_query_boundaries() {
+        let mut a = interval("browser", "browser_foreground_v1", 100.0, 160.0);
+        a.category = "browsing".into();
+        let timeline = Timeline::build_clipped(&[a], 900.0, 120.0, 150.0);
+        assert_eq!(total_seconds(&timeline.browsing), 30.0);
+        assert_eq!(total_seconds(&timeline.bridged), 0.0);
     }
 
     fn seconds_by_source(intervals: &[CanonicalInterval], source: &str) -> f64 {

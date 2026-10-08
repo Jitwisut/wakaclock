@@ -104,6 +104,9 @@ struct MockState {
     /// `false` accepts the TCP connection and closes it without a response: a
     /// genuine transport failure with no HTTP status.
     online: bool,
+    reject_id: Option<String>,
+    accept_drop_once: bool,
+    response_delay_ms: u64,
     heartbeats: Reply,
     today: Reply,
     /// bearer → opaque account id. An unknown bearer receives 401.
@@ -125,6 +128,9 @@ impl MockApi {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let state = Arc::new(Mutex::new(MockState {
             online: true,
+            reject_id: None,
+            accept_drop_once: false,
+            response_delay_ms: 0,
             heartbeats: Reply::Ok,
             today: Reply::Ok,
             accounts: accounts
@@ -249,6 +255,7 @@ async fn serve(mut stream: TcpStream, state: Arc<Mutex<MockState>>) {
         let mut state = state.lock().await;
         let account = state.accounts.get(&bearer).cloned();
         match (method.as_str(), path.as_str(), account) {
+            ("GET", "/api/v2/capabilities", _) => (200,None,serde_json::json!({"data":{"capture_activity_versions":[2],"capture_status_supported":true,"delivery_snapshot_versions":[1,2]}}).to_string()),
             (_, _, None) => (401, None, r#"{"error":"invalid api key"}"#.to_string()),
             ("GET", "/api/v1/status_bar/today", Some(account)) => match state.today {
                 Reply::Ok => (
@@ -278,18 +285,32 @@ async fn serve(mut stream: TcpStream, state: Arc<Mutex<MockState>>) {
                             Value::Array(items) => items,
                             other => vec![other],
                         };
-                        for item in items {
-                            state.received.push(ReceivedHeartbeat {
-                                bearer: bearer.clone(),
-                                heartbeat_id: item
-                                    .get("heartbeat_id")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                time: item.get("time").and_then(Value::as_f64),
-                            });
+                        if state.reject_id.as_ref().is_some_and(|id| {
+                            items.iter().any(|item| {
+                                item.get("heartbeat_id").and_then(Value::as_str)
+                                    == Some(id.as_str())
+                            })
+                        }) {
+                            (422, None, "{\"error\":\"fixture invalid row\"}".to_string())
+                        } else {
+                            for item in items {
+                                state.received.push(ReceivedHeartbeat {
+                                    bearer: bearer.clone(),
+                                    heartbeat_id: item
+                                        .get("heartbeat_id")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    time: item.get("time").and_then(Value::as_f64),
+                                });
+                            }
+                            if state.accept_drop_once {
+                                state.accept_drop_once = false;
+                                (0, None, String::new())
+                            } else {
+                                (201, None, "{}".to_string())
+                            }
                         }
-                        (201, None, "{}".to_string())
                     }
                     reply => error_reply(reply),
                 }
@@ -297,6 +318,14 @@ async fn serve(mut stream: TcpStream, state: Arc<Mutex<MockState>>) {
             _ => (404, None, r#"{"error":"not found"}"#.to_string()),
         }
     };
+
+    if status == 0 {
+        return;
+    }
+    let delay = state.lock().await.response_delay_ms;
+    if path.starts_with("/api/v1/heartbeats") && delay > 0 {
+        tokio::time::sleep(Duration::from_millis(delay)).await;
+    }
 
     let reason = match status {
         200 => "OK",
@@ -387,6 +416,15 @@ impl CliRun {
 }
 
 async fn cli(home: &TempHome, server_url: &str, api_key: &str, args: &[&str]) -> CliRun {
+    cli_with_input(home, server_url, api_key, args, None).await
+}
+async fn cli_with_input(
+    home: &TempHome,
+    server_url: &str,
+    api_key: &str,
+    args: &[&str],
+    input: Option<&str>,
+) -> CliRun {
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_wakaclock"));
     command
         .args(args)
@@ -397,12 +435,23 @@ async fn cli(home: &TempHome, server_url: &str, api_key: &str, args: &[&str]) ->
         .env("TMPDIR", std::env::temp_dir())
         .env("WAKACLOCK_SERVER_URL", server_url)
         .env("WAKACLOCK_API_KEY", api_key)
+        .env("WAKACLOCK_RECOVERY_PROBE", "1")
         .current_dir(home.path())
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = timeout(CLI_TIMEOUT, command.output())
+    let mut child = command.spawn().expect("failed to spawn wakaclock");
+    if let Some(input) = input {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(input.as_bytes()).await.unwrap();
+        drop(stdin);
+    }
+    let output = timeout(CLI_TIMEOUT, child.wait_with_output())
         .await
         .unwrap_or_else(|_| panic!("wakaclock {args:?} did not finish within {CLI_TIMEOUT:?}"))
         .expect("failed to spawn wakaclock");
@@ -685,6 +734,31 @@ async fn http_402_keeps_rows_queued_and_reports_subscription_required() {
         today.describe()
     );
     assert_eq!(json["queue"]["depth"], 1, "{}", today.describe());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http_403_retains_heartbeat_and_permission_diagnostics_after_successful_read() {
+    let home = TempHome::new("http-403");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    api.set_heartbeats(Reply::Status(403)).await;
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "hb-403", now() - 3.0).await,
+        1,
+    );
+    let status = today_json(&home, &api.url, KEY_A).await;
+    assert!(status.success, "{}", status.describe());
+    assert_eq!(queue_rows(&home).len(), 1);
+    let db = Connection::open(home.queue_db()).unwrap();
+    let (kind, http): (String, i64) = db
+        .query_row(
+            "SELECT failure_kind,failure_http_status FROM heartbeat_queue",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(kind, "auth_401");
+    assert_eq!(http, 403);
+    assert!(!delivery_state(&home).is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1389,12 +1463,12 @@ async fn recovery_never_changes_heartbeat_payload_or_timestamp() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn successful_probe_clears_only_the_matching_network_failure() {
+async fn successful_probe_preserves_backlog_failure_until_delivery_ack() {
     let home = TempHome::new("p03-probe-clear");
     let api = MockApi::start(&[(KEY_A, "account-1")]).await;
 
-    // A transport failure, then the server comes back: reading today proves it is
-    // reachable, so the outage record is stale and goes away.
+    // Reading today proves reachability, but cannot confirm the queued POST.
+    // The backlog failure stays visible until every queued row is acknowledged.
     api.set_online(false).await;
     assert_queued(
         &heartbeat(&home, &api.url, KEY_A, "hb-probe-1", now() - 3.0).await,
@@ -1406,7 +1480,8 @@ async fn successful_probe_clears_only_the_matching_network_failure() {
     api.set_heartbeats(Reply::Status(402)).await;
     let today = today_json(&home, &api.url, KEY_A).await;
     assert!(today.success, "{}", today.describe());
-    assert!(delivery_state(&home).is_empty());
+    assert_eq!(today.json()["connection"]["state"], "online");
+    assert_eq!(delivery_state(&home), vec![("network".to_string(), None)]);
 
     // A 402 is different: `today` keeps working while delivery is refused, so a
     // successful probe must not clear it.
@@ -1800,4 +1875,442 @@ async fn certification_c6_cross_account_and_cross_origin_isolation() {
             "orphaned_reported": status_json["orphaned_queued_heartbeats"],
         }),
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backlog_1191_across_three_days_drains_on_idle_worker_ticks() {
+    let home = TempHome::new("1191-idle");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    api.set_online(false).await;
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "seed", now() - 20.0).await,
+        1,
+    );
+    let mut db = Connection::open(home.queue_db()).unwrap();
+    let (template, destination, owner): (String, String, String) = db
+        .query_row(
+            "SELECT payload,destination,owner_scope FROM heartbeat_queue LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    let original: Value = serde_json::from_str(&template).unwrap();
+    let tx = db.transaction().unwrap();
+    tx.execute("DELETE FROM heartbeat_queue", []).unwrap();
+    for index in 0..1191 {
+        let mut payload = original.clone();
+        payload["heartbeat_id"] = serde_json::json!(format!("backlog-{index}"));
+        payload["time"] = serde_json::json!(now() - (index % 3) as f64 * 86400.0);
+        let entity = payload["entity"].as_str().unwrap();
+        tx.execute("INSERT INTO heartbeat_queue(payload,heartbeat_id,destination,owner_scope,session_id,entity,revision,created_at,next_retry_at,retry_count,failure_kind,failed_at)
+            VALUES(?1,?2,?3,?4,'',?5,0,strftime('%s','now')-1800,strftime('%s','now')+3600,?6,'network',strftime('%s','now')-60)",rusqlite::params![payload.to_string(),format!("backlog-{index}"),destination,owner,entity,7+index%9]).unwrap();
+    }
+    tx.commit().unwrap();
+    drop(db);
+    api.set_online(true).await;
+    // Only a GET succeeds: future-backoff rows stay retained and visible.
+    let status = cli(&home, &api.url, KEY_A, &["status", "--json"]).await;
+    assert!(status.success, "{}", status.describe());
+    assert_eq!(queue_rows(&home).len(), 1191);
+    assert!(
+        !delivery_state(&home).is_empty(),
+        "successful read cannot hide backlog failure"
+    );
+    api.state.lock().await.response_delay_ms = 500;
+    let started = std::time::Instant::now();
+    let new = heartbeat(&home, &api.url, KEY_A, "new-after-recovery", now()).await;
+    assert!(new.success, "{}", new.describe());
+    assert_eq!(new.json()["sent"], 1);
+    assert_eq!(queue_rows(&home).len(), 1091);
+    assert!(
+        !delivery_state(&home).is_empty(),
+        "one accepted new heartbeat does not hide remaining backlog"
+    );
+    // An autonomous worker ticks immediately, then every 15 seconds. No producer
+    // or dashboard polling is needed to finish the remaining 1091 rows.
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_wakaclock"))
+        .args(["delivery", "run"])
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env("TMPDIR", std::env::temp_dir())
+        .env("WAKACLOCK_SERVER_URL", &api.url)
+        .env("WAKACLOCK_API_KEY", KEY_A)
+        .env("WAKACLOCK_RECOVERY_PROBE", "1")
+        .current_dir(home.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    timeout(Duration::from_secs(100), async {
+        loop {
+            if queue_rows(&home).is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("idle worker did not finish backlog");
+    child.kill().await.unwrap();
+    let _ = child.wait().await;
+    assert!(queue_rows(&home).is_empty());
+    assert!(delivery_state(&home).is_empty());
+    assert!(started.elapsed() < Duration::from_secs(120));
+    let ids = api.received_ids().await;
+    assert_eq!(ids.len(), 1192);
+    assert_eq!(
+        ids.iter().collect::<std::collections::HashSet<_>>().len(),
+        1192
+    );
+    println!(
+        "1191 backlog plus new heartbeat reconciled in {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queue_write_failure_never_calls_transport() {
+    let home = TempHome::new("durable-write-failure");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    fs::create_dir_all(home.queue_db()).unwrap();
+    let run = heartbeat(&home, &api.url, KEY_A, "cannot-persist", now()).await;
+    assert!(
+        !run.success,
+        "producer must retry a failed durable write: {}",
+        run.describe()
+    );
+    assert_eq!(api.state.lock().await.heartbeat_requests, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mixed_validation_batch_delivers_good_siblings_and_retains_bad_row() {
+    let home = TempHome::new("mixed-validation");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    api.set_online(false).await;
+    for id in ["valid-first", "invalid", "valid-last"] {
+        assert_queued(&heartbeat(&home, &api.url, KEY_A, id, now()).await, 1);
+    }
+    api.set_online(true).await;
+    api.state.lock().await.reject_id = Some("invalid".into());
+    let tick = cli(
+        &home,
+        &api.url,
+        KEY_A,
+        &["delivery", "run", "--once", "--json"],
+    )
+    .await;
+    assert!(tick.success, "{}", tick.describe());
+    assert_eq!(
+        api.received_ids().await,
+        sorted(&["valid-first", "valid-last"])
+    );
+    assert!(queue_rows(&home).is_empty());
+    assert_eq!(tick.json()["dead_letter"], 1);
+    assert_eq!(tick.json()["incomplete"], true);
+    let db = Connection::open(home.queue_db()).unwrap();
+    let id: String = db
+        .query_row("SELECT heartbeat_id FROM heartbeat_dead_letter", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(id, "invalid");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_accepts_but_response_lost_replays_same_identity() {
+    let home = TempHome::new("response-lost");
+    let api = MockApi::start(&[(KEY_A, "account-1")]).await;
+    api.state.lock().await.accept_drop_once = true;
+    let stamp = now();
+    assert_queued(
+        &heartbeat(&home, &api.url, KEY_A, "lost-response", stamp).await,
+        1,
+    );
+    assert_eq!(
+        queue_rows(&home).len(),
+        1,
+        "no acknowledgment means retained"
+    );
+    let tick = cli(
+        &home,
+        &api.url,
+        KEY_A,
+        &["delivery", "run", "--once", "--json"],
+    )
+    .await;
+    assert!(tick.success, "{}", tick.describe());
+    assert!(queue_rows(&home).is_empty());
+    let received = api.received().await;
+    assert_eq!(received.len(), 2);
+    assert_eq!(received[0].heartbeat_id, received[1].heartbeat_id);
+    assert_eq!(received[0].time, received[1].time);
+    assert_eq!(
+        received
+            .iter()
+            .map(|r| &r.heartbeat_id)
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn capture_cursor_restart_replay_and_delivery_are_lossless() {
+    let home = TempHome::new("capture-restart");
+    let api = MockApi::start(&[(KEY_A, "owner-one")]).await;
+    let transcript = home.path().join("activity.jsonl");
+    let t = chrono::Utc::now() - chrono::Duration::minutes(2);
+    let records = [
+        serde_json::json!({"timestamp":t,"type":"session_meta","payload":{"id":"session","cwd":home.path().join("workspace"),"base_instructions":"DO_NOT_PERSIST"}}),
+        serde_json::json!({"timestamp":t,"type":"event_msg","payload":{"type":"task_started","turn_id":"turn"}}),
+        serde_json::json!({"timestamp":t+chrono::Duration::seconds(5),"type":"event_msg","payload":{"type":"item_completed","started_at_ms":t.timestamp_millis(),"completed_at_ms":(t+chrono::Duration::seconds(5)).timestamp_millis(),"item":{"type":"CommandExecution","id":"operation","status":"failed","command":"DO_NOT_PERSIST"}}}),
+    ];
+    fs::write(
+        &transcript,
+        records.iter().map(|r| format!("{r}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let path = transcript.to_str().unwrap();
+    let dry = cli(
+        &home,
+        &api.url,
+        KEY_A,
+        &["capture", "run", "--dry-run", "--transcript", path],
+    )
+    .await;
+    assert!(dry.success, "{}", dry.describe());
+    assert!(!home.path().join(".wakaclock/capture.db").exists());
+    let first = cli(
+        &home,
+        &api.url,
+        KEY_A,
+        &["capture", "run", "--once", "--transcript", path],
+    )
+    .await;
+    assert!(first.success, "{}", first.describe());
+    assert_eq!(queue_rows(&home).len(), 3);
+    let before = queue_rows(&home)
+        .iter()
+        .filter_map(|r| r.heartbeat_id.clone())
+        .collect::<Vec<_>>();
+    let restart = cli(
+        &home,
+        &api.url,
+        KEY_A,
+        &["capture", "run", "--once", "--transcript", path],
+    )
+    .await;
+    assert!(restart.success, "{}", restart.describe());
+    assert_eq!(queue_rows(&home).len(), 3);
+    // Explicit replay gets a separate cursor but keeps the same event ledger.
+    let day = t
+        .with_timezone(&chrono_tz::Asia::Bangkok)
+        .date_naive()
+        .to_string();
+    let replay = cli(
+        &home,
+        &api.url,
+        KEY_A,
+        &["capture", "run", "--date", &day, "--transcript", path],
+    )
+    .await;
+    assert!(replay.success, "{}", replay.describe());
+    assert_eq!(queue_rows(&home).len(), 3);
+    let db = Connection::open(home.path().join(".wakaclock/capture.db")).unwrap();
+    let strings: String = db
+        .query_row(
+            "SELECT group_concat(payload) FROM activity_inbox_v2",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!strings.contains("DO_NOT_PERSIST"));
+    let raw: String = db
+        .query_row("SELECT payload FROM activity_inbox_v2 LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let duplicate = cli_with_input(
+        &home,
+        &api.url,
+        KEY_A,
+        &["ai", "emit", "--json"],
+        Some(&raw),
+    )
+    .await;
+    assert!(duplicate.success, "{}", duplicate.describe());
+    assert_eq!(duplicate.json()["status"], "duplicate");
+    let mut older: Value = serde_json::from_str(&raw).unwrap();
+    older["revision"] = serde_json::json!(0);
+    let lower = cli_with_input(
+        &home,
+        &api.url,
+        KEY_A,
+        &["ai", "emit", "--json"],
+        Some(&older.to_string()),
+    )
+    .await;
+    assert!(lower.success, "{}", lower.describe());
+    assert_eq!(
+        lower.json()["status"],
+        "duplicate",
+        "lower-priority evidence cannot replace native evidence"
+    );
+    assert_eq!(queue_rows(&home).len(), 3, "broker/native/replay share IDs");
+    let mut envelope: Value = serde_json::from_str(&raw).unwrap();
+    envelope["event_id"] = serde_json::json!("broker-new-event");
+    envelope["operation_id"] = serde_json::json!("broker-new-operation");
+    let new = cli_with_input(
+        &home,
+        &api.url,
+        KEY_A,
+        &["ai", "emit", "--json"],
+        Some(&envelope.to_string()),
+    )
+    .await;
+    assert!(new.success, "{}", new.describe());
+    assert_eq!(new.json()["status"], "accepted");
+    envelope["occurred_at"] = serde_json::json!(t + chrono::Duration::seconds(7));
+    let conflict = cli_with_input(
+        &home,
+        &api.url,
+        KEY_A,
+        &["ai", "emit", "--json"],
+        Some(&envelope.to_string()),
+    )
+    .await;
+    assert!(
+        !conflict.success,
+        "same-revision evidence must not be replaced"
+    );
+    assert_eq!(queue_rows(&home).len(), 4);
+    let flush = cli(
+        &home,
+        &api.url,
+        KEY_A,
+        &["delivery", "run", "--once", "--json"],
+    )
+    .await;
+    assert!(flush.success, "{}", flush.describe());
+    assert!(queue_rows(&home).is_empty());
+    let mut expected = before;
+    expected.push("ai-activity:broker-new-event".into());
+    expected.sort();
+    assert_eq!(api.received_ids().await, expected);
+}
+
+#[tokio::test]
+async fn unknown_capture_format_is_incomplete_until_parser_can_resume() {
+    let home = TempHome::new("capture-unknown");
+    let api = MockApi::start(&[(KEY_A, "owner-one")]).await;
+    let transcript = home.path().join("activity.jsonl");
+    let t = chrono::Utc::now() - chrono::Duration::minutes(2);
+    let meta = serde_json::json!({"timestamp":t,"type":"session_meta","payload":{"id":"session","cwd":home.path().join("workspace")}});
+    let mut activity = serde_json::json!({"timestamp":t,"type":"event_msg","payload":{"type":"item_completed","completed_at_ms":t.timestamp_millis(),"item":{"type":"FutureTool","id":"operation","content":"DO_NOT_PERSIST"}}});
+    fs::write(&transcript, format!("{meta}\n{activity}\n")).unwrap();
+    let args = [
+        "capture",
+        "run",
+        "--once",
+        "--transcript",
+        transcript.to_str().unwrap(),
+    ];
+    let failed = cli(&home, &api.url, KEY_A, &args).await;
+    assert!(failed.success, "{}", failed.describe());
+    assert_eq!(failed.json()["status"], "parser_failure");
+    assert_eq!(failed.json()["incomplete"], true);
+    assert_eq!(
+        failed.json()["parser_failure_codes"],
+        serde_json::json!(["unsupported_native_item"])
+    );
+    assert!(!failed.describe().contains("DO_NOT_PERSIST"));
+    assert!(queue_rows(&home).is_empty());
+    let db = Connection::open(home.path().join(".wakaclock/capture.db")).unwrap();
+    let count: u64 = db
+        .query_row("SELECT count(*) FROM activity_cursor", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "failed batch must not advance the durable cursor");
+    // Simulate a recognized source after parser repair; the original operation is retained.
+    activity["payload"]["item"]["type"] = serde_json::json!("CommandExecution");
+    fs::write(&transcript, format!("{meta}\n{activity}\n")).unwrap();
+    let recovered = cli(&home, &api.url, KEY_A, &args).await;
+    assert_eq!(recovered.json()["status"], "fresh");
+    assert_eq!(queue_rows(&home).len(), 1);
+    let restart = cli(&home, &api.url, KEY_A, &args).await;
+    assert_eq!(restart.json()["parser_errors"], 0);
+    assert_eq!(
+        queue_rows(&home).len(),
+        1,
+        "restart cannot duplicate a recovered marker"
+    );
+}
+
+#[tokio::test]
+async fn empty_delivery_queue_does_not_hide_a_stopped_capture_collector() {
+    let home = TempHome::new("stale-capture");
+    let api = MockApi::start(&[(KEY_A, "owner-one")]).await;
+    let dir = home.path().join(".wakaclock");
+    fs::create_dir_all(&dir).unwrap();
+    let at = chrono::Utc::now() - chrono::Duration::minutes(10);
+    let saved = serde_json::json!({"schema_version":2,"enabled":true,"status":"fresh",
+        "checked_at":at,"last_scan_success_at":at,"pending":0,"parser_errors":0,"incomplete":false});
+    let bytes = serde_json::to_vec(&saved).unwrap();
+    fs::write(dir.join("capture-state.json"), &bytes).unwrap();
+    let status = cli(&home, &api.url, KEY_A, &["capture", "status"]).await;
+    assert!(status.success, "{}", status.describe());
+    assert_eq!(status.json()["status"], "stale");
+    assert_eq!(status.json()["incomplete"], true);
+    let tick = cli(
+        &home,
+        &api.url,
+        KEY_A,
+        &["delivery", "run", "--once", "--json"],
+    )
+    .await;
+    assert!(tick.success, "{}", tick.describe());
+    assert_eq!(tick.json()["pending"], 0);
+    assert_eq!(tick.json()["delivery_incomplete"], false);
+    assert_eq!(tick.json()["capture_incomplete"], true);
+    assert_eq!(tick.json()["incomplete"], true);
+    assert!(
+        api.received_ids().await.is_empty(),
+        "health checks must not invent heartbeats"
+    );
+    assert_eq!(
+        fs::read(dir.join("capture-state.json")).unwrap(),
+        bytes,
+        "read-time staleness must preserve the stored observation"
+    );
+}
+
+#[tokio::test]
+async fn second_capture_process_cannot_overwrite_the_active_collectors_health() {
+    let home = TempHome::new("capture-lock-health");
+    let api = MockApi::start(&[(KEY_A, "owner-one")]).await;
+    let dir = home.path().join(".wakaclock");
+    fs::create_dir_all(&dir).unwrap();
+    let now = chrono::Utc::now();
+    let saved = serde_json::json!({"schema_version":2,"enabled":true,"status":"fresh",
+        "checked_at":now,"last_scan_success_at":now,"pending":0,"parser_errors":0,"incomplete":false});
+    let bytes = serde_json::to_vec(&saved).unwrap();
+    fs::write(dir.join("capture-state.json"), &bytes).unwrap();
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join("capture.lock"))
+        .unwrap();
+    lock.try_lock_exclusive().unwrap();
+    let other = cli(&home, &api.url, KEY_A, &["capture", "run", "--once"]).await;
+    assert!(!other.success);
+    assert!(other
+        .describe()
+        .contains("capture collector already running"));
+    assert_eq!(fs::read(dir.join("capture-state.json")).unwrap(), bytes);
+    assert!(!dir.join("capture.db").exists());
+    assert!(api.received_ids().await.is_empty());
 }

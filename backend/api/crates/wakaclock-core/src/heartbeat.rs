@@ -77,6 +77,14 @@ impl ActorType {
 /// on an Unknown row as separate presence evidence, but it never changes that actor
 /// enum to Human.
 pub fn normalize_activity_source(source: Option<&str>, actor_type: &str) -> &'static str {
+    if source.is_some_and(|value| value.eq_ignore_ascii_case("browser_foreground_v1"))
+        && matches!(
+            actor_type.trim().to_ascii_lowercase().as_str(),
+            "unknown" | "unattributed"
+        )
+    {
+        return "browser_foreground_v1";
+    }
     // Active v1 markers are additive. Keep the editor marker for a Human *or
     // Unknown* actor: an editor heartbeat can prove keyboard presence while its
     // line author remains Unknown when a flush contains mixed/unavailable edits.
@@ -329,6 +337,7 @@ pub fn resolve_attribution(input: AttributionInput<'_>) -> Result<AttributionRes
 /// plugins apply per file — see `ApiClient`'s dedup cache, which must key on entity for
 /// this window to mean the same thing here as it does there.
 pub const MAX_ACTIVITY_GAP_SECONDS: f64 = 120.0;
+pub const MAX_BROWSER_INTERVAL_SECONDS: f64 = 90.0;
 /// Human Active evidence is leased by the editor for at most fifteen seconds.
 /// The legacy 120-second bound remains valid for old clients and WakaTime imports.
 pub const ACTIVE_LEASE_SECONDS: f64 = 15.0;
@@ -1048,6 +1057,20 @@ impl Heartbeat {
         self.validate_line_measurement()?;
         self.validate_clipboard_metrics()?;
         for segment in &self.activity_segments {
+            if segment
+                .source
+                .as_deref()
+                .is_some_and(|source| source.eq_ignore_ascii_case("browser_foreground_v1"))
+                && (self.category != Category::Browsing
+                    || self.entity_type != EntityType::Domain
+                    || self.actor_type != ActorType::Unknown
+                    || self.is_write)
+            {
+                return Err(
+                    "browser intervals require browsing domain activity with unknown authorship"
+                        .to_string(),
+                );
+            }
             if segment.segment_id.trim().is_empty()
                 || !segment.start.is_finite()
                 || !segment.end.is_finite()
@@ -1060,6 +1083,9 @@ impl Heartbeat {
                         }
                         Some(source) if source.eq_ignore_ascii_case("ai_tool_v1") => {
                             MAX_AI_TOOL_DURATION_SECONDS
+                        }
+                        Some(source) if source.eq_ignore_ascii_case("browser_foreground_v1") => {
+                            MAX_BROWSER_INTERVAL_SECONDS
                         }
                         _ => MAX_ACTIVITY_GAP_SECONDS,
                     }
@@ -1228,6 +1254,37 @@ impl Heartbeat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_source_is_bounded_and_does_not_prove_authorship() {
+        assert_eq!(
+            normalize_activity_source(Some("browser_foreground_v1"), "unknown"),
+            "browser_foreground_v1"
+        );
+        assert_ne!(
+            normalize_activity_source(Some("browser_foreground_v1"), "ai_verified"),
+            "browser_foreground_v1"
+        );
+        let mut heartbeat = Heartbeat::new(
+            uuid::Uuid::nil(),
+            "example.com".into(),
+            EntityType::Domain,
+            "browser-test".into(),
+        );
+        heartbeat.category = Category::Browsing;
+        heartbeat.activity_segments = vec![ActivitySegment {
+            segment_id: "browser".into(),
+            start: 100.0,
+            end: 190.0,
+            source: Some("browser_foreground_v1".into()),
+        }];
+        assert!(heartbeat.validate().is_ok());
+        heartbeat.activity_segments[0].end = 191.0;
+        assert!(heartbeat.validate().is_err());
+        heartbeat.activity_segments[0].end = 160.0;
+        heartbeat.category = Category::Coding;
+        assert!(heartbeat.validate().is_err());
+    }
 
     #[test]
     fn actor_type_serializes_with_canonical_wire_values() {

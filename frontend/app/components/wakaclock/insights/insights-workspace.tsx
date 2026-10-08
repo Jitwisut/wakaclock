@@ -502,13 +502,13 @@ export function InsightsReport({
         </div>
         <dl>
           <div>
-            <dt>WakaTime-comparable</dt>
+            <dt>Editor-only activity</dt>
             <dd>
               {data.comparable_seconds == null
                 ? 'Unavailable'
                 : formatDurationShort(data.comparable_seconds)}
             </dd>
-            <small>Activity using the comparison method</small>
+            <small>Excludes all AI Coding; can be zero despite measured activity</small>
           </div>
           <div>
             <dt>Additional measured AI</dt>
@@ -517,7 +517,7 @@ export function InsightsReport({
                 ? 'Unavailable'
                 : formatDurationShort(data.ai_additional_seconds)}
             </dd>
-            <small>AI time beyond comparable activity</small>
+            <small>AI time beyond editor-only activity</small>
           </div>
           <div>
             <dt>Measured AI total</dt>
@@ -526,7 +526,7 @@ export function InsightsReport({
                 ? 'Unavailable'
                 : formatDurationShort(data.ai_measured_seconds)}
             </dd>
-            <small>May overlap with comparable activity</small>
+            <small>May overlap with editor-only activity</small>
           </div>
         </dl>
       </section>

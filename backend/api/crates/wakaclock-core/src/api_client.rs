@@ -176,6 +176,28 @@ pub fn delivery_message_code(error: &AppError) -> &'static str {
                 "transport_failed"
             }
         }
+        AppError::HttpStatus {
+            status: 401 | 403, ..
+        }
+        | AppError::HttpStatusRetry {
+            status: 401 | 403, ..
+        } => "credential_rejected",
+        AppError::HttpStatus { status: 402, .. }
+        | AppError::HttpStatusRetry { status: 402, .. } => "subscription_required",
+        AppError::HttpStatus { status: 429, .. }
+        | AppError::HttpStatusRetry { status: 429, .. } => "rate_limited",
+        AppError::HttpStatus {
+            status: 400 | 422, ..
+        }
+        | AppError::HttpStatusRetry {
+            status: 400 | 422, ..
+        } => "payload_rejected",
+        AppError::HttpStatus {
+            status: 500..=599, ..
+        }
+        | AppError::HttpStatusRetry {
+            status: 500..=599, ..
+        } => "server_error",
         AppError::HttpStatus { .. } | AppError::HttpStatusRetry { .. } => "http_status",
         AppError::Auth(_) => "credential_rejected",
         AppError::Validation(_) => "payload_rejected",
@@ -434,6 +456,16 @@ pub struct AiIdentityRepairRequest {
     pub corrections: Vec<AiIdentityCorrection>,
 }
 
+struct QueueClaimGuard<'a> {
+    queue: &'a Queue,
+    owner: String,
+}
+impl Drop for QueueClaimGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.queue.release_claim(&self.owner);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AiIdentityRepairReport {
     pub repair_run_id: String,
@@ -611,6 +643,19 @@ impl ApiClient {
             .map(serde_json::to_value)
             .collect::<Result<_, _>>()?;
 
+        let original_count = payloads.len();
+        let lease_owner = uuid::Uuid::new_v4().to_string();
+        let pending =
+            queue.persist_and_claim_scoped(&payloads, &self.queue_scope(), &lease_owner)?;
+        let _claim = QueueClaimGuard {
+            queue: &queue,
+            owner: lease_owner.clone(),
+        };
+        if pending.is_empty() {
+            self.schedule_delivery_snapshot(false);
+            return Ok(SendReport::queued(0, deduped, original_count, None));
+        }
+        let payloads: Vec<Value> = pending.iter().map(|(_, p)| p.clone()).collect();
         let has_versioned_metrics = payloads.iter().any(has_editor_line_metrics);
         let mut deferred_line_metrics = 0usize;
         let wire_payloads = if has_versioned_metrics && !self.supports_editor_line_metrics().await {
@@ -635,15 +680,29 @@ impl ApiClient {
         });
 
         let send_result = if wire_payloads.len() == 1 {
-            self.post_json("/api/v1/heartbeats", &wire_payloads[0])
-                .await
+            self.post_json_leased(
+                &queue,
+                &lease_owner,
+                "/api/v1/heartbeats",
+                &wire_payloads[0],
+            )
+            .await
         } else {
-            self.post_json("/api/v1/heartbeats.bulk", &wire_payloads)
-                .await
+            self.post_json_leased(
+                &queue,
+                &lease_owner,
+                "/api/v1/heartbeats.bulk",
+                &wire_payloads,
+            )
+            .await
         };
 
         match send_result {
             Ok(()) => {
+                for (id, _) in &pending {
+                    queue.remove(*id)?;
+                }
+                queue.record_accepted(&self.queue_scope(), pending.len(), false)?;
                 self.clear_delivery_failure(&queue);
                 let mut last_by_entity = filtered.last_by_entity;
                 prune_stale_entries(&mut last_by_entity, chrono::Utc::now().timestamp() as f64);
@@ -651,10 +710,13 @@ impl ApiClient {
                 // queue-maintenance failures are reported to the caller but must not turn
                 // that confirmed send into a non-zero exit (which would make an editor
                 // retry and double-count the heartbeat).
-                let cache_error = self
-                    .store_last_heartbeats(&last_by_entity)
-                    .err()
-                    .map(|error| format!("could not persist local dedup cache: {error}"));
+                let cache_error = (if pending.len() == original_count {
+                    self.store_last_heartbeats(&last_by_entity)
+                } else {
+                    Ok(())
+                })
+                .err()
+                .map(|error| format!("could not persist local dedup cache: {error}"));
                 let retained_error = payloads
                     .iter()
                     .filter_map(|payload| {
@@ -691,20 +753,29 @@ impl ApiClient {
                 Ok(SendReport {
                     sent: wire_payloads.len(),
                     deduped,
-                    queued: 0,
+                    queued: original_count.saturating_sub(pending.len()),
                     flushed: flush.flushed,
                     error: (!error.is_empty()).then(|| error.join("; ")),
                 })
             }
             Err(error) => {
                 self.record_delivery_failure(&queue, &error);
-                if is_retryable_heartbeat_delivery_error(&error) {
+                if is_retryable_heartbeat_delivery_error(&error)
+                    || is_credential_delivery_error(&error)
+                {
                     // A `Retry-After` applies to this first attempt too: without it the
                     // row is eligible again immediately and the next flush ignores what
                     // the server just asked for.
                     let retry_after = retry_after_seconds(&error);
-                    for payload in &wire_payloads {
-                        queue.push_scoped_after(payload, &self.queue_scope(), retry_after)?;
+                    for (id, _) in &pending {
+                        queue.record_initial_failure(
+                            *id,
+                            DeliveryFailureKind::from_error(&error).as_str(),
+                            http_status_of(&error),
+                            delivery_message_code(&error),
+                            retry_after
+                                .or_else(|| is_credential_delivery_error(&error).then_some(300)),
+                        )?;
                     }
                     self.schedule_delivery_snapshot(false);
                     // Do not persist a failed payload in the local last-heartbeat
@@ -724,9 +795,62 @@ impl ApiClient {
                         ),
                     ))
                 } else {
-                    // Permanent validation/auth/conflict responses are reported to
-                    // the caller and deliberately never enter the retry queue.
-                    Err(error)
+                    if pending.len() == 1 {
+                        queue.dead_letter(pending[0].0, delivery_message_code(&error))?;
+                        self.schedule_delivery_snapshot(false);
+                        return Err(error);
+                    }
+                    // Isolate invalid members without losing valid siblings. Keep the
+                    // original payload (including revision/segments) in the outbox.
+                    let mut sent = 0;
+                    let mut queued = original_count;
+                    for (id, payload) in pending.iter().map(|(id, _)| id).zip(&wire_payloads) {
+                        match self
+                            .post_json_leased(&queue, &lease_owner, "/api/v1/heartbeats", payload)
+                            .await
+                        {
+                            Ok(()) => {
+                                queue.remove(*id)?;
+                                sent += 1;
+                                queued -= 1;
+                            }
+                            Err(item_error) => {
+                                self.record_delivery_failure(&queue, &item_error);
+                                if is_retryable_heartbeat_delivery_error(&item_error)
+                                    || is_credential_delivery_error(&item_error)
+                                {
+                                    // Apply throttling/auth deferral to all remaining jobs.
+                                    for (remaining, _) in &pending {
+                                        if queue.contains_id(*remaining)? {
+                                            self.retry_row(
+                                                &queue,
+                                                *remaining,
+                                                &item_error,
+                                                retry_after_seconds(&item_error).or_else(|| {
+                                                    is_credential_delivery_error(&item_error)
+                                                        .then_some(300)
+                                                }),
+                                            )?;
+                                        }
+                                    }
+                                    break;
+                                }
+                                queue.dead_letter(*id, delivery_message_code(&item_error))?;
+                                queued -= 1;
+                            }
+                        }
+                    }
+                    if sent > 0 {
+                        queue.record_accepted(&self.queue_scope(), sent, false)?;
+                    }
+                    self.schedule_delivery_snapshot(sent > 0);
+                    Ok(SendReport {
+                        sent,
+                        deduped,
+                        queued,
+                        flushed: 0,
+                        error: Some(delivery_message_code(&error).to_string()),
+                    })
                 }
             }
         }
@@ -811,14 +935,19 @@ impl ApiClient {
     fn on_successful_probe(&self, owner_id: Option<&str>) {
         if let Ok(queue) = Queue::open() {
             Self::migrate_legacy_delivery_failure(&queue);
-            if let Err(error) = queue.clear_delivery_failure(
-                &self.queue_scope(),
-                Some(&[
-                    DeliveryFailureKind::Network.as_str(),
-                    DeliveryFailureKind::ServerError.as_str(),
-                ]),
-            ) {
-                tracing::warn!(%error, "could not clear a stale delivery failure");
+            if queue
+                .status_scoped(&self.queue_scope())
+                .is_ok_and(|s| s.pending == 0 && s.dead_letter == 0)
+            {
+                if let Err(error) = queue.clear_delivery_failure(
+                    &self.queue_scope(),
+                    Some(&[
+                        DeliveryFailureKind::Network.as_str(),
+                        DeliveryFailureKind::ServerError.as_str(),
+                    ]),
+                ) {
+                    tracing::warn!(%error, "could not clear a stale delivery failure");
+                }
             }
         }
         if let Some(owner_id) = owner_id {
@@ -1036,7 +1165,13 @@ impl ApiClient {
     ) -> AppResult<FlushReport> {
         let scope = self.queue_scope();
         let lease_owner = uuid::Uuid::new_v4().to_string();
+        let recovery = std::env::var("WAKACLOCK_RECOVERY_PROBE").as_deref() == Ok("1");
+        let recovery_probe = recovery && queue.prepare_recovery_scoped(&scope)?;
         let pending = queue.claim_batch_scoped(&scope, &lease_owner)?;
+        let _claim = QueueClaimGuard {
+            queue,
+            owner: lease_owner.clone(),
+        };
         let mut flushed = 0;
         let mut stopped_because = None;
 
@@ -1069,8 +1204,14 @@ impl ApiClient {
 
         let delivery = match payloads.as_slice() {
             [] => Ok(()),
-            [payload] => self.post_json("/api/v1/heartbeats", payload).await,
-            payloads => self.post_json("/api/v1/heartbeats.bulk", payloads).await,
+            [payload] => {
+                self.post_json_leased(queue, &lease_owner, "/api/v1/heartbeats", payload)
+                    .await
+            }
+            payloads => {
+                self.post_json_leased(queue, &lease_owner, "/api/v1/heartbeats.bulk", payloads)
+                    .await
+            }
         };
 
         let main_delivery_accepted = delivery.is_ok();
@@ -1100,9 +1241,9 @@ impl ApiClient {
                     if is_credential_delivery_error(&error) {
                         // Credentials may be repaired. Keep the only durable copy and
                         // pause this owner-bound queue rather than deleting activity.
-                        queue.mark_retry_after(*id, Some(300))?;
+                        self.retry_row(queue, *id, &error, Some(300))?;
                     } else {
-                        queue.mark_retry_after(*id, retry_after_seconds(&error))?;
+                        self.retry_row(queue, *id, &error, retry_after_seconds(&error))?;
                     }
                 }
             }
@@ -1112,7 +1253,10 @@ impl ApiClient {
                 // recovery stays one bounded bulk request.
                 self.record_delivery_failure(queue, &error);
                 for (id, payload) in &pending {
-                    match self.post_json("/api/v1/heartbeats", payload).await {
+                    match self
+                        .post_json_leased(queue, &lease_owner, "/api/v1/heartbeats", payload)
+                        .await
+                    {
                         Ok(()) => {
                             queue.remove(*id)?;
                             flushed += 1;
@@ -1121,13 +1265,26 @@ impl ApiClient {
                             stopped_because.get_or_insert_with(|| item_error.to_string());
                             self.record_delivery_failure(queue, &item_error);
                             if is_credential_delivery_error(&item_error) {
-                                queue.mark_retry_after(*id, Some(300))?;
+                                for (remaining, _) in &pending {
+                                    if queue.contains_id(*remaining)? {
+                                        self.retry_row(queue, *remaining, &item_error, Some(300))?;
+                                    }
+                                }
                                 break;
                             } else if is_retryable_heartbeat_delivery_error(&item_error) {
-                                queue.mark_retry_after(*id, retry_after_seconds(&item_error))?;
+                                for (remaining, _) in &pending {
+                                    if queue.contains_id(*remaining)? {
+                                        self.retry_row(
+                                            queue,
+                                            *remaining,
+                                            &item_error,
+                                            retry_after_seconds(&item_error),
+                                        )?;
+                                    }
+                                }
                                 break;
                             } else {
-                                queue.dead_letter(*id, &item_error.to_string())?;
+                                queue.dead_letter(*id, delivery_message_code(&item_error))?;
                             }
                         }
                     }
@@ -1137,7 +1294,7 @@ impl ApiClient {
                 stopped_because = Some(error.to_string());
                 self.record_delivery_failure(queue, &error);
                 if let Some((id, _)) = pending.first() {
-                    queue.dead_letter(*id, &error.to_string())?;
+                    queue.dead_letter(*id, delivery_message_code(&error))?;
                 }
             }
         }
@@ -1166,7 +1323,10 @@ impl ApiClient {
         // `wakaclock status` may be the only command that drains a backlog. Clear
         // the persisted refusal only after every currently eligible row was
         // accepted; a partial flush must continue to show its latest failure.
-        let accepted_queued = main_delivery_accepted && flushed > 0;
+        let accepted_queued = flushed > 0;
+        if accepted_queued {
+            queue.record_accepted(&scope, flushed, recovery_probe && main_delivery_accepted)?;
+        }
         if accepted_queued {
             self.clear_delivery_failure(queue);
         }
@@ -1182,7 +1342,7 @@ impl ApiClient {
     /// Queue status is ancillary telemetry. Read it synchronously from the local
     /// queue, reserve at most one upload per minute, and send in the background so
     /// diagnostics never delays heartbeat collection or delivery.
-    fn schedule_delivery_snapshot(&self, delivery_succeeded: bool) {
+    fn schedule_delivery_snapshot(&self, _delivery_succeeded: bool) {
         let scope = self.queue_scope();
         let client = self.client.clone();
         let url = format!(
@@ -1192,13 +1352,10 @@ impl ApiClient {
         tokio::spawn(async move {
             let snapshot = tokio::task::spawn_blocking(move || {
                 let queue = Queue::open()?;
-                if delivery_succeeded {
-                    queue.record_scope_delivery_success(&scope)?;
-                }
                 queue.capture_delivery_snapshot_scoped(&scope)
             })
             .await;
-            let snapshot = match snapshot {
+            let mut snapshot = match snapshot {
                 Ok(Ok(Some(snapshot))) => snapshot,
                 Ok(Ok(None)) => return,
                 Ok(Err(error)) => {
@@ -1210,6 +1367,29 @@ impl ApiClient {
                     return;
                 }
             };
+            let capabilities_url = url.replace("/me/delivery-status", "/capabilities");
+            let v2 = match client
+                .get(capabilities_url)
+                .timeout(Duration::from_secs(3))
+                .send()
+                .await
+            {
+                Ok(response) => response
+                    .json::<Value>()
+                    .await
+                    .ok()
+                    .and_then(|v| v.pointer("/data/delivery_snapshot_versions").cloned())
+                    .and_then(|v| {
+                        v.as_array()
+                            .map(|a| a.iter().any(|v| v.as_u64() == Some(2)))
+                    })
+                    .unwrap_or(false),
+                Err(_) => false,
+            };
+            if !v2 {
+                snapshot.schema_version = 1;
+                snapshot.details = None;
+            }
             let result = client
                 .post(url)
                 .json(&snapshot)
@@ -1222,6 +1402,141 @@ impl ApiClient {
         });
     }
 
+    /// Fail closed while offline or talking to a pre-activity receiver. The
+    /// capture inbox is retained independently until a supported receiver returns.
+    pub async fn capture_activity_supported(&self) -> bool {
+        let response = self
+            .client
+            .get(format!("{}/api/v2/capabilities", self.config.server_url))
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await;
+        match response {
+            Ok(r) if r.status().is_success() => r
+                .json::<Value>()
+                .await
+                .ok()
+                .and_then(|v| v.pointer("/data/capture_activity_versions").cloned())
+                .and_then(|v| {
+                    v.as_array()
+                        .map(|a| a.iter().any(|v| v.as_u64() == Some(2)))
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
+    pub async fn publish_delivery_status(&self) -> AppResult<()> {
+        let queue = Queue::open()?;
+        if let Some(mut snapshot) =
+            queue.capture_delivery_snapshot_force_scoped(&self.queue_scope())?
+        {
+            let capabilities = self
+                .client
+                .get(format!("{}/api/v2/capabilities", self.config.server_url))
+                .timeout(Duration::from_secs(3))
+                .send()
+                .await?
+                .json::<Value>()
+                .await?;
+            let v2 = capabilities
+                .pointer("/data/delivery_snapshot_versions")
+                .and_then(Value::as_array)
+                .is_some_and(|a| a.iter().any(|v| v.as_u64() == Some(2)));
+            if !v2 {
+                snapshot.schema_version = 1;
+                snapshot.details = None;
+            }
+            if v2
+                && capabilities
+                    .pointer("/data/capture_status_supported")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            {
+                if let Some(path) =
+                    dirs::home_dir().map(|p| p.join(".wakaclock/capture-state.json"))
+                {
+                    if let Ok(bytes) = std::fs::read(path) {
+                        if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+                            use sha2::{Digest, Sha256};
+                            let scope = self.queue_scope();
+                            let expected = format!(
+                                "{:x}",
+                                Sha256::digest(
+                                    format!("{}\0{}", scope.destination, scope.owner).as_bytes()
+                                )
+                            );
+                            if value["scope"].as_str() == Some(&expected) {
+                                let filtered = serde_json::json!({"schema_version":1,"captured_at":value["checked_at"],"enabled":value["enabled"],"status":value["status"],"last_scan_success_at":value["last_scan_success_at"],"parser_errors":value["parser_errors"],"pending":value["pending"]});
+                                snapshot.capture = serde_json::from_value(filtered).ok();
+                            }
+                        }
+                    }
+                }
+            }
+            self.post_json("/api/v2/me/delivery-status", &snapshot)
+                .await?;
+        }
+        Ok(())
+    }
+
+    fn retry_row(
+        &self,
+        queue: &Queue,
+        id: i64,
+        error: &AppError,
+        delay: Option<u64>,
+    ) -> AppResult<()> {
+        queue.record_row_failure(
+            id,
+            DeliveryFailureKind::from_error(error).as_str(),
+            http_status_of(error),
+            delivery_message_code(error),
+            delay,
+        )
+    }
+
+    async fn post_json_leased<T: Serialize + ?Sized>(
+        &self,
+        queue: &Queue,
+        owner: &str,
+        path: &str,
+        payload: &T,
+    ) -> AppResult<()> {
+        queue.renew_claim(owner)?;
+        let request = self.post_json(path, payload);
+        tokio::pin!(request);
+        let mut renewal = tokio::time::interval(Duration::from_secs(20));
+        renewal.tick().await;
+        loop {
+            tokio::select! {
+                result=&mut request => return result,
+                _=renewal.tick() => { queue.renew_claim(owner)?; }
+            }
+        }
+    }
+
+    /// Delivery-only tick: no transcript scanning and no synthetic activity.
+    pub async fn drain_delivery_tick(&self) -> AppResult<FlushReport> {
+        let started = Instant::now();
+        let mut total = FlushReport {
+            flushed: 0,
+            stopped_because: None,
+        };
+        for _ in 0..5 {
+            if started.elapsed() >= Duration::from_secs(10) {
+                break;
+            }
+            let batch = self.flush_queue().await?;
+            total.flushed += batch.flushed;
+            total.stopped_because = batch.stopped_because;
+            if total.stopped_because.is_some() || batch.flushed == 0 {
+                break;
+            }
+        }
+        Ok(total)
+    }
+
     async fn post_json<T: Serialize + ?Sized>(&self, path: &str, payload: &T) -> AppResult<()> {
         let response = self
             .client
@@ -1230,7 +1545,6 @@ impl ApiClient {
             .send()
             .await?;
 
-        let response = Self::reject_unauthorized(response)?;
         Self::error_for_status_with_body(response).await?;
         Ok(())
     }
@@ -1251,7 +1565,13 @@ impl ApiClient {
             .headers()
             .get(header::RETRY_AFTER)
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.trim().parse::<u64>().ok());
+            .and_then(|value| {
+                value.trim().parse::<u64>().ok().or_else(|| {
+                    chrono::DateTime::parse_from_rfc2822(value)
+                        .ok()
+                        .map(|at| (at.timestamp() - chrono::Utc::now().timestamp()).max(0) as u64)
+                })
+            });
         let body = response.text().await.unwrap_or_default();
         let body = body.trim();
         let message = if body.is_empty() {
@@ -1375,8 +1695,7 @@ impl ApiClient {
             kind.as_str(),
             failure.http_status,
             "legacy_unscoped_record",
-        )
-        .with_detail(failure.message.clone());
+        );
         // Delete only after the record is safely persisted.
         if queue.record_delivery_failure(&scope, &record).is_ok() {
             let _ = fs::remove_file(path);
@@ -1394,8 +1713,7 @@ impl ApiClient {
             DeliveryFailureKind::from_error(error).as_str(),
             http_status_of(error),
             delivery_message_code(error),
-        )
-        .with_detail(error.to_string());
+        );
         if let Err(error) = queue.record_delivery_failure(&self.queue_scope(), &record) {
             tracing::warn!(%error, "could not record delivery failure");
         }
@@ -1403,6 +1721,12 @@ impl ApiClient {
 
     /// A delivery got through for this scope, so nothing about it is failing.
     fn clear_delivery_failure(&self, queue: &Queue) {
+        if !queue
+            .status_scoped(&self.queue_scope())
+            .is_ok_and(|s| s.pending == 0 && s.dead_letter == 0)
+        {
+            return;
+        }
         if let Err(error) = queue.clear_delivery_failure(&self.queue_scope(), None) {
             tracing::warn!(%error, "could not clear delivery failure");
         }

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { IncompleteTimeBadge } from '@/components/wakaclock/delivery-status-notice';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RankBadge } from '@/components/wakaclock/rpg/rank-badge';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
@@ -50,8 +51,9 @@ export function TopProjects() {
   return (
     <Card>
       <CardHeader>
+        <IncompleteTimeBadge />
         <CardTitle>Projects</CardTitle>
-        <CardDescription>Ranked by time in the selected range</CardDescription>
+        <CardDescription>Ranked by Activity with timeout in the selected range</CardDescription>
       </CardHeader>
       <CardContent>
         <QueryState

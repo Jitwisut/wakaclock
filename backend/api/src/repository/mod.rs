@@ -14,5 +14,16 @@ pub mod project_identity;
 pub mod project_merge;
 pub mod project_rule;
 pub mod team;
+pub mod team_insights;
+#[cfg(test)]
+mod team_privacy_tests;
+pub mod team_webhooks;
 
 pub mod presence_office;
+
+pub mod team_trust;
+
+#[cfg(test)]
+mod team_trust_tests;
+
+pub mod team_store_retention;

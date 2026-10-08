@@ -8,6 +8,9 @@ import { getDurations } from '@/lib/wakaclock/endpoints';
 import { formatEpochRange, formatEpochTime, todayDateString } from '@/lib/wakaclock/format';
 import type { DurationBlock } from '@/lib/wakaclock/types';
 
+vi.mock('@/hooks/use-delivery-health', () => ({
+  useDeliveryHealth: () => ({ incomplete: false }),
+}));
 vi.mock('@/lib/wakaclock/endpoints', () => ({ getDurations: vi.fn() }));
 const session = vi.hoisted(() => ({ userId: 'test-user' as null | string }));
 vi.mock('@/lib/wakaclock/user-store', () => ({
@@ -29,7 +32,7 @@ it('uses UTC when the browser cannot resolve a timezone', async () => {
       <DurationTimeline />
     </QueryClientProvider>
   );
-  await screen.findByText('No sessions on this day');
+  await screen.findByText('No recorded sessions on this day');
   expect(getDurations).toHaveBeenCalledWith('test-user', todayDateString(), 'UTC');
 });
 
@@ -42,7 +45,7 @@ it('does not fetch private timeline data without an owner', () => {
     </QueryClientProvider>
   );
   expect(getDurations).not.toHaveBeenCalled();
-  expect(screen.getByText('No sessions on this day')).toBeVisible();
+  expect(screen.getByText('No recorded sessions on this day')).toBeVisible();
 });
 
 it('shows measured duration values and missing additional AI time independently', async () => {
@@ -65,6 +68,7 @@ it('shows measured duration values and missing additional AI time independently'
     active_coverage: 'measured',
     active_seconds: 0,
     comparable_seconds: 3600,
+    wakatime_compatible_seconds: 3600,
     ai_additional_seconds: undefined,
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -73,14 +77,10 @@ it('shows measured duration values and missing additional AI time independently'
       <DurationTimeline />
     </QueryClientProvider>
   );
-  await screen.findByText('Active coding (primary)');
-  expect(screen.getByText('Active coding (primary)').nextElementSibling).toHaveTextContent('0m');
-  expect(screen.getByText('WakaTime-comparable activity').nextElementSibling).toHaveTextContent(
-    '1h'
-  );
-  expect(screen.getByText('Additional measured AI time').nextElementSibling).toHaveTextContent(
-    'Not available'
-  );
+  await screen.findByText('Measured Active');
+  expect(screen.getByText('Measured Active').nextElementSibling).toHaveTextContent('0m');
+  expect(screen.getByText('Activity with timeout').nextElementSibling).toHaveTextContent('1h');
+  expect(screen.getByText(/Editor-only activity: 1h/)).toBeVisible();
 });
 
 describe('DurationTimeline sessions', () => {
@@ -221,16 +221,12 @@ it('keeps unavailable duration comparisons distinct from measured zero and discl
       <DurationTimeline />
     </QueryClientProvider>
   );
-  await screen.findByText('Active coding (primary)');
-  expect(screen.getByText('Active coding (primary)').nextElementSibling).toHaveTextContent(
+  await screen.findByText('Measured Active');
+  expect(screen.getByText('Measured Active').nextElementSibling).toHaveTextContent('Not available');
+  expect(screen.getByText('Activity with timeout').nextElementSibling).toHaveTextContent(
     'Not available'
   );
-  expect(screen.getByText('WakaTime-comparable activity').nextElementSibling).toHaveTextContent(
-    'Not available'
-  );
-  expect(screen.getByText('Additional measured AI time').nextElementSibling).toHaveTextContent(
-    '0m'
-  );
+  expect(screen.getByText(/Editor-only activity: Not available/)).toBeVisible();
   expect(screen.getByText('1h outside any project not shown')).toBeVisible();
   expect(within(screen.getByRole('table')).getByText('1h 30m')).toBeVisible();
   const bar = screen.getByRole('button', { name: /^Lab,/ });
@@ -262,4 +258,42 @@ it('keeps its day label and calendar request on the local date', async () => {
     todayDateString(),
     Intl.DateTimeFormat().resolvedOptions().timeZone
   );
+});
+
+it('shows positive measured time with zero editor-only and does not add the two metrics', async () => {
+  const start = new Date('2026-10-07T00:00:00+07:00').getTime() / 1000;
+  vi.mocked(getDurations).mockResolvedValue({
+    date: '2026-10-07',
+    timezone: 'Asia/Bangkok',
+    timeout_seconds: 900,
+    total: 1,
+    data: [
+      {
+        start,
+        end: start + 5400,
+        duration_seconds: 5400,
+        project: 'AI',
+        entity: 'tool',
+        language: 'Rust',
+        category: 'ai coding',
+        heartbeat_count: 1,
+        heartbeat_ids: ['hb-ai'],
+      },
+    ],
+    active_coverage: 'measured',
+    active_seconds: 1800,
+    comparable_seconds: 0,
+    wakatime_compatible_seconds: 5400,
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <DurationTimeline />
+    </QueryClientProvider>
+  );
+  await screen.findByText('Measured Active');
+  expect(screen.getByText('Measured Active').nextElementSibling).toHaveTextContent('30m');
+  expect(screen.getByText('Activity with timeout').nextElementSibling).toHaveTextContent('1h 30m');
+  expect(screen.getByText(/Editor-only activity: 0m/)).toBeVisible();
+  expect(screen.getByText(/Timeout: 15 minutes/)).toBeVisible();
 });

@@ -1,11 +1,45 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "AtoAxis Activity Tracker",
   "version": "0.1.0",
-  "description": "Privacy-first browser activity tracking for AtoAxis",
-  "permissions": ["storage", "tabs", "idle", "http://*/*", "https://*/*"],
-  "background": { "scripts": ["background.js"], "persistent": false },
-  "options_ui": { "page": "options.html", "open_in_tab": true },
-  "browser_specific_settings": { "gecko": { "id": "browser@atoaxis.com" } },
-  "incognito": "not_allowed"
+  "description": "Measure focused browsing time and connect websites to your AtoAxis projects.",
+  "permissions": ["storage", "tabs", "idle", "alarms"],
+  "host_permissions": ["https://api.atoaxis.com/*"],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "AtoAxis",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "incognito": "not_allowed",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "browser@atoaxis.com",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["authenticationInfo", "browsingActivity"],
+        "optional": []
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  }
 }

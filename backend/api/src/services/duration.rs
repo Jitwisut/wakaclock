@@ -14,6 +14,7 @@ use crate::services::activity_timeline::{total_seconds, ActivityTimelineService,
 #[derive(Debug)]
 pub struct DurationResult {
     pub blocks: Vec<DurationBlockRow>,
+    pub timeout_seconds: f64,
     pub comparable_seconds: f64,
     pub ai_measured_seconds: f64,
     pub ai_additional_seconds: f64,
@@ -30,11 +31,14 @@ pub struct DurationResult {
 /// heartbeat/session-gap query could turn an idle switch into ten minutes of coding.
 pub struct DurationService {
     timeline: ActivityTimelineService,
+    timeout_seconds: f64,
 }
 
 impl DurationService {
     pub fn new(clickhouse: Arc<ClickHouseClient>, bridge: impl Into<BridgeConfig>) -> Self {
+        let bridge = bridge.into();
         Self {
+            timeout_seconds: bridge.idle_timeout_seconds,
             timeline: ActivityTimelineService::new(clickhouse, bridge),
         }
     }
@@ -67,7 +71,10 @@ impl DurationService {
                 {
                     previous.end = interval.end;
                     previous.duration_seconds += interval.end - interval.start;
-                    previous.heartbeat_count += 1;
+                    if !previous.heartbeat_ids.contains(&interval.heartbeat_id) {
+                        previous.heartbeat_ids.push(interval.heartbeat_id);
+                        previous.heartbeat_count = previous.heartbeat_ids.len() as u64;
+                    }
                     continue;
                 }
             }
@@ -76,6 +83,7 @@ impl DurationService {
                 end: interval.end,
                 duration_seconds: interval.end - interval.start,
                 heartbeat_count: 1,
+                heartbeat_ids: vec![interval.heartbeat_id],
                 project: interval.project,
                 language: interval.language,
                 category: interval.category,
@@ -84,6 +92,7 @@ impl DurationService {
         }
         Ok(DurationResult {
             blocks: rows,
+            timeout_seconds: self.timeout_seconds,
             comparable_seconds: timeline.comparable_seconds,
             ai_measured_seconds: timeline.ai_measured_seconds,
             ai_additional_seconds: timeline.ai_additional_seconds,

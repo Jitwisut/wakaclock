@@ -57,6 +57,49 @@ pub struct AuthorizationService {
 }
 
 impl AuthorizationService {
+    /// Team reads always resolve the team inside the tenant. ReadTeam alone is
+    /// insufficient: an organization member is not a member of every team.
+    pub async fn require_team_read(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        team: Option<Uuid>,
+    ) -> Result<()> {
+        let decision = self
+            .require(actor, org, OrganizationAction::ReadSelf, None)
+            .await?;
+        if let Some(team) = team {
+            let postgres = self.postgres.as_deref().context("PostgreSQL unavailable")?;
+            let row = postgres
+                .query_opt(
+                    "SELECT 1 FROM teams t WHERE t.id = $1 AND t.organization_id = $2
+                 AND (EXISTS (SELECT 1 FROM team_members tm WHERE tm.team_id = t.id
+                   AND tm.user_id = $3) OR $4)",
+                    &[
+                        &team,
+                        &org,
+                        &actor,
+                        &matches!(
+                            decision.role,
+                            Some(OrganizationRole::Owner | OrganizationRole::Admin)
+                        ),
+                    ],
+                )
+                .await?;
+            if row.is_none() {
+                return Err(AuthorizationDenied("team is outside actor scope").into());
+            }
+        } else if !matches!(
+            decision.role,
+            Some(OrganizationRole::Owner | OrganizationRole::Admin)
+        ) {
+            return Err(
+                AuthorizationDenied("organization-wide insights require owner or admin").into(),
+            );
+        }
+        Ok(())
+    }
+
     pub fn new(postgres: Option<Arc<PostgresClient>>) -> Self {
         Self { postgres }
     }
@@ -123,8 +166,10 @@ impl AuthorizationService {
         let row = postgres
             .client()
             .query_opt(
-                "SELECT role FROM organization_members
-                 WHERE organization_id = $1 AND user_id = $2 AND deactivated_at IS NULL",
+                "SELECT m.role FROM organization_members m JOIN organizations o ON o.id = m.organization_id
+                 JOIN users u ON u.id = m.user_id
+                 WHERE m.organization_id = $1 AND m.user_id = $2 AND m.deactivated_at IS NULL AND o.deleted_at IS NULL
+                   AND u.is_active AND u.deleted_at IS NULL",
                 &[&organization_id, &actor_user_id],
             )
             .await

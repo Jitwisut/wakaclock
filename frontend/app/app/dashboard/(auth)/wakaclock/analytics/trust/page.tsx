@@ -12,6 +12,7 @@ import {
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { AnalyticsNav } from '@/components/wakaclock/analytics/analytics-nav';
+import { DeliveryStatusNotice } from '@/components/wakaclock/delivery-status-notice';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
@@ -159,8 +160,9 @@ export default function MeasurementTrustPage() {
   let deliveryMessage: string | undefined;
   if (delivery.isLoading) deliveryMessage = 'Loading delivery status…';
   else if (delivery.error) deliveryMessage = 'Delivery status is unavailable from the server.';
-  else if (!delivery.data?.devices.length)
-    {deliveryMessage = 'No queue snapshot has reached the server yet.';}
+  else if (!delivery.data?.devices.length) {
+    deliveryMessage = 'No queue snapshot has reached the server yet.';
+  }
   const operations = evidence.data?.pages.flatMap((page) => page.operations) ?? [];
   const projectOptions = projects.data?.pages.flatMap((page) => page.items) ?? [];
   const selectedCandidates = operations.flatMap((operation): MeasurementRepairCandidate[] => {
@@ -215,6 +217,7 @@ export default function MeasurementTrustPage() {
         title="Measurement Trust"
       />
       <RequireUser>
+        <DeliveryStatusNotice />
         <AnalyticsNav href={(path) => `${path}?start=${start}&end=${end}`} />
         <QueryState error={report.error} isLoading={report.isLoading}>
           {data && (
