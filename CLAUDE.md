@@ -84,6 +84,13 @@ Full list and known-broken targets: [.context/commands.md](.context/commands.md)
    The current counting algorithm is **LOCKED** by the owner: never change any
    value in the "Locked time-counting baseline" table there without fresh,
    explicit approval each time.
+10. **Never push to `main` without explicit owner authorization for that action.**
+    Owner instruction recorded 2026-10-08. A generic request to "commit and push"
+    does not authorize pushing to `main`, even when it is the current branch.
+    Use a task branch (`codex/` prefix for Codex-created branches) for authorized
+    commits/pushes. Do not merge or update remote `main` through a PR or another
+    refspec without explicit authorization either. See
+    [.context/conventions.md](.context/conventions.md).
 
 ## Context Routing — MANDATORY
 

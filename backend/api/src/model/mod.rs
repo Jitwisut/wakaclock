@@ -39,6 +39,7 @@ pub mod reprocess;
 pub mod stats;
 pub mod summary;
 pub mod team;
+pub mod team_insights;
 pub mod user;
 pub mod vcs;
 pub mod wakatime_import;

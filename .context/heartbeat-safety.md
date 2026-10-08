@@ -56,6 +56,10 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ## Approval gate — ต้องถามก่อนแก้
 
+การอนุมัติ 2026-10-08 (Team): ผู้ใช้สั่ง “PLEASE IMPLEMENT THIS PLAN” สำหรับ AtoAxis Team: metadata-only, consent มีเวอร์ชัน/เวลาเริ่มแชร์, tenant/team/repository scope, suppression ขั้นต่ำ 5 ผู้ร่วมข้อมูลจริง, GitHub durable inbox, confirmed work links, provider certification และ billing ที่ปิดจนมี configuration/evidence. รักษา heartbeat ID/timestamp และ baseline ทุกแถว; ทำบน branch `codex/...` เท่านั้น. ไม่อนุญาต push/merge เข้า main และไม่ถือว่า external release gates ผ่านโดยไม่มีผลทดสอบจริง.
+
+การอนุมัติเผยแพร่ 2026-10-08 (Team): ผู้ใช้สั่ง “commit แล้ว push ให้หน่อย” อนุญาต commit/push งาน Team foundation ที่ทำเสร็จไปยัง `codex/atoaxis-team` พร้อมบันทึกกฎห้าม push เข้า main. ไม่รวม credential, ข้อมูล incident ส่วนตัว, backup หรือ runtime/build artifacts; ไม่อนุญาต push/merge เข้า main และไม่ใช่การอนุมัติ production release.
+
 การอนุมัติเพิ่มเติม 2026-10-07: ผู้ใช้สั่ง “PLEASE IMPLEMENT THIS PLAN” สำหรับ capture กิจกรรม Codex จาก task/tool/message metadata, collector 15s พร้อม durable cursor/inbox, replay event จริง, capture health และ supervision ของบริการเดิมเมื่อ login. เพิ่มข้อมูลนำเข้าโดยรักษาค่าทุกแถวของ baseline และสูตรเดิม; ไม่ครอบคลุม commit/push หรือสร้างฐานข้อมูลใหม่แทน volume เดิม.
 
 การอนุมัติ 2026-10-08: ผู้ใช้สั่ง “แก้ code ส่วนไหนไปบ้าง commit แล้ว push ให้หน่อย” อนุญาต commit/push งาน delivery, capture และ service recovery ตามสองแผนข้างต้น โดยไม่รวม credential, backup ฐานข้อมูล, runtime binary และหลักฐาน incident ส่วนตัว.
