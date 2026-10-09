@@ -232,6 +232,42 @@ async fn consent_lifecycle_and_webhook_durability() {
             .allocation_targets,
         1
     );
+    pg.execute(
+        "UPDATE team_rollouts SET enabled=true WHERE organization_id=$1",
+        &[&org],
+    )
+    .await
+    .unwrap();
+    let allocation_generation = pg
+        .query_one(
+            "SELECT generation FROM team_rollouts WHERE organization_id=$1",
+            &[&org],
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0);
+    let identities = vec!["d".repeat(64)];
+    assert_eq!(
+        links
+            .allocate(org, user, first.id, &identities, allocation_generation)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    // Response loss repeats the receipt without allocating a second copy.
+    assert_eq!(
+        links
+            .allocate(org, user, first.id, &identities, allocation_generation)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(links
+        .allocate(org, user, first.id, &identities, allocation_generation - 1)
+        .await
+        .is_err());
     let second = links
         .propose(
             org,
@@ -254,6 +290,29 @@ async fn consent_lifecycle_and_webhook_durability() {
             .unwrap()[0]
             .allocation_targets,
         2
+    );
+    let current_generation = pg
+        .query_one(
+            "SELECT generation FROM team_rollouts WHERE organization_id=$1",
+            &[&org],
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0);
+    assert!(links
+        .allocate(org, user, first.id, &identities, current_generation)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        pg.query_one(
+            "SELECT count(*) FROM team_usage_allocations WHERE user_id=$1",
+            &[&user]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        0
     );
     links
         .decide_link(org, user, second.id, "withdrawn")
@@ -292,6 +351,7 @@ async fn consent_lifecycle_and_webhook_durability() {
         repository_id: None,
         item: None,
         review_at: None,
+        details: None,
     };
     repo.accept_github(&delivery, "first-hash", &event)
         .await

@@ -15,10 +15,8 @@ pub async fn github(
         .postgres
         .clone()
         .ok_or_else(|| ApiError::service_unavailable("Team requires PostgreSQL"))?;
-    let secret = std::env::var("ATOAXIS_GITHUB_WEBHOOK_SECRET")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| ApiError::service_unavailable("GitHub receiver not configured"))?;
+    let secret = crate::infrastructure::github::GithubAppSecrets::webhook_secret()
+        .map_err(|_| ApiError::service_unavailable("GitHub receiver not configured"))?;
     let header = |key: &str| headers.get(key).and_then(|v| v.to_str().ok());
     let signature = header("x-hub-signature-256")
         .ok_or_else(|| ApiError::forbidden("invalid webhook signature"))?;
@@ -31,6 +29,12 @@ pub async fn github(
     let Some(metadata) = github_metadata(event, &body)
         .map_err(|_| ApiError::bad_request("invalid webhook metadata"))?
     else {
+        TeamWebhookRepository::new(pg)
+            .accept_disposition(id, &payload_hash(&body), "unsupported_or_ping")
+            .await
+            .map_err(|_| {
+                ApiError::service_unavailable("webhook disposition not durable; retry delivery")
+            })?;
         return Ok(StatusCode::NO_CONTENT);
     };
     TeamWebhookRepository::new(pg)

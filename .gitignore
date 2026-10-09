@@ -18,3 +18,5 @@ apps/desktop/src-tauri/gen/
 # Private incident evidence: databases, runtime binaries, IDs, paths and local logs.
 # Keep the shareable recovery runbook in docs/ instead.
 /output/heartbeat-recovery-2026-10-07/
+/output/team-github-staging/
+/output/team-github-certification/

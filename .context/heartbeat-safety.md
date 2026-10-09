@@ -56,6 +56,10 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ## Approval gate — ต้องถามก่อนแก้
 
+การอนุมัติเผยแพร่ 2026-10-09 (GitHub integration): ผู้ใช้สั่ง “commit แล้ว push ให้หน่อย” อนุญาต commit/push source, additive migration, tests, staging scripts และเอกสารของงานนี้ไปยัง `codex/atoaxis-team` ไม่รวม credential, รายงานส่วนตัว, backup, runtime/build artifacts หรือการแก้จากงานอื่น; ไม่อนุญาต push/merge เข้า main และไม่ใช่การรับรอง integration หรือ production release.
+
+การอนุมัติ 2026-10-08 (GitHub integration): ผู้ใช้สั่ง “PLEASE IMPLEMENT THIS PLAN” สำหรับ GitHub App/OAuth, durable webhook/sync, verified repository mapping รายสมาชิก, session-context stream แยกจาก heartbeat/usage, UI/privacy/retention และ staging แยกผ่าน tunnel พร้อม client certification macOS/Windows. อนุญาตเปลี่ยน client metadata/queue/tests ที่จำเป็นในขอบเขตนี้ รักษา heartbeat IDs, timestamp และ baseline ทุกแถว; ไม่อนุญาต commit/push ของงานใหม่หรือ push/merge main และห้ามอ้าง certification ก่อนมีผลจริง.
+
 การอนุมัติ 2026-10-08 (Team Phase 2): ผู้ใช้สั่ง “PLEASE IMPLEMENT THIS PLAN” สำหรับ closed-week privacy registry, consent/read concurrency, Team-only retention/restore guard, measurement health/Trust UI และ canary day-scoped revisions พร้อม isolated fixtures. ไม่เปลี่ยน heartbeat/capture/duration baseline และไม่อนุญาต push/merge เข้า main.
 
 การอนุมัติเผยแพร่ 2026-10-08 (Team Phase 2): ผู้ใช้สั่ง “commit แล้ว push ให้หน่อย” หลังการส่งมอบ Phase 2 อนุญาต commit/push source, migration, tests และเอกสารของงานนี้ไปยัง `codex/atoaxis-team` รวม lifecycle/recovery และ canary ที่อยู่ในแผนที่อนุมัติไว้ ไม่รวม credential, incident output, backup หรือ runtime/build artifacts; ไม่อนุญาต push/merge เข้า main และไม่ใช่การอนุมัติ production release.

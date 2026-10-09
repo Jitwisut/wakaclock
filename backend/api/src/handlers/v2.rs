@@ -46,6 +46,7 @@ use crate::model::profile::{
 };
 use crate::model::report::{CreateReportScheduleRequest, ReportSchedule};
 
+mod team_github;
 mod team_insights;
 mod team_webhooks;
 mod work_sessions;
@@ -95,6 +96,8 @@ pub struct CapabilityData {
     pub capture_status_supported: bool,
     pub team_weekly_aggregates_supported: bool,
     pub team_measurement_health_supported: bool,
+    pub session_context_versions: Vec<u8>,
+    pub team_github_certification: &'static str,
     pub product: &'static str,
     pub transactional_store: &'static str,
     pub analytics_store: &'static str,
@@ -378,6 +381,18 @@ pub struct WakaTimeImportJob {
 pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
         .route("/team/webhooks/github", post(team_webhooks::github))
+        .route("/me/session-context/capability", get(team_github::capability))
+        .route("/me/github/oauth/callback", post(team_github::callback))
+        .route("/organizations/:organization_id/integrations/github", get(team_github::status).delete(team_github::disconnect))
+        .route("/organizations/:organization_id/integrations/github/authorize", post(team_github::start))
+        .route("/organizations/:organization_id/integrations/github/installations", get(team_github::installations))
+        .route("/organizations/:organization_id/integrations/github/installations/:installation_id/repositories", get(team_github::repositories))
+        .route("/organizations/:organization_id/integrations/github/repositories", put(team_github::select))
+        .route("/organizations/:organization_id/integrations/github/work-items", get(team_github::work_page))
+        .route("/organizations/:organization_id/integrations/github/sync", post(team_github::sync))
+        .route("/organizations/:organization_id/me/github/project-bindings", get(team_github::projects).put(team_github::binding))
+        .route("/organizations/:organization_id/me/github/session-context", post(team_github::context))
+        .route("/organizations/:organization_id/me/github/suggestions", get(team_github::suggestions))
         .route("/organizations/:organization_id/measurement-health", get(team_insights::measurement_health))
         .route("/organizations/:organization_id/launch-readiness", get(team_insights::readiness))
         .route("/organizations/:organization_id/work-items/:repository_id/:work_item_id/receipt", get(team_insights::receipt))
@@ -786,6 +801,12 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
             capture_status_supported: true,
             team_weekly_aggregates_supported: state.config.team_enabled && state.postgres.is_some(),
             team_measurement_health_supported: state.postgres.is_some(),
+            session_context_versions: if state.config.team_enabled && state.postgres.is_some() {
+                vec![1]
+            } else {
+                vec![]
+            },
+            team_github_certification: "staging_certification_pending",
             product: "AtoAxis",
             transactional_store: if state.postgres.is_some() {
                 "postgresql"

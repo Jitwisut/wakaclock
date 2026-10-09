@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "base_commit": "8bdd0df1315c1bbfe6f631f321838f01bea08394",
+  "required_tools": ["codex", "claude_code", "cursor_ide", "copilot_vscode"],
+  "required_operating_systems": ["macos", "windows"],
+  "user_sessions_per_tool_os": 10,
+  "requires_same_clean_build_sha": true,
+  "timezone": "Asia/Bangkok",
+  "metrics": ["repository_identity", "branch", "commit_sha", "context_delivery", "usage", "suggested", "accepted", "agent_edits"],
+  "daily_only_copilot_metrics_must_not_be_session_attributed": true,
+  "provider_metrics_require_independent_expected_ledger": true,
+  "source_diff_prompt_response_credential_forbidden": true,
+  "monitor_sessions_count_toward_acceptance": false,
+  "certificate_status": "pending"
+}

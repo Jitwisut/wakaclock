@@ -26,6 +26,7 @@ import {
 import { OrganizationTeamsPanel } from './components/organization-teams-panel';
 import { TeamInsightsPanel } from './components/team-insights-panel';
 import { TeamTrustPanel } from './components/team-trust-panel';
+import { TeamGithubPanel } from './components/team-github-panel';
 
 function OrganizationCard({ organization }: { organization: Organization }) {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
@@ -49,6 +50,7 @@ function OrganizationCard({ organization }: { organization: Organization }) {
         <OrganizationTeamsPanel organizationId={organization.id} />
         <OrganizationInvitesPanel organizationId={organization.id} />
         <TeamTrustPanel organizationId={organization.id} />
+        <TeamGithubPanel key={`${userId}:${organization.id}`} organizationId={organization.id} />
         <QueryState error={health.error} isLoading={health.isLoading}>
           {week && timezone && (
             <>

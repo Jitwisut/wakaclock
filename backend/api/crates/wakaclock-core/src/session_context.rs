@@ -1,0 +1,286 @@
+//! Separate metadata stream: recording context never creates or changes a heartbeat.
+use chrono::{DateTime, Utc};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{path::Path, process::Command, time::Duration};
+use uuid::Uuid;
+
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SessionContext {
+    pub event_id: String,
+    pub session_id: String,
+    pub collector_id: Uuid,
+    pub project_id: Uuid,
+    pub repository_id: Uuid,
+    pub occurred_at: DateTime<Utc>,
+    pub branch: Option<String>,
+    pub commit_sha: Option<String>,
+    pub provenance: String,
+}
+#[derive(Debug, PartialEq)]
+pub struct GitMetadata {
+    pub repository: String,
+    pub branch: Option<String>,
+    pub commit_sha: Option<String>,
+}
+/// Allow only GitHub.com repository coordinates. Userinfo/credential/query/path never leave here.
+pub fn github_repository(remote: &str) -> Option<String> {
+    let path = if let Some(path) = remote.strip_prefix("git@github.com:") {
+        path.to_string()
+    } else {
+        let url = reqwest::Url::parse(remote).ok()?;
+        if !matches!(url.scheme(), "https" | "ssh")
+            || url.host_str() != Some("github.com")
+            || url.port().is_some()
+        {
+            return None;
+        }
+        url.path().trim_start_matches('/').to_string()
+    };
+    let path = path.trim_end_matches('/').trim_end_matches(".git");
+    let parts: Vec<_> = path.split('/').collect();
+    if parts.len() != 2
+        || parts.iter().any(|p| {
+            p.is_empty()
+                || *p == "."
+                || *p == ".."
+                || !p
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        })
+    {
+        return None;
+    }
+    Some(format!(
+        "{}/{}",
+        parts[0].to_ascii_lowercase(),
+        parts[1].to_ascii_lowercase()
+    ))
+}
+pub fn observe_git(workspace: &Path) -> Option<GitMetadata> {
+    let read = |args: &[&str]| -> Option<String> {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args(args)
+            .output()
+            .ok()?;
+        if !out.status.success() || out.stdout.len() > 4096 {
+            return None;
+        }
+        Some(String::from_utf8(out.stdout).ok()?.trim().to_string())
+    };
+    let repository =
+        github_repository(&read(&["config", "--local", "--get", "remote.origin.url"])?)?;
+    let branch = read(&["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control));
+    let commit_sha = read(&["rev-parse", "--verify", "HEAD"])
+        .filter(|s| matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit()));
+    Some(GitMetadata {
+        repository,
+        branch,
+        commit_sha,
+    })
+}
+pub fn canonical_session(user: Uuid, agent: &str, collector: Uuid, usage_session: &str) -> String {
+    // Matches the canonical usage/receipt identity; usage_session is already producer scoped.
+    format!(
+        "{:x}",
+        Sha256::digest(
+            format!("{user}:{}:{agent}:{collector}:{usage_session}", agent.len()).as_bytes()
+        )
+    )
+}
+impl SessionContext {
+    pub fn observed(
+        user: Uuid,
+        agent: &str,
+        collector: Uuid,
+        usage_session: &str,
+        project: Uuid,
+        repository: Uuid,
+        at: DateTime<Utc>,
+        git: GitMetadata,
+    ) -> Self {
+        let session_id = canonical_session(user, agent, collector, usage_session);
+        let identity = serde_json::to_vec(&(
+            user,
+            repository,
+            &session_id,
+            at,
+            &git.branch,
+            &git.commit_sha,
+        ))
+        .expect("metadata serializes");
+        Self {
+            event_id: format!("{:x}", Sha256::digest(identity)),
+            session_id,
+            collector_id: collector,
+            project_id: project,
+            repository_id: repository,
+            occurred_at: at,
+            branch: git.branch,
+            commit_sha: git.commit_sha,
+            provenance: "native_session_git".into(),
+        }
+    }
+}
+pub struct ContextQueue {
+    conn: Connection,
+}
+pub struct PendingContext {
+    pub event: SessionContext,
+    pub lease: String,
+    pub attempts: i64,
+}
+impl ContextQueue {
+    pub fn open(path: &Path) -> Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(path)?;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        let conn = Connection::open(path)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS session_context_queue(origin TEXT NOT NULL,owner TEXT NOT NULL,organization TEXT NOT NULL,event_id TEXT NOT NULL,payload TEXT NOT NULL,payload_hash TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0,lease TEXT,lease_until INTEGER,dead_letter TEXT,PRIMARY KEY(origin,owner,organization,event_id));")?;
+        Ok(Self { conn })
+    }
+    pub fn enqueue(
+        &self,
+        origin: &str,
+        owner: Uuid,
+        org: Uuid,
+        event: &SessionContext,
+    ) -> Result<()> {
+        let payload = serde_json::to_string(event)?;
+        let hash = format!("{:x}", Sha256::digest(payload.as_bytes()));
+        let n=self.conn.execute("INSERT INTO session_context_queue(origin,owner,organization,event_id,payload,payload_hash) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin,owner,organization,event_id) DO UPDATE SET event_id=excluded.event_id WHERE payload_hash=excluded.payload_hash",params![origin,owner.to_string(),org.to_string(),event.event_id,payload,hash])?;
+        if n != 1 {
+            return Err("context identity conflict".into());
+        }
+        Ok(())
+    }
+    pub fn claim(
+        &mut self,
+        origin: &str,
+        owner: Uuid,
+        org: Uuid,
+        now: i64,
+    ) -> Result<Option<PendingContext>> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let row=tx.query_row("SELECT event_id,payload,attempts FROM session_context_queue WHERE origin=?1 AND owner=?2 AND organization=?3 AND retry_at<=?4 AND dead_letter IS NULL AND (lease_until IS NULL OR lease_until<=?4) ORDER BY retry_at,event_id LIMIT 1",params![origin,owner.to_string(),org.to_string(),now],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?))).optional()?;
+        let Some((id, payload, attempts)) = row else {
+            return Ok(None);
+        };
+        let lease = Uuid::new_v4().to_string();
+        tx.execute("UPDATE session_context_queue SET lease=?5,lease_until=?6,attempts=attempts+1 WHERE origin=?1 AND owner=?2 AND organization=?3 AND event_id=?4",params![origin,owner.to_string(),org.to_string(),id,lease,now+90])?;
+        tx.commit()?;
+        Ok(Some(PendingContext {
+            event: serde_json::from_str(&payload)?,
+            lease,
+            attempts: attempts + 1,
+        }))
+    }
+    pub fn acknowledge(&self, pending: &PendingContext) -> Result<bool> {
+        Ok(self.conn.execute(
+            "DELETE FROM session_context_queue WHERE event_id=?1 AND lease=?2",
+            params![pending.event.event_id, pending.lease],
+        )? == 1)
+    }
+    pub fn retry(&self, pending: &PendingContext, at: i64, dead: Option<&str>) -> Result<()> {
+        self.conn.execute("UPDATE session_context_queue SET retry_at=?3,dead_letter=?4,lease=NULL,lease_until=NULL WHERE event_id=?1 AND lease=?2",params![pending.event.event_id,pending.lease,at,dead])?;
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn remote_only_keeps_repository_coordinates() {
+        for remote in [
+            "https://user:secret@github.com/Owner/Repo.git?token=private",
+            "git@github.com:Owner/Repo.git",
+            "ssh://git@github.com/Owner/Repo.git",
+        ] {
+            assert_eq!(github_repository(remote).as_deref(), Some("owner/repo"));
+        }
+        for remote in [
+            "https://github.com.evil.test/o/r",
+            "https://github.com/o/r/secret",
+            "file:///Users/private",
+            "https://github.com/o/../r",
+        ] {
+            assert!(github_repository(remote).is_none());
+        }
+    }
+    #[test]
+    fn queue_survives_restart_and_rejects_duplicate_changes() {
+        let file = std::env::temp_dir().join(format!("team-context-{}.sqlite", Uuid::new_v4()));
+        let owner = Uuid::new_v4();
+        let org = Uuid::new_v4();
+        let event = SessionContext::observed(
+            owner,
+            "codex",
+            Uuid::new_v4(),
+            "ws1_session",
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Utc::now(),
+            GitMetadata {
+                repository: "o/r".into(),
+                branch: Some("task".into()),
+                commit_sha: Some("a".repeat(40)),
+            },
+        );
+        {
+            let mut q = ContextQueue::open(&file).unwrap();
+            q.enqueue("https://stage.test", owner, org, &event).unwrap();
+            q.enqueue("https://stage.test", owner, org, &event).unwrap();
+            assert!(q
+                .claim("https://other.test", owner, org, 1)
+                .unwrap()
+                .is_none());
+            let lease = q
+                .claim("https://stage.test", owner, org, 1)
+                .unwrap()
+                .unwrap();
+            assert!(q
+                .claim("https://stage.test", owner, org, 2)
+                .unwrap()
+                .is_none());
+            q.retry(&lease, 10, None).unwrap();
+        }
+        let mut q = ContextQueue::open(&file).unwrap();
+        assert!(q
+            .claim("https://stage.test", owner, org, 9)
+            .unwrap()
+            .is_none());
+        let pending = q
+            .claim("https://stage.test", owner, org, 10)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.event, event);
+        let mut changed = event.clone();
+        changed.branch = Some("changed".into());
+        assert!(q
+            .enqueue("https://stage.test", owner, org, &changed)
+            .is_err());
+        assert!(q.acknowledge(&pending).unwrap());
+        assert!(q
+            .claim("https://stage.test", owner, org, 200)
+            .unwrap()
+            .is_none());
+        drop(q);
+        let _ = std::fs::remove_file(file);
+    }
+}

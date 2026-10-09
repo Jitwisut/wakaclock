@@ -259,14 +259,33 @@ impl TeamInsightsService {
         let at = retention
             .as_ref()
             .and_then(|r| r.get::<_, Option<DateTime<Utc>>>("completed_at"));
-        self.authorization
+        let role = self
+            .authorization
             .require(actor, org, OrganizationAction::ReadSelf, None)
-            .await?;
+            .await?
+            .role;
+        let integration = if matches!(
+            role,
+            Some(
+                crate::services::authorization::OrganizationRole::Owner
+                    | crate::services::authorization::OrganizationRole::Admin
+            )
+        ) {
+            serde_json::to_value(
+                crate::repository::team_github::GithubRepositoryStore::new(
+                    self.repo()?.postgres.clone(),
+                )
+                .health(org)
+                .await?,
+            )?
+        } else {
+            serde_json::json!({"status":"withheld","reason":"administrator_diagnostics","scope":"organization"})
+        };
         Ok(
             serde_json::json!({"checked_at":now,"report_timezone":trust.policy(org).await?,"own":{"capture":own_capture,"delivery":own_delivery},
             "team":{"capture":{"status":"withheld","reason":"group_health_not_certified","scope":"organization"},
               "delivery":{"status":"withheld","reason":"group_health_not_certified","scope":"organization"},
-              "integration":{"status":"unconfirmed","reason":"github_reconciliation_not_implemented","scope":"organization"},
+              "integration":integration,
               "retention":{"status":if at.is_some_and(|t|(0..=7200).contains(&now.signed_duration_since(t).num_seconds())) {"observed"}else{"unconfirmed"},"updated_at":at,"reason":"postgres_and_clickhouse_team_cleanup_checkpoints","scope":"organization"}},
             "restore":{"status":if registry_ready {"observed"}else{"unavailable"},"reason":"independent_privacy_registry_guard"}}),
         )
@@ -328,7 +347,8 @@ impl TeamInsightsService {
             let since = record.individual_from.max(retention_start);
             if !facts.iter().any(|f| {
                 DateTime::from_timestamp(f.event_time as i64, 0).is_some_and(|at| at >= since)
-                    && f.project_id == Some(record.project_id)
+                    && f.project_id
+                        .is_some_and(|project| record.projects.contains(&project))
                     && f.project_attribution_method.as_deref() == Some("explicit_project_hint")
             }) {
                 continue;
@@ -344,7 +364,33 @@ impl TeamInsightsService {
                 partial = true;
                 continue;
             }
-            let mut cost = receipt_cost(&facts, record.project_id, since)?;
+            let eligible = facts
+                .iter()
+                .filter(|f| {
+                    DateTime::from_timestamp(f.event_time as i64, 0).is_some_and(|at| at >= since)
+                        && f.project_id
+                            .is_some_and(|project| record.projects.contains(&project))
+                        && f.project_attribution_method.as_deref() == Some("explicit_project_hint")
+                })
+                .collect::<Vec<_>>();
+            let identities = eligible
+                .iter()
+                .map(|f| usage_identity(f.user_id, &f.usage_event_id))
+                .collect::<Vec<_>>();
+            let allocated = repo
+                .allocate(
+                    org,
+                    record.user_id,
+                    record.link.id,
+                    &identities,
+                    scope.generation,
+                )
+                .await?;
+            let admitted = facts
+                .into_iter()
+                .filter(|f| allocated.contains(&usage_identity(f.user_id, &f.usage_event_id)))
+                .collect::<Vec<_>>();
+            let mut cost = receipt_cost_projects(&admitted, &record.projects, since)?;
             if cost.value.is_some() {
                 cost.status = "partial";
                 cost.reason
@@ -437,19 +483,20 @@ impl TeamInsightsService {
             .work_item_team(org, request.repository_id, request.work_item_id)
             .await?
             .ok_or(TeamError::NotFound)?;
-        self.authorization
-            .require_team_read(actor, org, team)
+        if let Some(team) = team {
+            self.authorization
+                .require_team_read(actor, org, Some(team))
+                .await?;
+        }
+        let projects = repo
+            .member_work_projects(org, actor, request.repository_id)
             .await?;
-        let project = repo
-            .work_item_project(org, request.repository_id, request.work_item_id)
-            .await?
-            .ok_or(TeamError::NotFound)?;
         anyhow::ensure!(
             facts
                 .iter()
                 .any(|f| DateTime::from_timestamp(f.event_time as i64, 0)
                     .is_some_and(|at| at >= from)
-                    && f.project_id == Some(project)
+                    && f.project_id.is_some_and(|p| projects.contains(&p))
                     && f.project_attribution_method.as_deref() == Some("explicit_project_hint")),
             TeamError::Invalid("session has no consented repository evidence")
         );
@@ -485,9 +532,21 @@ fn valid_session_id(id: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+fn usage_identity(user: Uuid, event: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(format!("{user}:{event}").as_bytes()))
+}
+#[cfg(test)]
 fn receipt_cost(
     facts: &[AiUsageEventRow],
     project: Uuid,
+    since: DateTime<Utc>,
+) -> Result<Metric<u64>> {
+    receipt_cost_projects(facts, &[project], since)
+}
+fn receipt_cost_projects(
+    facts: &[AiUsageEventRow],
+    projects: &[Uuid],
     since: DateTime<Utc>,
 ) -> Result<Metric<u64>> {
     let mut latest = BTreeMap::new();
@@ -504,7 +563,7 @@ fn receipt_cost(
         .into_values()
         .filter(|fact| {
             DateTime::from_timestamp(fact.event_time as i64, 0).is_some_and(|at| at >= since)
-                && fact.project_id == Some(project)
+                && fact.project_id.is_some_and(|p| projects.contains(&p))
                 && fact.project_attribution_method.as_deref() == Some("explicit_project_hint")
         })
         .collect();
