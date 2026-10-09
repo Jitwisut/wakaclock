@@ -301,6 +301,10 @@ impl PostgresClient {
                 "Team trust and lifecycle",
                 include_str!("../../migrations/postgres/031_team_trust.sql"),
             ),
+            (
+                "Team GitHub installation and synchronization",
+                include_str!("../../migrations/postgres/032_team_github.sql"),
+            ),
         ] {
             client
                 .batch_execute(sql)

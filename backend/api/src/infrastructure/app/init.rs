@@ -147,6 +147,7 @@ pub struct AppState {
     pub org_service: Arc<OrgService>,
     pub organizations_service: Arc<OrganizationsService>,
     pub team_insights_service: Arc<crate::services::team_insights::TeamInsightsService>,
+    pub team_github_service: Arc<crate::services::team_github::TeamGithubService>,
     pub oauth_service: Arc<OAuthService>,
     pub team_service: Arc<TeamService>,
     /// Group co-working sessions (plan.md 7.4).
@@ -402,8 +403,9 @@ pub async fn create_app_state() -> Result<AppState> {
         .with_credential_vault(credential_vault.clone()),
     );
     let insights_service = Arc::new(InsightsService::new(clickhouse.clone(), bridge_config));
-    let integration_service =
-        Arc::new(IntegrationService::new(postgres.clone()).with_credential_vault(credential_vault));
+    let integration_service = Arc::new(
+        IntegrationService::new(postgres.clone()).with_credential_vault(credential_vault.clone()),
+    );
     let leaderboard_service = Arc::new(LeaderboardService::new(
         postgres.clone(),
         authorization_service.clone(),
@@ -475,6 +477,24 @@ pub async fn create_app_state() -> Result<AppState> {
         config.team_enabled,
     ));
     let oauth_service = Arc::new(OAuthService::new(postgres.clone()));
+    let team_github_service = Arc::new(crate::services::team_github::TeamGithubService::new(
+        postgres.clone().map(|pg| {
+            Arc::new(crate::repository::team_github::GithubRepositoryStore::new(
+                pg,
+            ))
+        }),
+        authorization_service.clone(),
+        credential_vault,
+        postgres.clone().map(|pg| {
+            Arc::new(
+                crate::repository::team_insights::TeamInsightsRepository::new(
+                    pg,
+                    clickhouse.clone(),
+                ),
+            )
+        }),
+        config.team_enabled,
+    )?);
     let team_service = Arc::new(TeamService::new(team_repo.clone(), org_service.clone()));
     let coworking_session_service =
         Arc::new(CoworkingSessionService::new(coworking_session_repo.clone()));
@@ -545,6 +565,7 @@ pub async fn create_app_state() -> Result<AppState> {
         org_service,
         organizations_service,
         team_insights_service,
+        team_github_service,
         oauth_service,
         team_service,
         coworking_session_service,

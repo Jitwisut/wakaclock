@@ -1,6 +1,7 @@
 pub mod app;
 pub mod contracts;
 pub mod database;
+pub mod github;
 pub mod job_relay;
 #[cfg(feature = "kafka")]
 pub mod kafka;

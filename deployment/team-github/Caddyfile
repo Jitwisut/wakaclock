@@ -1,0 +1,21 @@
+{
+  auto_https off
+  admin off
+}
+:3411 {
+  bind 127.0.0.1
+  route {
+  @blocked path /api/v1/repair* /api/v1/reprocess* /api/v1/internal/* /api/v1/users/current/api_key /api/v2/organizations/*/launch-readiness /api/v2/me/ai/diagnostics* /health* /metrics* /debug* /oauth/* /scim/*
+  respond @blocked 404
+  @api path /api/v1/auth/register /api/v1/auth/login /api/v1/users/current /api/v2/me /api/v2/capabilities /api/v2/organizations /api/v2/organizations/* /api/v2/me/github/oauth/callback /api/v2/me/session-context/capability /api/v2/team/webhooks/github
+  handle @api {
+    reverse_proxy 127.0.0.1:8410
+  }
+  handle /api/* {
+    respond 404
+  }
+  handle {
+    reverse_proxy 127.0.0.1:3410
+  }
+  }
+}

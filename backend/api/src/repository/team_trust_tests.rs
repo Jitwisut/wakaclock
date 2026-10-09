@@ -262,6 +262,7 @@ async fn weekly_registry_revocation_cleanup_and_restore() {
         repository_id: None,
         item: None,
         review_at: None,
+        details: None,
     };
     let inbox = crate::repository::team_webhooks::TeamWebhookRepository::new(pg.clone());
     inbox
@@ -386,6 +387,9 @@ async fn restore_drill_fixture_stages() {
             .unwrap();
             pg.execute("INSERT INTO team_repository_scopes(organization_id,repository_id,github_repository_id,github_installation_id,project_id,enabled) VALUES($1,$2,741033,741031,$3,true) ON CONFLICT DO NOTHING",&[&org,&repository,&project]).await.unwrap();
             pg.execute("INSERT INTO team_work_items(organization_id,repository_id,external_id,kind,number,state,opened_at,provider_updated_at) VALUES($1,$2,741035,'pull_request',1,'open',now(),now()) ON CONFLICT DO NOTHING",&[&org,&repository]).await.unwrap();
+            pg.execute("INSERT INTO team_member_project_bindings(organization_id,user_id,project_id,repository_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",&[&org,&user,&project,&repository]).await.unwrap();
+            pg.execute("INSERT INTO team_session_contexts(organization_id,user_id,event_id,payload_hash,session_id,collector_id,project_id,repository_id,occurred_at,branch,commit_sha,provenance) VALUES($1,$2,$3,'fixture',$3,$2,$4,$5,now(),'fixture/branch',$6,'native_session_git') ON CONFLICT DO NOTHING",&[&org,&user,&"a".repeat(64),&project,&repository,&"b".repeat(40)]).await.unwrap();
+            pg.execute("INSERT INTO team_github_facts(organization_id,repository_id,kind,external_id,occurred_at,metadata) VALUES($1,$2,'ready','fixture-ready',now(),jsonb_build_object('provenance','fixture')) ON CONFLICT DO NOTHING",&[&org,&repository]).await.unwrap();
             ch.get_client().query("CREATE TABLE IF NOT EXISTS member_daily(organization_id UUID,user_id UUID,date Date,total_seconds Float64,heartbeat_count UInt64) ENGINE=SummingMergeTree ORDER BY(organization_id,user_id,date)").execute().await.unwrap();
             ch.get_client().query("CREATE TABLE IF NOT EXISTS organization_daily(organization_id UUID,date Date,total_seconds Float64,heartbeat_count UInt64) ENGINE=SummingMergeTree ORDER BY(organization_id,date)").execute().await.unwrap();
             for table in ["member_daily", "organization_daily"] {
@@ -516,6 +520,26 @@ async fn restore_drill_fixture_stages() {
                 .await
                 .unwrap()
                 .get::<_, bool>(0));
+            assert_eq!(
+                pg.query_one(
+                    "SELECT count(*) FROM team_session_contexts WHERE organization_id=$1",
+                    &[&org]
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+                0
+            );
+            assert_eq!(
+                pg.query_one(
+                    "SELECT count(*) FROM team_github_facts WHERE organization_id=$1",
+                    &[&org]
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+                0
+            );
             let count=ch.get_client().query("SELECT count() FROM wakaclock.ai_usage_events FINAL WHERE usage_event_id='restore-stable-usage'").fetch_one::<u64>().await.unwrap();
             assert_eq!(count, 1);
         }

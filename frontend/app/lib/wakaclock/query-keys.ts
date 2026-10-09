@@ -4,6 +4,8 @@
  */
 export const wakaclockKeys = {
   all: ['wakaclock'] as const,
+  teamGithub: (userId: string, organizationId: string) =>
+    [...wakaclockKeys.all, 'team-github', userId, organizationId] as const,
   // No userId: describes the server deployment, not an account — see useCapabilities.
   capabilities: () => [...wakaclockKeys.all, 'capabilities'] as const,
   organizations: (userId: string) => ['organizations', userId] as const,

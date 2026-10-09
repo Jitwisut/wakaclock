@@ -71,7 +71,7 @@ impl TeamTrustRepository {
     }
     pub async fn registry_entry(&self, org: Uuid) -> Result<RegistryEntry> {
         let row=self.postgres.query_one("SELECT r.generation,m.retention_before FROM team_rollouts r LEFT JOIN team_privacy_markers m USING(organization_id) WHERE r.organization_id=$1", &[&org]).await?;
-        let access=self.postgres.query_one("SELECT jsonb_build_object('consents',COALESCE((SELECT jsonb_agg(jsonb_build_object('user',c.user_id,'version',c.consent_version,'aggregate',c.share_aggregate,'individual',c.share_individual,'aggregate_from',c.aggregate_from,'individual_from',c.individual_from) ORDER BY c.user_id) FROM organization_analytics_consents c WHERE c.organization_id=$1),'[]'::jsonb), 'members',COALESCE((SELECT jsonb_agg(to_jsonb(m) ORDER BY m.user_id) FROM organization_members m WHERE m.organization_id=$1),'[]'::jsonb), 'scopes',COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.repository_id) FROM team_repository_scopes s WHERE s.organization_id=$1),'[]'::jsonb))", &[&org]).await?.get::<_,serde_json::Value>(0);
+        let access=self.postgres.query_one("SELECT jsonb_build_object('consents',COALESCE((SELECT jsonb_agg(jsonb_build_object('user',c.user_id,'version',c.consent_version,'aggregate',c.share_aggregate,'individual',c.share_individual,'aggregate_from',c.aggregate_from,'individual_from',c.individual_from) ORDER BY c.user_id) FROM organization_analytics_consents c WHERE c.organization_id=$1),'[]'::jsonb), 'members',COALESCE((SELECT jsonb_agg(to_jsonb(m) ORDER BY m.user_id) FROM organization_members m WHERE m.organization_id=$1),'[]'::jsonb), 'scopes',COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.repository_id) FROM team_repository_scopes s WHERE s.organization_id=$1),'[]'::jsonb), 'project_bindings',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.user_id,b.project_id) FROM team_member_project_bindings b WHERE b.organization_id=$1),'[]'::jsonb))", &[&org]).await?.get::<_,serde_json::Value>(0);
         let weeks=self.postgres.query("SELECT DISTINCT week_start FROM team_weekly_publications WHERE organization_id=$1 ORDER BY week_start", &[&org]).await?.iter().map(|r|r.get(0)).collect();
         let rows=self.postgres.query("SELECT week_start,view_key,generation,fingerprint,contributors,invalidated_at FROM team_weekly_publications WHERE organization_id=$1 ORDER BY week_start,view_key",&[&org]).await?;
         let mut publication_marks: BTreeMap<NaiveDate, BTreeSet<String>> = BTreeMap::new();
@@ -332,6 +332,19 @@ impl TeamTrustRepository {
         );
         let mut client = self.postgres.transaction_client().await?;
         let tx = client.transaction().await?;
+        tx.execute(
+            "UPDATE team_repository_scopes SET enabled=FALSE WHERE enabled",
+            &[],
+        )
+        .await?;
+        tx.execute("UPDATE team_github_installations SET status='auth_required',generation=generation+1,lease_token=NULL,lease_until=NULL",&[]).await?;
+        tx.execute("UPDATE team_github_identities SET credentials=NULL,revoked_at=now(),refresh_lease=NULL,refresh_until=NULL",&[]).await?;
+        tx.execute(
+            "UPDATE team_github_oauth_attempts SET consumed_at=now() WHERE consumed_at IS NULL",
+            &[],
+        )
+        .await?;
+        tx.execute("UPDATE team_github_sync_jobs SET retry_at='infinity',lease_token=NULL,lease_until=NULL,error_code='restore_reauthorization_required' WHERE completed_at IS NULL",&[]).await?;
         tx.execute("UPDATE team_rollouts SET enabled=FALSE", &[])
             .await?;
         tx.execute("UPDATE organization_analytics_consents SET share_aggregate=FALSE,share_individual=FALSE WHERE share_aggregate OR share_individual",&[]).await?;
@@ -410,7 +423,7 @@ impl TeamTrustRepository {
     let history=tx.execute("DELETE FROM team_link_history WHERE id IN (SELECT h.id FROM team_link_history h JOIN team_session_links l ON l.id=h.link_id WHERE l.organization_id=$1 AND h.changed_at<$2 LIMIT 100)", &[&org,&cutoff]).await?;
     allocations.max(history)
    },
-   2 => tx.execute("DELETE FROM team_work_items WHERE (organization_id,repository_id,external_id) IN (SELECT organization_id,repository_id,external_id FROM team_work_items WHERE organization_id=$1 AND provider_updated_at<$2 LIMIT 100)", &[&org,&cutoff]).await?,
+   2 => tx.execute("DELETE FROM team_work_items WHERE (organization_id,repository_id,external_id) IN (SELECT organization_id,repository_id,external_id FROM team_work_items WHERE organization_id=$1 AND provider_updated_at<$2 AND state<>'open' LIMIT 100)", &[&org,&cutoff]).await?,
    3 => tx.execute("DELETE FROM audit_logs WHERE id IN (SELECT id FROM audit_logs WHERE organization_id=$1 AND created_at<$2 LIMIT 100)", &[&org,&cutoff]).await?,
    4 => tx.execute("DELETE FROM team_consent_history WHERE (organization_id,user_id,version) IN (SELECT h.organization_id,h.user_id,h.version FROM team_consent_history h JOIN organization_analytics_consents c USING(organization_id,user_id) WHERE h.organization_id=$1 AND h.effective_at<$2 AND h.version<c.consent_version LIMIT 100)", &[&org,&cutoff]).await?,
    5 => { tx.execute("UPDATE team_webhook_inbox SET metadata=jsonb_build_object('disposition','expired_before_processing'),error_code='retention_expired',dead_letter_at=COALESCE(dead_letter_at,$1) WHERE (provider,delivery_id) IN (SELECT provider,delivery_id FROM team_webhook_inbox WHERE provider='github' AND received_at<$2 AND processed_at IS NULL AND metadata->>'disposition' IS DISTINCT FROM 'expired_before_processing' LIMIT 100)", &[&now,&cutoff]).await? },
@@ -418,9 +431,17 @@ impl TeamTrustRepository {
     tx.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) SELECT provider,delivery_id,payload_hash,COALESCE(error_code,'processed_retention'),$2 FROM team_webhook_inbox WHERE provider='github' AND received_at<$1 AND (processed_at IS NOT NULL OR metadata->>'disposition'='expired_before_processing') ORDER BY received_at,delivery_id LIMIT 100 ON CONFLICT DO NOTHING", &[&cutoff,&now]).await?;
     tx.execute("DELETE FROM team_webhook_inbox WHERE (provider,delivery_id) IN (SELECT provider,delivery_id FROM team_webhook_inbox WHERE provider='github' AND received_at<$1 AND EXISTS (SELECT 1 FROM team_webhook_dispositions d WHERE d.provider=team_webhook_inbox.provider AND d.delivery_id=team_webhook_inbox.delivery_id) LIMIT 100)", &[&cutoff]).await?
    },
+   7 => tx.execute("DELETE FROM team_session_contexts WHERE (user_id,event_id) IN (SELECT e.user_id,e.event_id FROM team_session_contexts e LEFT JOIN organization_analytics_consents c USING(organization_id,user_id) LEFT JOIN organization_members m USING(organization_id,user_id) JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE e.organization_id=$1 AND (e.occurred_at<$2 OR NOT COALESCE(c.share_individual,FALSE) OR e.occurred_at<c.individual_from OR m.user_id IS NULL OR m.deactivated_at IS NOT NULL OR NOT s.enabled) LIMIT 100)", &[&org,&cutoff]).await?,
+   8 => tx.execute("DELETE FROM team_github_facts WHERE (organization_id,repository_id,kind,external_id) IN (SELECT f.organization_id,f.repository_id,f.kind,f.external_id FROM team_github_facts f JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE f.organization_id=$1 AND (f.occurred_at<$2 OR NOT s.enabled) LIMIT 100)", &[&org,&cutoff]).await?,
+   9 => {
+    tx.execute("UPDATE team_github_sync_jobs SET completed_at=now(),error_code='retention_expired',checkpoint='{}',lease_token=NULL,lease_until=NULL WHERE id IN (SELECT id FROM team_github_sync_jobs WHERE organization_id=$1 AND created_at<$2 AND completed_at IS NULL AND (lease_until IS NULL OR lease_until<now()) LIMIT 100)", &[&org,&cutoff]).await?;
+    tx.execute("DELETE FROM team_github_sync_jobs WHERE id IN (SELECT id FROM team_github_sync_jobs WHERE organization_id=$1 AND created_at<$2 AND completed_at IS NOT NULL LIMIT 100)", &[&org,&cutoff]).await?
+   },
+   10 => tx.execute("DELETE FROM team_github_oauth_attempts WHERE state_hash IN (SELECT state_hash FROM team_github_oauth_attempts WHERE organization_id=$1 AND expires_at<$2 LIMIT 100)", &[&org,&now]).await?,
+   11 => tx.execute("DELETE FROM team_github_delivery_recovery WHERE delivery_id IN (SELECT d.delivery_id FROM team_github_delivery_recovery d JOIN team_github_installations i USING(installation_id) WHERE i.organization_id=$1 AND d.delivered_at<$2 LIMIT 100)", &[&org,&cutoff]).await?,
    _ => 0,
   };
-        if phase >= 7 {
+        if phase >= 12 {
             tx.execute("INSERT INTO team_privacy_markers(organization_id,retention_before) VALUES($1,$2) ON CONFLICT(organization_id) DO UPDATE SET retention_before=GREATEST(team_privacy_markers.retention_before,EXCLUDED.retention_before),changed_at=now()", &[&org,&cutoff]).await?;
             tx.execute("UPDATE team_weekly_publications SET invalidated_at=COALESCE(invalidated_at,now()),contributors='{}',fingerprint='expired' WHERE organization_id=$1 AND week_start<$2::timestamptz::date", &[&org,&cutoff]).await?;
             tx.execute("UPDATE team_cleanup_jobs SET completed_at=$2,cutoff=NULL,phase=0,lease_token=NULL,lease_until=NULL,error_code=NULL WHERE organization_id=$1", &[&org,&now]).await?;

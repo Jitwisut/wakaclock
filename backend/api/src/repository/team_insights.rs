@@ -22,7 +22,7 @@ pub struct ProjectionScope {
 pub struct ReceiptLink {
     pub user_id: Uuid,
     pub link: WorkLink,
-    pub project_id: Uuid,
+    pub projects: Vec<Uuid>,
     pub individual_from: DateTime<Utc>,
     pub allocation_targets: i64,
 }
@@ -33,6 +33,26 @@ pub struct TeamInsightsRepository {
 }
 
 impl TeamInsightsRepository {
+    pub async fn personal_project(&self, user: Uuid, project: Uuid) -> Result<bool> {
+        Ok(self.clickhouse.get_client().query("SELECT count() FROM wakaclock.project_identities FINAL WHERE user_id = ? AND project_id = ?").bind(user).bind(project).fetch_one::<u64>().await? > 0)
+    }
+    pub async fn personal_projects(&self, user: Uuid) -> Result<Vec<serde_json::Value>> {
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct Project {
+            #[serde(with = "clickhouse::serde::uuid")]
+            project_id: Uuid,
+            display_name: String,
+        }
+        let projects=self.clickhouse.get_client().query("SELECT project_id,display_name FROM wakaclock.project_identities FINAL WHERE user_id=? ORDER BY display_name LIMIT 201").bind(user).fetch_all::<Project>().await?;
+        anyhow::ensure!(
+            projects.len() <= 200,
+            "project selection exceeds page limit"
+        );
+        Ok(projects
+            .into_iter()
+            .map(|p| serde_json::json!({"project_id":p.project_id,"name":p.display_name}))
+            .collect())
+    }
     pub fn new(postgres: Arc<PostgresClient>, clickhouse: Arc<ClickHouseClient>) -> Self {
         Self {
             postgres,
@@ -123,7 +143,8 @@ impl TeamInsightsRepository {
             .postgres
             .query(
                 "SELECT project_id FROM team_repository_scopes s WHERE organization_id = $1
-             AND enabled AND ($2::uuid IS NULL OR team_id = $2)",
+             AND enabled AND ($2::uuid IS NULL OR team_id = $2)
+             UNION SELECT b.project_id FROM team_member_project_bindings b JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE s.organization_id=$1 AND s.enabled AND ($2::uuid IS NULL OR s.team_id=$2)",
                 &[&org, &team],
             )
             .await?
@@ -185,7 +206,7 @@ impl TeamInsightsRepository {
             .query(
                 "SELECT w.* FROM team_work_items w JOIN team_repository_scopes s
              ON s.organization_id = w.organization_id AND s.repository_id = w.repository_id
-             WHERE w.organization_id = $1 AND s.enabled AND w.provider_updated_at >= now() - interval '12 months' AND ($2::uuid IS NULL OR s.team_id = $2)
+             WHERE w.organization_id = $1 AND s.enabled AND (w.state='open' OR w.provider_updated_at >= now() - interval '12 months') AND ($2::uuid IS NULL OR s.team_id = $2)
              ORDER BY w.provider_updated_at DESC LIMIT 200",
                 &[&org, &team],
             )
@@ -216,7 +237,7 @@ impl TeamInsightsRepository {
         team: Option<Uuid>,
     ) -> Result<Vec<ReceiptLink>> {
         Ok(self.postgres.query(
-            "SELECT l.*, s.project_id, c.individual_from,
+            "SELECT l.*, COALESCE((SELECT array_agg(b.project_id ORDER BY b.project_id) FROM team_member_project_bindings b WHERE b.organization_id=l.organization_id AND b.user_id=l.user_id AND b.repository_id=l.repository_id),ARRAY[s.project_id]) AS projects, c.individual_from,
               (SELECT count(*) FROM team_session_links other
                WHERE other.user_id = l.user_id AND other.session_id = l.session_id
                  AND other.status = 'confirmed') AS allocation_targets
@@ -230,11 +251,38 @@ impl TeamInsightsRepository {
                AND m.deactivated_at IS NULL AND m.seat_type = 'developer' AND m.role <> 'viewer'
                AND u.is_active AND u.deleted_at IS NULL AND c.share_individual AND c.individual_from IS NOT NULL
              ORDER BY l.id LIMIT 201", &[&org, &repo, &item, &team]).await?.into_iter().map(|r| {
-                 ReceiptLink { user_id: r.get("user_id"), project_id: r.get("project_id"),
+                 ReceiptLink { user_id: r.get("user_id"), projects: r.get("projects"),
                    individual_from: r.get("individual_from"), allocation_targets: r.get("allocation_targets"), link: link_row(r) }
              }).collect())
     }
 
+    pub async fn allocate(
+        &self,
+        org: Uuid,
+        user: Uuid,
+        link: Uuid,
+        identities: &[String],
+        generation: i64,
+    ) -> Result<BTreeSet<String>> {
+        let mut client = self.postgres.transaction_client().await?;
+        let tx = client.transaction().await?;
+        tx.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+            &[&format!("team-usage:{user}")],
+        )
+        .await?;
+        anyhow::ensure!(tx.query_opt("SELECT 1 FROM team_rollouts WHERE organization_id=$1 AND generation=$2 AND enabled FOR SHARE",&[&org,&generation]).await?.is_some(),"sharing changed during allocation");
+        let unique=tx.query_opt("SELECT 1 FROM team_session_links l JOIN organization_analytics_consents c USING(organization_id,user_id) JOIN organization_members m USING(organization_id,user_id) JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE l.id=$1 AND l.organization_id=$2 AND l.user_id=$3 AND l.status='confirmed' AND c.share_individual AND m.deactivated_at IS NULL AND m.seat_type='developer' AND m.role<>'viewer' AND s.enabled AND (SELECT count(*) FROM team_session_links o WHERE o.user_id=l.user_id AND o.session_id=l.session_id AND o.status='confirmed')=1 FOR SHARE OF l,c,m,s",&[&link,&org,&user]).await?;
+        if unique.is_none() {
+            return Ok(BTreeSet::new());
+        }
+        for identity in identities {
+            tx.execute("INSERT INTO team_usage_allocations(user_id,usage_identity,link_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",&[&user,identity,&link]).await?;
+        }
+        let allocated=tx.query("SELECT usage_identity FROM team_usage_allocations WHERE user_id=$1 AND link_id=$2 AND usage_identity=ANY($3)",&[&user,&link,&identities]).await?.into_iter().map(|r|r.get(0)).collect();
+        tx.commit().await?;
+        Ok(allocated)
+    }
     pub async fn links(&self, org: Uuid, user: Uuid) -> Result<Vec<WorkLink>> {
         Ok(self
             .postgres
@@ -262,7 +310,7 @@ impl TeamInsightsRepository {
             .query_opt(
                 "SELECT s.team_id FROM team_repository_scopes s JOIN team_work_items w
             ON w.organization_id=s.organization_id AND w.repository_id=s.repository_id
-            WHERE s.organization_id=$1 AND s.repository_id=$2 AND w.external_id=$3 AND s.enabled AND w.provider_updated_at >= now() - interval '12 months'",
+            WHERE s.organization_id=$1 AND s.repository_id=$2 AND w.external_id=$3 AND s.enabled AND (w.state='open' OR w.provider_updated_at >= now() - interval '12 months')",
                 &[&org, &repository, &work_item],
             )
             .await?
@@ -278,13 +326,23 @@ impl TeamInsightsRepository {
         Ok(self.postgres.query_opt(
             "SELECT s.project_id FROM team_repository_scopes s JOIN team_work_items w
              ON w.organization_id = s.organization_id AND w.repository_id = s.repository_id
-             WHERE s.organization_id = $1 AND s.repository_id = $2 AND w.external_id = $3 AND s.enabled AND w.provider_updated_at >= now() - interval '12 months'",
+             WHERE s.organization_id = $1 AND s.repository_id = $2 AND w.external_id = $3 AND s.enabled AND (w.state='open' OR w.provider_updated_at >= now() - interval '12 months')",
             &[&org, &repository, &work_item]).await?.map(|r| r.get("project_id")))
+    }
+
+    pub async fn member_work_projects(
+        &self,
+        org: Uuid,
+        user: Uuid,
+        repository: Uuid,
+    ) -> Result<Vec<Uuid>> {
+        Ok(self.postgres.query("SELECT b.project_id FROM team_member_project_bindings b JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE b.organization_id=$1 AND b.user_id=$2 AND b.repository_id=$3 AND s.enabled UNION SELECT s.project_id FROM team_repository_scopes s WHERE s.organization_id=$1 AND s.repository_id=$3 AND s.enabled AND NOT EXISTS(SELECT 1 FROM team_github_repositories r WHERE r.organization_id=s.organization_id AND r.repository_id=s.repository_id)",&[&org,&user,&repository]).await?.into_iter().map(|r|r.get(0)).collect())
     }
 
     pub async fn propose(&self, org: Uuid, user: Uuid, request: &LinkRequest) -> Result<WorkLink> {
         let mut client = self.postgres.transaction_client().await?;
         let tx = client.transaction().await?;
+        anyhow::ensure!(tx.query_opt("SELECT 1 FROM team_repository_scopes s JOIN team_work_items w USING(organization_id,repository_id) JOIN organization_members m ON m.organization_id=s.organization_id AND m.user_id=$2 JOIN organization_analytics_consents c ON c.organization_id=s.organization_id AND c.user_id=$2 WHERE s.organization_id=$1 AND s.repository_id=$3 AND w.external_id=$4 AND s.enabled AND (w.state='open' OR w.provider_updated_at>=now()-interval '12 months') AND m.deactivated_at IS NULL AND m.seat_type='developer' AND m.role<>'viewer' AND c.share_aggregate AND (s.team_id IS NULL OR m.role IN ('owner','admin') OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2)) FOR SHARE OF s,m,c",&[&org,&user,&request.repository_id,&request.work_item_id]).await?.is_some(),"link scope or sharing unavailable");
         let row = tx
             .query_one(
                 "INSERT INTO team_session_links (id, organization_id, repository_id, work_item_id,
@@ -315,6 +373,17 @@ impl TeamInsightsRepository {
     ) -> Result<Option<WorkLink>> {
         let mut client = self.postgres.transaction_client().await?;
         let tx = client.transaction().await?;
+        tx.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+            &[&format!("team-usage:{user}")],
+        )
+        .await?;
+        if status == "confirmed" {
+            let allowed=tx.query_opt("SELECT 1 FROM team_session_links l JOIN team_repository_scopes s USING(organization_id,repository_id) JOIN organization_members m USING(organization_id,user_id) JOIN organization_analytics_consents c USING(organization_id,user_id) WHERE l.organization_id=$1 AND l.user_id=$2 AND l.id=$3 AND s.enabled AND m.deactivated_at IS NULL AND m.seat_type='developer' AND m.role<>'viewer' AND c.share_aggregate AND (s.team_id IS NULL OR m.role IN ('owner','admin') OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2)) FOR SHARE OF s,m,c",&[&org,&user,&id]).await?;
+            if allowed.is_none() {
+                return Ok(None);
+            }
+        }
         let row = tx
             .query_opt(
                 "UPDATE team_session_links SET status = $4, updated_at = now()
@@ -330,8 +399,8 @@ impl TeamInsightsRepository {
         if let Some(ref changed) = row {
             // Every link change invalidates allocations. Multiple confirmed links stay unallocated.
             tx.execute(
-                "DELETE FROM team_usage_allocations WHERE link_id = $1",
-                &[&id],
+                "DELETE FROM team_usage_allocations a USING team_session_links l WHERE a.link_id=l.id AND l.user_id=$1 AND l.session_id=$2",
+                &[&user, &changed.get::<_,String>("session_id")],
             )
             .await?;
             tx.execute(

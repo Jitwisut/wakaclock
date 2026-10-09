@@ -4,6 +4,7 @@ Creates disposable tmpfs containers; refuses names/ports/database outside this f
 Never reads application config, credential files, source, prompts, or real user data.
 """
 import datetime as dt
+import argparse
 import hashlib
 import json
 import os
@@ -25,11 +26,20 @@ def stage(name, port, ch_port, ledger):
     env = {**os.environ, 'POSTGRES_TEST_URL': f'postgresql://postgres:team_test_only@127.0.0.1:{port}/atoaxis_team_test',
            'CLICKHOUSE_TEST_URL': f'http://127.0.0.1:{ch_port}', 'CLICKHOUSE_TEST_DATABASE': 'wakaclock',
            'TEAM_DRILL_STAGE': name, 'ATOAXIS_TEAM_PRIVACY_LEDGER_PATH': str(ledger)}
-    result = run(['cargo', 'test', '-p', 'wakaclock-server', '--lib', 'restore_drill_fixture_stages', '--', '--ignored', '--test-threads=1'], cwd=ROOT/'backend/api', env=env)
+    command=['cargo', 'test', '-p', 'wakaclock-server', '--lib', 'restore_drill_fixture_stages', '--', '--ignored', '--test-threads=1']
+    completed=subprocess.run(command,cwd=ROOT/'backend/api',env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    (OUT/(name+'.log')).write_bytes(completed.stdout+completed.stderr)
+    if completed.returncode: raise RuntimeError('fixture failed: '+name+'; inspect isolated fixture log')
+    result=completed.stdout
     assert b'1 passed' in result, 'fixture did not pass'
 
 
 def main():
+    global NAMES, OUT
+    parser=argparse.ArgumentParser();parser.add_argument('--github',action='store_true');args=parser.parse_args()
+    if args.github:
+        NAMES=[name.replace('phase2','github-drill').replace('team-pg-restore','team-github-pg-restore').replace('team-ch-restore','team-github-ch-restore') for name in NAMES]
+        OUT=ROOT/'output/team-github-restore'
     OUT.mkdir(parents=True, exist_ok=True)
     ledger = OUT / 'independent-privacy-registry.json'
     try:
@@ -79,7 +89,7 @@ def main():
                   'fixture':'synthetic_metadata_only' ,'postgres_logical_restore':'passed','clickhouse_native_restore':'passed',
                   'old_consent_read_blocked':'passed','independent_registry_regression_rejected':'passed',
                   'rollout_and_sharing_disabled_after_reconcile':'passed','personal_usage_preserved_distinct':'passed',
-                  'cloud_restore_certified':False, 'team_rollup_cleanup':'passed'}
+                  'cloud_restore_certified':False, 'team_rollup_cleanup':'passed','github_context_and_facts_restore_cleanup':'passed'}
         (OUT/'latest.json').write_text(json.dumps(result,indent=2))
         print(json.dumps(result))
     finally:

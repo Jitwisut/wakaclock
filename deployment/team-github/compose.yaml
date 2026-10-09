@@ -1,0 +1,30 @@
+name: atoaxis-team-github-staging
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: atoaxis_team_github_staging
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${TEAM_STAGE_POSTGRES_PASSWORD:?staging password required}
+    ports: ["127.0.0.1:55442:5432"]
+    volumes: ["postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d atoaxis_team_github_staging"]
+      interval: 5s
+      retries: 20
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.10.2.80-alpine
+    environment:
+      CLICKHOUSE_DB: wakaclock
+      CLICKHOUSE_USER: stage
+      CLICKHOUSE_PASSWORD: ${TEAM_STAGE_CLICKHOUSE_PASSWORD:?staging password required}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports: ["127.0.0.1:58133:8123"]
+    volumes: ["clickhouse:/var/lib/clickhouse"]
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user stage --password $$CLICKHOUSE_PASSWORD --query 'SELECT 1'"]
+      interval: 5s
+      retries: 20
+volumes:
+  postgres:
+  clickhouse:

@@ -468,7 +468,14 @@ mod tests {
         historical.evidence_kind = "historical".to_string();
         historical.promotable = false;
         assert_eq!(
-            catalog(historical).resolve(&tuple(), Utc::now()).status,
+            catalog(historical)
+                .resolve(
+                    &tuple(),
+                    DateTime::parse_from_rfc3339("2026-09-06T00:00:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc)
+                )
+                .status,
             CertificationDecisionStatus::Historical
         );
     }

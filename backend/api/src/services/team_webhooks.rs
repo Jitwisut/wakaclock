@@ -15,6 +15,39 @@ pub struct GithubMetadata {
     pub repository_id: Option<i64>,
     pub item: Option<WorkItemMetadata>,
     pub review_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<GithubDetails>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct GithubDetails {
+    pub revoked_user_id: Option<i64>,
+    pub removed_repository_ids: Vec<i64>,
+    pub head_sha: Option<String>,
+    pub head_repository_id: Option<i64>,
+    pub draft: Option<bool>,
+    pub review: Option<ReviewMetadata>,
+    pub check: Option<CheckMetadata>,
+}
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewMetadata {
+    pub id: i64,
+    pub author_id: i64,
+    pub author_type: String,
+    pub state: String,
+    pub submitted_at: DateTime<Utc>,
+}
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CheckMetadata {
+    pub kind: String,
+    pub id: String,
+    pub head_sha: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -106,37 +139,72 @@ pub fn github_metadata(event: &str, body: &[u8]) -> Result<Option<GithubMetadata
     }
     if !matches!(
         event,
-        "pull_request" | "issues" | "pull_request_review" | "installation"
+        "pull_request"
+            | "issues"
+            | "pull_request_review"
+            | "installation"
+            | "installation_repositories"
+            | "github_app_authorization"
+            | "check_run"
+            | "check_suite"
+            | "status"
+            | "repository"
     ) {
         return Ok(None);
     }
-    let action = raw["action"].as_str().context("missing action")?;
+    let action = raw["action"]
+        .as_str()
+        .or_else(|| (event == "status").then_some("updated"))
+        .context("missing action")?;
     // Unknown actions are not acknowledged as accepted work.
-    anyhow::ensure!(
-        matches!(
-            action,
-            "opened"
-                | "closed"
-                | "reopened"
-                | "edited"
-                | "synchronize"
-                | "ready_for_review"
-                | "converted_to_draft"
-                | "submitted"
-                | "dismissed"
-                | "deleted"
-                | "suspend"
-                | "unsuspend"
-                | "created"
-        ),
-        "unsupported action"
-    );
+    if !matches!(
+        action,
+        "opened"
+            | "closed"
+            | "reopened"
+            | "edited"
+            | "synchronize"
+            | "ready_for_review"
+            | "converted_to_draft"
+            | "submitted"
+            | "dismissed"
+            | "deleted"
+            | "suspend"
+            | "unsuspend"
+            | "created"
+            | "added"
+            | "removed"
+            | "revoked"
+            | "completed"
+            | "requested"
+            | "rerequested"
+            | "queued"
+            | "in_progress"
+            | "updated"
+            | "renamed"
+            | "transferred"
+            | "archived"
+            | "unarchived"
+            | "review_requested"
+            | "review_request_removed"
+            | "labeled"
+            | "unlabeled"
+            | "assigned"
+            | "unassigned"
+            | "locked"
+            | "unlocked"
+            | "milestoned"
+            | "demilestoned"
+    ) {
+        return Ok(None);
+    }
     let installation_id = raw["installation"]["id"]
         .as_i64()
         .filter(|v| *v > 0)
+        .or_else(|| (event == "github_app_authorization").then_some(0))
         .context("missing installation identity")?;
     let repository_id = raw["repository"]["id"].as_i64().filter(|v| *v > 0);
-    let item = if event == "installation" {
+    let item = if !matches!(event, "pull_request" | "issues" | "pull_request_review") {
         None
     } else {
         let is_pr = event != "issues";
@@ -189,7 +257,77 @@ pub fn github_metadata(event: &str, body: &[u8]) -> Result<Option<GithubMetadata
             closed_at: optional_timestamp(value, "closed_at")?,
         })
     };
-    let review_at = if event == "pull_request_review" && action == "submitted" {
+    let mut details = GithubDetails::default();
+    if event == "github_app_authorization" {
+        details.revoked_user_id = raw["sender"]["id"].as_i64();
+    }
+    if event == "installation_repositories" {
+        details.removed_repository_ids = raw["repositories_removed"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|r| r["id"].as_i64()).collect())
+            .unwrap_or_default();
+    }
+    if matches!(event, "pull_request" | "pull_request_review") {
+        details.head_sha = raw["pull_request"]["head"]["sha"]
+            .as_str()
+            .map(str::to_string);
+        details.head_repository_id = raw["pull_request"]["head"]["repo"]["id"].as_i64();
+        details.draft = raw["pull_request"]["draft"].as_bool();
+    }
+    if event == "pull_request_review" {
+        let r = &raw["review"];
+        details.review = Some(ReviewMetadata {
+            id: r["id"].as_i64().context("review id missing")?,
+            author_id: r["user"]["id"].as_i64().context("review author missing")?,
+            author_type: r["user"]["type"].as_str().unwrap_or("unknown").into(),
+            state: r["state"]
+                .as_str()
+                .context("review state missing")?
+                .to_uppercase(),
+            submitted_at: timestamp(r, "submitted_at")?,
+        });
+    }
+    if matches!(event, "check_run" | "check_suite" | "status") {
+        let c = if event == "status" { &raw } else { &raw[event] };
+        let sha = c[if event == "status" { "sha" } else { "head_sha" }]
+            .as_str()
+            .context("check SHA missing")?;
+        anyhow::ensure!(
+            matches!(sha.len(), 40 | 64) && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid check SHA"
+        );
+        let status = c[if event == "status" { "state" } else { "status" }]
+            .as_str()
+            .context("check state missing")?;
+        let at = optional_timestamp(c, "completed_at")?
+            .or(optional_timestamp(c, "started_at")?)
+            .or(optional_timestamp(c, "updated_at")?)
+            .or(optional_timestamp(c, "created_at")?);
+        details.check = Some(CheckMetadata {
+            kind: event.into(),
+            id: if event == "status" {
+                format!(
+                    "{}:{}",
+                    sha,
+                    c["context"].as_str().context("status context missing")?
+                )
+            } else {
+                c["id"].as_i64().context("check id missing")?.to_string()
+            },
+            head_sha: sha.into(),
+            status: status.into(),
+            conclusion: c["conclusion"].as_str().map(str::to_string),
+            at,
+        });
+    }
+    let review_at = if event == "pull_request_review"
+        && action == "submitted"
+        && details.review.as_ref().is_some_and(|r| {
+            r.author_type == "User"
+                && item
+                    .as_ref()
+                    .is_some_and(|i| i.author_id != Some(r.author_id))
+        }) {
         Some(timestamp(&raw["review"], "submitted_at")?)
     } else {
         None
@@ -201,6 +339,7 @@ pub fn github_metadata(event: &str, body: &[u8]) -> Result<Option<GithubMetadata
         repository_id,
         item,
         review_at,
+        details: Some(details),
     }))
 }
 
