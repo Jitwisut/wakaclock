@@ -16,6 +16,7 @@ import {
   FOUNDER,
   localizedPath,
   ORGANIZATION,
+  PRODUCT_STATUS,
   PUBLIC_EVIDENCE_URL,
   SITE_MODIFIED,
   SITE_NAME,
@@ -143,8 +144,12 @@ function PageIndex({ copy, locale }: { copy: ReturnType<typeof getCopy>; locale:
     // A plain block, not <aside>: crawlers drop asides as sidebar boilerplate, and this is
     // the page's table of contents.
     <div className="mkt-page-index">
-      <nav aria-label={locale === 'th' ? 'หัวข้อในหน้านี้' : 'On this page'}>
-        <p className="mkt-index-label">{locale === 'th' ? 'หัวข้อในหน้านี้' : 'On this page'}</p>
+      <nav
+        aria-label={locale === 'th' ? 'สารบัญ' : 'Table of contents'}
+        className="toc"
+        id="table-of-contents"
+      >
+        <p className="mkt-index-label">{locale === 'th' ? 'สารบัญ' : 'Table of contents'}</p>
         <ol>
           {copy.sections.map((section, index) => (
             <li key={section.id}>
@@ -178,12 +183,14 @@ function Byline({ locale, path }: { locale: SiteLocale; path: MarketingPageKey }
   const th = locale === 'th';
   return (
     <p className="mkt-byline">
-      {th ? 'เขียนโดย ' : 'By '}
+      <strong>{th ? 'ผู้เขียน:' : 'Author:'}</strong>{' '}
       <a href={localizedPath(locale, '/about')} rel="author">
         {FOUNDER.name}
       </a>
-      , {th ? FOUNDER.thJobTitle : FOUNDER.jobTitle}, {SITE_NAME} · {th ? 'ตรวจทาน ' : 'Reviewed '}
-      <time dateTime={reviewed}>{reviewed}</time>
+      , {th ? FOUNDER.thJobTitle : FOUNDER.jobTitle} {th ? 'ของ' : 'of'} {SITE_NAME}.{' '}
+      <strong>{th ? 'ตรวจทาน:' : 'Reviewed:'}</strong> <time dateTime={reviewed}>{reviewed}</time>.{' '}
+      <strong>{th ? 'สถานะ:' : 'Status:'}</strong>{' '}
+      {th ? PRODUCT_STATUS.th.label : PRODUCT_STATUS.en.label}.
     </p>
   );
 }

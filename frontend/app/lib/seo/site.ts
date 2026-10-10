@@ -322,6 +322,7 @@ export function createMarketingMetadata({
     // already name AtoAxis must be absolute or Next renders "AtoAxis … | AtoAxis".
     title: title.includes(SITE_NAME) ? { absolute: title } : title,
     description,
+    authors: [{ name: `${FOUNDER.name}, ${FOUNDER.jobTitle}`, url: absoluteUrl('/about') }],
     alternates: {
       canonical: canonicalPath,
       languages: {

@@ -78,6 +78,17 @@ export function founderSchema(): JsonLdValue {
   };
 }
 
+function founderReference(): JsonLdValue {
+  return {
+    '@type': 'Person',
+    '@id': FOUNDER_ID,
+    name: FOUNDER.name,
+    jobTitle: FOUNDER.jobTitle,
+    url: absoluteUrl('/about'),
+    sameAs: [...FOUNDER.sameAs],
+  };
+}
+
 export function websiteSchema(): JsonLdValue {
   return {
     '@type': 'WebSite',
@@ -223,8 +234,10 @@ export function webPageSchema({
     description,
     inLanguage: locale === 'th' ? 'th-TH' : 'en',
     ...(contentModified(path, locale) ? { dateModified: contentModified(path, locale) } : {}),
-    author: { '@id': FOUNDER_ID },
-    reviewedBy: { '@id': FOUNDER_ID },
+    // Inline rather than an @id reference: readers that do not resolve the site graph
+    // (most answer engines) still see who wrote the page and in what role.
+    author: founderReference(),
+    reviewedBy: founderReference(),
     isPartOf: { '@id': absoluteUrl('/#website') },
     publisher: { '@id': ORGANIZATION_ID },
     // The page title and the opening answer are the passages written to be read aloud.

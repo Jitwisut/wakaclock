@@ -3575,7 +3575,7 @@ generic(
 generic(
   '/contact',
   {
-    title: 'Contact AtoAxis about Early Access and setup',
+    title: 'Contact AtoAxis about Early Access',
     description:
       'Ask AtoAxis about Early Access, editor compatibility, WakaTime migration, AI attribution or privacy. A real person on the team reads every message.',
     lead: 'Ask about Early Access, hosted analytics, integrations or privacy.',
