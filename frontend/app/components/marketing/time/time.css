@@ -1437,8 +1437,6 @@
 }
 
 .tx-root .tx-track-title {
-  display: grid;
-  gap: 4px;
   margin-top: 22px;
   font-family: var(--tx-mono);
   font-size: 12px;
@@ -1448,12 +1446,46 @@
   color: var(--tx-lime);
 }
 
-.tx-root .tx-track-title span {
-  font-family: var(--tx-font);
+.tx-root .tx-track-intro {
+  margin-top: 4px;
   font-size: 14px;
-  letter-spacing: 0;
-  text-transform: none;
   color: var(--tx-muted);
+}
+
+/* The facts under a product view: small, quiet, and real text. */
+.tx-root .tx-facts {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+  padding-left: 1.1em;
+  list-style: disc;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--tx-dim);
+}
+
+.tx-root .tx-kinds-all {
+  margin-top: 14px;
+}
+
+/* Scramble and count-up: the document holds the real text once; while it animates, the
+   glyphs are painted over it from data-text and the real letters are made transparent.
+   The second `content` gives the overlay empty alt text where supported. */
+.tx-root .tx-live-text {
+  position: relative;
+}
+
+.tx-root .tx-live-text[data-text] {
+  -webkit-text-fill-color: transparent;
+}
+
+.tx-root .tx-live-text[data-text]::before {
+  content: attr(data-text);
+  content: attr(data-text) / '';
+  position: absolute;
+  inset: 0;
+  white-space: pre;
+  -webkit-text-fill-color: currentcolor;
 }
 
 /* ---------- the light page over the scene (homepage only) ---------- */

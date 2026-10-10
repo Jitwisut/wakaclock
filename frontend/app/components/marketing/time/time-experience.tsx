@@ -50,6 +50,18 @@ function Kinetic({ locale, text }: { locale: SiteLocale; text: string }) {
 }
 
 /** Editors scrolling past in a band. The duplicate track is hidden from assistive tech. */
+/** The concrete facts behind a product view, kept as plain text answer engines can quote. */
+function Facts({ items }: { items: readonly string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <ul className="tx-facts">
+      {items.map((item) => (
+        <li key={item}>{item}</li>
+      ))}
+    </ul>
+  );
+}
+
 function EditorMarquee({ editors, label }: { editors: readonly string[]; label: string }) {
   return (
     <div className="tx-marquee">
@@ -193,6 +205,7 @@ export function TimeExperience({ locale }: { locale: SiteLocale }) {
                   </span>
                   <h3 className="tx-h3">{view.title}</h3>
                   <p className="tx-body">{view.body}</p>
+                  <Facts items={view.notes} />
                 </li>
               ))}
             </ul>
@@ -264,10 +277,12 @@ export function TimeExperience({ locale }: { locale: SiteLocale }) {
               <p className="tx-lead" data-reveal>
                 {copy.product.body}
               </p>
-              <h3 className="tx-track-title" data-reveal>
+              <h2 className="tx-track-title" data-reveal>
                 {copy.product.featuresHeading}
-                <span>{copy.product.featuresIntro}</span>
-              </h3>
+              </h2>
+              <p className="tx-track-intro" data-reveal>
+                {copy.product.featuresIntro}
+              </p>
             </div>
             <ol className="tx-track">
               {[
@@ -275,11 +290,13 @@ export function TimeExperience({ locale }: { locale: SiteLocale }) {
                   tag: view.tab,
                   title: view.title,
                   body: view.body,
+                  notes: view.notes,
                 })),
                 ...copy.product.features.map((feature) => ({
                   tag: '',
                   title: feature.title,
                   body: feature.description,
+                  notes: [] as readonly string[],
                 })),
               ].map((card, index) => (
                 <li className="tx-track-card" key={card.title}>
@@ -293,6 +310,7 @@ export function TimeExperience({ locale }: { locale: SiteLocale }) {
                   ) : null}
                   <h3 className="tx-h3">{card.title}</h3>
                   <p className="tx-body">{card.body}</p>
+                  <Facts items={card.notes} />
                 </li>
               ))}
             </ol>

@@ -25,8 +25,8 @@ export function scrambleFrame(text: string, progress: number, random: () => numb
 
 /**
  * A monospace label that decodes from random glyphs into its text the first time it comes
- * into view. The real text is server-rendered and always available to assistive tech; the
- * moving glyphs are decoration and skipped under reduced motion.
+ * into view. The real text is server-rendered once and always available to assistive tech
+ * and crawlers; the moving glyphs are decoration and skipped under reduced motion.
  */
 export function Scramble({ text }: { text: string }) {
   const ref = useRef<ComponentRef<'span'>>(null);
@@ -54,10 +54,11 @@ export function Scramble({ text }: { text: string }) {
     };
   }, [text]);
 
+  // The real text is the only text in the document; the moving glyphs are painted over it
+  // from `data-text` by CSS, so crawlers and screen readers never read a second copy.
   return (
-    <span ref={ref}>
-      <span aria-hidden="true">{shown}</span>
-      <span className="tx-sr-only">{text}</span>
+    <span className="tx-live-text" data-text={shown === text ? undefined : shown} ref={ref}>
+      {text}
     </span>
   );
 }

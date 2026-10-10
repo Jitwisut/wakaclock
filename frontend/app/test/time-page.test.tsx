@@ -477,16 +477,22 @@ describe('Scramble', () => {
   it('keeps the real text readable and decodes once it is seen', () => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
     const { container, unmount } = render(<Scramble text="KICKER 02" />);
-    expect(screen.getByText('KICKER 02', { selector: '.tx-sr-only' })).toBeInTheDocument();
+    const node = container.firstElementChild as HTMLElement;
+    // The real text is in the document exactly once, and nothing is painted over it yet.
+    expect(container.textContent).toBe('KICKER 02');
+    expect(node.dataset.text).toBeUndefined();
     const observer = observers.at(-1) as ObserverRecord;
-    const node = container.firstElementChild as Element;
     intersect(observer, node, false);
     expect(frames.size).toBe(0);
     intersect(observer, node, true);
     flushFrames(300);
     expect(frames.size).toBe(1);
+    // Mid-decode the glyphs live only in data-text; the document text never changes.
+    expect(node.dataset.text).toHaveLength('KICKER 02'.length);
+    expect(container.textContent).toBe('KICKER 02');
     flushFrames(2000);
-    expect(container.querySelector('[aria-hidden="true"]')?.textContent).toBe('KICKER 02');
+    expect(node.dataset.text).toBeUndefined();
+    expect(container.textContent).toBe('KICKER 02');
     unmount();
   });
 
@@ -498,8 +504,10 @@ describe('Scramble', () => {
 });
 
 describe('CountUp', () => {
+  /** What the visitor sees: the painted count while it runs, otherwise the document text. */
   function digits(container: HTMLElement) {
-    return container.querySelector('[aria-hidden="true"]')?.textContent;
+    const node = container.firstElementChild as HTMLElement;
+    return node.dataset.text ?? node.textContent;
   }
 
   it('shows the final value when motion is reduced or it is already on screen', () => {
@@ -519,6 +527,8 @@ describe('CountUp', () => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
     const { container, unmount } = render(<CountUp value={51} />);
     expect(digits(container)).toBe('0');
+    // The document keeps the final value throughout; only the painted overlay counts.
+    expect(container.textContent).toBe('51');
     const observer = observers.at(-1) as ObserverRecord;
     intersect(observer, container.firstElementChild as Element, false);
     intersect(observer, container.firstElementChild as Element, true);

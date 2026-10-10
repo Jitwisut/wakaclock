@@ -138,21 +138,40 @@ const EN = {
         tab: 'Overview',
         title: 'Your time at a glance',
         body: 'Today, all-time active coding, active days and your first recorded day, with a daily goal tracked against the same timeline.',
+        notes: [
+          'A daily or weekly coding-time goal, tracked against the same timeline as every other total.',
+          'Today’s total is built from heartbeat-derived duration blocks; idle gaps close a block instead of padding it.',
+          'A WakaTime-compatible total is available beside AtoAxis’s own count, so an imported history can be compared.',
+        ],
       },
       timeline: {
         tab: 'Activity Timeline',
         title: 'Your rhythm, hour by hour',
         body: 'When the work happened, drilled from a link into a timeline, a heatmap and the file list, filtered by project, language, editor or branch.',
+        notes: [
+          'Filters live in the URL: project, language, editor and branch, shareable as a link.',
+          'Activity by hour shows your rhythm; drill from here into the heatmap and the file list.',
+          'Each lane is a day; human, AI and Unattributed blocks keep their own pattern.',
+        ],
       },
       projects: {
         tab: 'Projects',
         title: 'Every project, measured',
         body: 'Time broken down by project, language, editor and branch. Several checkouts can be grouped with project rules and merges.',
+        notes: [
+          'Time by project, and the same range broken down by language, editor and branch.',
+          'Regex project rules and manual merges group several checkouts into one project, server-side.',
+        ],
       },
       'human-ai': {
         tab: 'Human vs AI',
         title: 'Who changed the code',
         body: 'AI-attributed lines compared with human keystrokes and characters, with Unattributed kept separate and coverage shown.',
+        notes: [
+          'Line changes split three ways: AI, human and Unattributed.',
+          'Coverage is reported as a percentage; missing evidence is never shown as zero.',
+          'AI line counts are aggregated per agent and per day from each agent’s hook.',
+        ],
       },
     },
     featuresHeading: `What ${SITE_NAME} tracks`,
@@ -326,21 +345,40 @@ const TH: Widen<ExperienceCopy> = {
         tab: 'ภาพรวม',
         title: 'เวลาของคุณในภาพเดียว',
         body: 'วันนี้ เวลาเขียนโค้ดทั้งหมด จำนวนวันที่มีกิจกรรม และวันแรกที่บันทึก พร้อมเป้าหมายรายวันบนไทม์ไลน์เดียวกัน',
+        notes: [
+          'เป้าหมายเวลาเขียนโค้ดรายวันหรือรายสัปดาห์ วัดบนไทม์ไลน์เดียวกับยอดอื่นทั้งหมด',
+          'ยอดวันนี้มาจาก duration block ที่สร้างจาก heartbeat ช่วงว่างจะปิด block แทนการนับต่อ',
+          'มียอดแบบเดียวกับ WakaTime แสดงคู่กับยอดของ AtoAxis เพื่อเทียบกับประวัติที่ import มา',
+        ],
       },
       timeline: {
         tab: 'Activity Timeline',
         title: 'จังหวะการทำงานรายชั่วโมง',
         body: 'งานเกิดขึ้นเมื่อไร เจาะลงจากลิงก์เดียวไปยัง timeline, heatmap และรายชื่อไฟล์ กรองตามโปรเจกต์ ภาษา editor หรือ branch',
+        notes: [
+          'ตัวกรองอยู่ใน URL ทั้งโปรเจกต์ ภาษา editor และ branch แชร์เป็นลิงก์ได้',
+          'กิจกรรมรายชั่วโมงบอกจังหวะการทำงาน และเจาะต่อไปยัง heatmap และรายชื่อไฟล์ได้',
+          'แต่ละแถวคือหนึ่งวัน block ของคน AI และ Unattributed แยกลวดลายกันชัดเจน',
+        ],
       },
       projects: {
         tab: 'โปรเจกต์',
         title: 'วัดผลได้ทุกโปรเจกต์',
         body: 'แยกเวลาตามโปรเจกต์ ภาษา editor และ branch และรวมหลาย checkout เข้าด้วยกันด้วย project rules และ merge',
+        notes: [
+          'เวลาแยกตามโปรเจกต์ และแยกช่วงเดียวกันตามภาษา editor และ branch',
+          'Project rules แบบ regex และการ merge รวมหลาย checkout เป็นโปรเจกต์เดียวฝั่ง server',
+        ],
       },
       'human-ai': {
         tab: 'คน vs AI',
         title: 'ใครเปลี่ยนโค้ด',
         body: 'เทียบบรรทัดที่มาจาก AI กับ keystrokes และ characters ของคน โดยแยก Unattributed ไว้ต่างหากพร้อมแสดง coverage',
+        notes: [
+          'การเปลี่ยนแปลงบรรทัดแบ่งเป็นสามกลุ่ม: AI, human และ Unattributed',
+          'รายงาน coverage เป็นเปอร์เซ็นต์ ข้อมูลที่ไม่มีหลักฐานจะไม่ถูกแสดงเป็นศูนย์',
+          'จำนวนบรรทัดของ AI รวมตาม agent และวัน จาก hook ของแต่ละ agent',
+        ],
       },
     },
     featuresHeading: `${SITE_NAME} ติดตามอะไรบ้าง`,

@@ -6,7 +6,7 @@ const DURATION_MS = 1300;
 
 /**
  * Counts up to `value` the first time it scrolls into view. The server render and reduced
- * motion show the final value; digits render through React state so WebKit repaints them.
+ * motion show the final value; the count renders through React state so WebKit repaints it.
  */
 export function CountUp({ value }: { value: number }) {
   const ref = useRef<ComponentRef<'span'>>(null);
@@ -36,10 +36,15 @@ export function CountUp({ value }: { value: number }) {
     };
   }, [value]);
 
+  // The final value is the document text; the running count is painted over it from
+  // `data-text` by CSS, so the page never carries the number twice.
   return (
-    <span ref={ref}>
-      <span aria-hidden="true">{shown}</span>
-      <span className="tx-sr-only">{value}</span>
+    <span
+      className="tx-live-text"
+      data-text={shown === value ? undefined : String(shown)}
+      ref={ref}
+    >
+      {value}
     </span>
   );
 }

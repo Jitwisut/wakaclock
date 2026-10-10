@@ -48,6 +48,9 @@ export function AttributionFocus({
           </li>
         ))}
       </ul>
+      <p className="tx-body tx-kinds-all">
+        <strong>{kinds.all.title}.</strong> {kinds.all.body}
+      </p>
     </div>
   );
 }
