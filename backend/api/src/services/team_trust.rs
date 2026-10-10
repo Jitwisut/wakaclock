@@ -41,6 +41,20 @@ pub fn safe_views(
         .iter()
         .all(|(old, hash)| old.is_disjoint(people) || (old == people && hash == fingerprint))
 }
+/// Conservative equation control across weeks: no partial reuse of facts.
+pub fn safe_fact_view(
+    old_facts: Option<&BTreeSet<String>>,
+    old_people: &BTreeSet<Uuid>,
+    old_hash: &str,
+    facts: &BTreeSet<String>,
+    people: &BTreeSet<Uuid>,
+    hash: &str,
+) -> bool {
+    match old_facts {
+        Some(old) => old.is_disjoint(facts) || (old == facts && old_hash == hash),
+        None => !old_people.is_empty() && old_people.is_disjoint(people),
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Health {
     pub status: String,
@@ -115,6 +129,58 @@ pub fn device_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cumulative_cross_week_equations_require_independent_fact_sets() {
+        let people = (1..=5).map(Uuid::from_u128).collect();
+        let old = ["a".into(), "b".into()].into_iter().collect();
+        let partial = ["a".into(), "b".into(), "one_person_extra".into()]
+            .into_iter()
+            .collect();
+        let disjoint = ["new_week".into()].into_iter().collect();
+        assert!(!safe_fact_view(
+            Some(&old),
+            &people,
+            "old",
+            &partial,
+            &people,
+            "new"
+        ));
+        assert!(safe_fact_view(
+            Some(&old),
+            &people,
+            "old",
+            &disjoint,
+            &people,
+            "new"
+        ));
+        assert!(safe_fact_view(
+            Some(&old),
+            &people,
+            "old",
+            &old,
+            &people,
+            "old"
+        ));
+        assert!(!safe_fact_view(
+            Some(&old),
+            &people,
+            "old",
+            &old,
+            &people,
+            "corrected"
+        ));
+        assert!(!safe_fact_view(
+            None, &people, "legacy", &old, &people, "new"
+        ));
+        assert!(!safe_fact_view(
+            None,
+            &BTreeSet::new(),
+            "restore_barrier",
+            &old,
+            &people,
+            "new"
+        ));
+    }
     #[test]
     fn weekly_policy_rejects_open_arbitrary_and_timezone_ranges() {
         let now = DateTime::parse_from_rfc3339("2026-10-08T12:00:00Z")

@@ -86,6 +86,7 @@ impl TeamGithubService {
             .await?;
         status["configured"] = json!(self.config.is_some() && self.vault.is_some() && self.enabled);
         status["session_context_capability"] = json!(1);
+        status["context_health"] = self.repo()?.context_health(org, user).await?;
         self.authorize(user, org, false).await?;
         Ok(status)
     }
@@ -402,20 +403,12 @@ impl TeamGithubService {
         self.guard(org).await?;
         validate_context(&event, Utc::now())?;
         ensure!(self.enabled, "session context disabled");
-        let facts = self
-            .insights
-            .as_deref()
-            .context("canonical session unavailable")?
-            .session_facts(user, &event.session_id)
-            .await?;
-        ensure!(
-            facts.iter().any(|f| f.collector_id.as_deref()
-                == Some(&event.collector_id.to_string())
-                && f.project_id == Some(event.project_id)),
-            "session/collector/project evidence missing"
-        );
+        // Accept sanitized, consented metadata before canonical usage arrives. Verification
+        // is a separate durable job; neither arrival order nor a transient CH failure loses it.
         let hash = hash_bytes(&serde_json::to_vec(&event)?);
-        self.repo()?.context(org, user, &event, &hash).await
+        self.repo()?
+            .store_context(org, user, &event, &hash, "pending")
+            .await
     }
     pub async fn work_page(&self, user: Uuid, org: Uuid, query: GithubWorkQuery) -> Result<Value> {
         self.authorization
@@ -432,6 +425,18 @@ impl TeamGithubService {
         );
         Ok(result)
     }
+
+    pub async fn own_work_page(&self, user: Uuid, org: Uuid, q: GithubWorkQuery) -> Result<Value> {
+        self.authorize(user, org, false).await?;
+        let generation = self.guard(org).await?;
+        let result = self.repo()?.work_page_scoped(org, &q, Some(user)).await?;
+        self.authorize(user, org, false).await?;
+        ensure!(
+            self.guard(org).await? == generation,
+            "access changed during work selection"
+        );
+        Ok(result)
+    }
     async fn guard(&self, org: Uuid) -> Result<i64> {
         let insights = self
             .insights
@@ -445,6 +450,124 @@ impl TeamGithubService {
             .guard(org)
             .await?;
         insights.generation(org).await
+    }
+
+    pub async fn relations(
+        &self,
+        user: Uuid,
+        org: Uuid,
+        repository: Uuid,
+        item: i64,
+        q: RelationshipQuery,
+    ) -> Result<Value> {
+        self.authorize(user, org, false).await?;
+        let generation = self.guard(org).await?;
+        let result = self
+            .repo()?
+            .relation_history(org, user, repository, item, q.after.as_deref())
+            .await?;
+        self.authorize(user, org, false).await?;
+        ensure!(
+            self.guard(org).await? == generation,
+            "relationship scope changed during request"
+        );
+        Ok(result)
+    }
+    pub async fn retry_contexts(&self, user: Uuid, org: Uuid) -> Result<Value> {
+        self.authorize(user, org, false).await?;
+        self.guard(org).await?;
+        Ok(json!({"pending":self.repo()?.retry_contexts(org,user).await?}))
+    }
+    pub async fn sessions(&self, user: Uuid, org: Uuid, q: SessionPageQuery) -> Result<Value> {
+        self.authorize(user, org, false).await?;
+        let generation = self.guard(org).await?;
+        let limit = q.limit.unwrap_or(50);
+        ensure!(
+            (1..=100).contains(&limit),
+            GithubInputError("session limit must be 1 to 100")
+        );
+        if let Some(after) = &q.after {
+            ensure!(
+                after.len() == 64 && after.bytes().all(|b| b.is_ascii_hexdigit()),
+                GithubInputError("invalid session cursor")
+            );
+        }
+        let insights = self
+            .insights
+            .as_deref()
+            .context("canonical sessions unavailable")?;
+        let consent = insights.consent(org, user).await?;
+        let from = consent
+            .aggregate_from
+            .context("aggregate consent required")?
+            .max(crate::services::team_trust::cutoff(Utc::now()));
+        let facts = insights
+            .facts(
+                &[user],
+                from.timestamp() as u32,
+                Utc::now().timestamp() as u32 + 1,
+            )
+            .await?;
+        let projects = self.repo()?.own_projects(org, user).await?;
+        let mut groups =
+            std::collections::BTreeMap::<String, (DateTime<Utc>, DateTime<Utc>)>::new();
+        for f in facts.iter().filter(|f| {
+            f.project_attribution_method.as_deref() == Some("explicit_project_hint")
+                && f.project_id.is_some_and(|p| projects.contains(&p))
+        }) {
+            let session = hash(&format!(
+                "{}:{}:{}:{}:{}",
+                f.user_id,
+                f.ai_agent.len(),
+                f.ai_agent,
+                f.collector_id.as_deref().unwrap_or(""),
+                f.ai_session_id
+            ));
+            let at =
+                DateTime::from_timestamp(f.event_time as i64, 0).context("invalid session time")?;
+            groups
+                .entry(session)
+                .and_modify(|(a, b)| {
+                    *a = (*a).min(at);
+                    *b = (*b).max(at);
+                })
+                .or_insert((at, at));
+        }
+        let remaining = groups
+            .into_iter()
+            .filter(|(s, _)| q.after.as_ref().is_none_or(|a| s > a))
+            .collect::<Vec<_>>();
+        let more = remaining.len() > limit;
+        let mut items = vec![];
+        let mut next = None;
+        for (session, (start, end)) in remaining.into_iter().take(limit) {
+            let links=self.repo()?.session_links(org,user,&session).await?.into_iter().map(|r|json!({"id":r.get::<_,Uuid>(0),"status":r.get::<_,String>(1),"revision":r.get::<_,i64>(2),"repository_id":r.get::<_,Uuid>(3),"work_item_id":r.get::<_,i64>(4)})).collect::<Vec<_>>();
+            let candidates = self.repo()?.candidates(org, user, &session).await?;
+            let context = self
+                .repo()?
+                .session_verifications(org, user, &session, from)
+                .await?;
+            let reason = if context.is_empty() {
+                "repository_context_missing"
+            } else if !context.iter().any(|r| r.get::<_, String>(0) == "verified") {
+                "context_verification_pending"
+            } else if candidates.as_array().is_none_or(|c| c.is_empty()) {
+                "no_unique_branch_commit_candidate"
+            } else {
+                "repository_branch_commit"
+            };
+            next = Some(session.clone());
+            items.push(json!({"session_id":session,"started_at":start,"last_event_at":end,"candidates":candidates,"links":links,"reason":reason}));
+        }
+        let context_health = self.repo()?.context_health(org, user).await?;
+        self.authorize(user, org, false).await?;
+        ensure!(
+            self.guard(org).await? == generation,
+            "sharing changed during session read"
+        );
+        Ok(
+            json!({"items":items,"next":if more{next}else{None},"generation":generation,"context_health":context_health}),
+        )
     }
     pub async fn suggestions(&self, user: Uuid, org: Uuid) -> Result<Value> {
         self.authorize(user, org, false).await?;

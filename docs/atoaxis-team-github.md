@@ -1,6 +1,6 @@
 # AtoAxis Team GitHub — implementation and staging runbook
 
-Status: **implementation in progress; not certified**. Work stays on `codex/atoaxis-team`, based on `8bdd0df`. Do not push or merge `main` without specific authorization. The local test evidence was collected before the source commit; live certification must record the committed build SHA and does not follow automatically from publishing source.
+Status: **implementation in progress; not certified**. Work stays on `codex/atoaxis-team`, continued from `579967b`. Do not push or merge `main` without specific authorization. The local test evidence was collected before the source commit; live certification must record the committed build SHA and does not follow automatically from publishing source.
 
 ## Implemented
 
@@ -61,8 +61,8 @@ See ignored `output/team-github-staging/latest.json` and `output/team-github-res
 
 No claim of “GitHub integration passed local staging certification” is permitted yet.
 
-1. **Live App/OAuth/install gate:** App creation is blocked by GitHub Confirm access; the Mac is currently locked. The owner must unlock it and complete passkey/2FA themselves. Creating/installing security-sensitive access in the browser also requires confirmation at the actual grant step. No password/code is requested in chat.
-2. **Code still to finish:** native session-context adapters/hook wiring for all four tools; complete relationship history/reference projection and receipt link history/edit/withdraw flow; merged-PR cost aggregate definition/coverage and fully shared paginated report/export projection; additional provider fault/refresh race/redelivery and privacy/retention tests. Current closing relationships are observed snapshots, not recovered historical relationships. The sidecar alone does not certify automatic provider capture.
+1. **Live App/OAuth/install gate:** The owner reports they are not ready for passkey/2FA or Windows testing; continue local implementation. Actual App creation/authorization is pending. The owner completes authentication themselves; no password/code is requested in chat.
+2. **Remaining implementation evidence:** versioned native payload/canonical session proof for Cursor/Copilot must be verified before enabling automatic attribution. Copilot daily-only metrics cannot produce per-session token/cost allocation. Live permission/fault/redelivery coverage and the remaining acceptance matrix need actual provider/GitHub observations. Current closing relationships remain observed snapshots; reference events retain their actual GitHub timestamp. The local sidecar/hooks alone do not certify provider capture.
 3. **GitHub live ledger:** complete 90-day/open backfill, rename/transfer/fork/reused-branch/draft/reopen/force-push/dismissal/CI rerun/uninstall/reconnect tests, actual missing-delivery recovery, 100-event recovery latency and staging fault tests remain unverified. Unit fixtures do not substitute for GitHub behavior.
 4. **Second user:** owner reports no second GitHub tester is available. Actual other-user review and cross-user permission tests remain pending; do not fabricate another account or count the owner's review as independent review.
 5. **Client matrix:** 80 actual user sessions (10/tool/OS), independent inline ledgers, real versions/architecture and the same clean build SHA. Windows runs on the owner's PC and is pending returned metadata. Unsupported provider fields stay unavailable; any reduction of agreed functionality requires owner review.
@@ -76,3 +76,54 @@ Use `tests/team-github/certification-manifest.json`, `scripts/team-github-certif
 - If URL changes: stop connection attempts, update inspected App URLs/configuration, rebuild UI for the new public origin, restart the receiver/worker and run preflight/live verification.
 - After restore: apply the latest independent deletion/revocation ledger before opening Team reads; missing/stale ledger fails closed. Explicitly reauthorize GitHub and reconcile; restored credentials are not reused.
 - Rollback disables the organization feature and stops creation of new jobs/producers. Keep accepted inbox/context, queue IDs, consent/deletion ledger and additive migrations. Never reset by deleting a backlog or changing duration/timeout to match WakaTime.
+
+
+## Closure implementation (10 October 2026, uncommitted candidate)
+
+Migration `033_team_github_closure.sql` is additive. Deploy the receiver and migrate before the webhook/context worker, client or UI. `main` is unchanged.
+
+- Context is accepted into a durable pending inbox before canonical usage is available. The verifier has row leases, bounded query time, bounded retries and a recoverable dead letter; it checks collector/project evidence and rechecks consent, membership, mapping and repository access before publishing suggestions. A duplicate received after verification preserves the existing disposition.
+- Shared live native metadata capture uses the existing collector-scoped usage identity. `ATOAXIS_TEAM_CONTEXT_CONFIG` explicitly opts the CLI hook paths into capture; account, origin and collector must match. Context observation and its change cursor commit together in SQLite; unchanged context and stale observations do not generate additional records. Historical transcript scans never read current Git state.
+- `team-session-context --config PRIVATE_CONFIG --provider codex|claude-code|cursor` is a native stdin adapter for staging hook wiring on both OSes. It discards prompt/source/edit/response fields locally. Cursor `afterTabFileEdit` retains inline provenance. Missing identity (including Copilot daily data) returns unresolved, never a fabricated session. The adapter still requires real versioned payload and canonical-session evidence before certification. `--status` reports local queue metadata without requesting a credential and always leaves capture completeness unconfirmed.
+- Session/work selection, link history and receipt detail are paginated. Candidates include closed/merged PRs only during the observed PR lifecycle. An owner can explicitly select a PR when candidates are unresolved; revision-checked replacement withdraws the old link, confirms the new one and invalidates allocations in one transaction. Unmounted/account-switched UI cannot complete a stale multi-request confirmation.
+- Weekly merged-PR cost uses canonical revised usage, unique confirmed allocation, consent/retention boundaries and event time at or before merge. Post-merge usage is excluded. Unknown prices remain unknown. Weekly and cumulative cost equations share the publication registry and contributor partition checks. Average cost and complete-PR denominator are unavailable while capture completeness is unconfirmed; completeness of received facts is insufficient evidence.
+- Receipt totals cover the full authorized projection, with paginated details; the member endpoint includes only that member's shared usage. UI/API/CSV use the same projection and final generation checks. CSV includes metric status, coverage, freshness and calculation/pricing version.
+- PR–Issue history distinguishes native reference-event source time from observed closing-relation snapshots. Pagination restarts when the relation source changes; no historical start time is invented. A removed related repository closes history reads immediately.
+- Context cleanup records identity/hash dispositions in the independent privacy registry before deletion. Restore blocks context verification and requires reauthorization; relationship history joins the Team-only retention inventory. Personal canonical heartbeat/usage is preserved.
+
+### New retention inventory
+
+| Data | Read cutoff / cleanup | Restore / replay behavior |
+|---|---|---|
+| Session context and verification lease/retry | 12 calendar months; individual consent, developer membership, repository mapping/scope | Context ID/hash disposition survives cleanup; restored contexts blocked pending reauthorization |
+| Link revision/history and allocations | Existing Team link/usage allocation cleanup and consent projection; history 12 months | Restore applies current revocation/deletion registry before reads; canonical personal cost facts unchanged |
+| Relation history | Source timestamp when known, otherwise observation timestamp, within 12 months; both repository scopes enforced | Removed scopes block reads; restore scope reauthorization and Team cleanup apply |
+| Local context observation cursor/queue | Local metadata scoped by origin/account/organization; durable acceptance before ACK | Retry preserves ID; no historical branch reconstruction or heartbeat creation |
+
+Two delivery levels remain separate: local code/fixtures can pass before real GitHub staging certification. External prerequisites and the full client matrix remain pending. A clean committed candidate and identical manifest SHA across macOS/Windows are required before actual certification.
+
+### Cross-week publication protection
+
+Migration `034_team_publication_membership.sql` stores hashes of fact identities with each published view, and includes that membership in the independent privacy-ledger mark. Cross-week views may reuse only an identical equation or disjoint fact sets. Partial overlaps are withheld even if both reports contain five contributors; old publication rows without membership proof are treated conservatively. Invalidated/expired publications remain barriers because downloaded numbers cannot be recalled. This intentionally withholds some cumulative reports until a more precise joint partition proof exists.
+
+### Native capture staging wiring
+
+Keep the context configuration outside version control, with the existing account/origin, organization, member-owned project, selected repository, canonical collector and local queue path. Set `ATOAXIS_TEAM_CONTEXT_CONFIG` for the existing CLI hook process to opt in. The existing Codex/Claude live CLI paths observe context before producer acknowledgement; the sidecar drains the same queue independently every 15 seconds.
+
+For a native hook whose actual payload/version has been inspected, invoke the built sidecar with stdin inherited from the provider:
+
+```sh
+team-session-context --config /private/path/context.json --provider cursor
+team-session-context --config /private/path/context.json --status
+team-session-context --config /private/path/context.json
+```
+
+On Windows use the same executable/arguments with a quoted private configuration path and set the environment variable in the provider process. Do not persist stdin to an intermediate file or append it to diagnostics. Do not replace the provider's existing hook configuration without inspecting its versioned schema and preserving existing hooks. Provider certification remains pending until the native hook identity matches a canonical session from that provider. Cursor's metadata adapter alone does not supply a missing canonical usage producer; Copilot daily metrics remain daily and cannot verify a session. Missing proof returns unresolved or recoverable verification pending, and cannot become PR cost.
+
+The fixture restore script now runs source and restore instances sequentially, with at most two drill containers running at once. It closes all its synthetic tmpfs instances afterwards; persistent application volumes are untouched.
+
+### Latest local validation — 10 October 2026
+
+The uncommitted candidate on `codex/atoaxis-team` passes 417 server tests (35 environment tests remain ignored), 370 core tests, the independent attribution fixture, all 12 offline-delivery tests including the 1,191-record backlog, and the duration golden with zero error on unchanged input. Three explicit isolated PostgreSQL tests and the sequential PostgreSQL/ClickHouse restore drill pass. Frontend: 27 relevant tests, typecheck and selected source lint pass. Certification intake: four tests pass. Evidence: `output/team-github-closure/latest.json` and `output/team-github-restore/latest.json`.
+
+Strict Clippy is still blocked by pre-existing argument-count, cloned-reference, placeholder-name and test-module-placement lints outside this change. An additional all-target check with those four explicit baseline allowances passes; it does not certify the strict gate. GitHub live certification, native provider/OS evidence and a clean candidate remain pending. This is a local implementation/test result, not full staging certification.

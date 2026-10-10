@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
+
 import { Button } from '@/components/ui/button';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { listOrganizationTeams } from '@/lib/wakaclock/endpoints-v2';
@@ -11,6 +12,8 @@ import * as github from '@/lib/wakaclock/github-endpoints';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { getTeamWorkReceipt } from '@/lib/wakaclock/team-endpoints';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+
+import { TeamGithubSessions } from './team-github-sessions';
 
 function costText(metric: { reason: null | string; value: null | number }) {
   return metric.value === null
@@ -63,13 +66,6 @@ export function TeamGithubPanel({ organizationId }: { organizationId: string }) 
   const projects = useQuery({
     queryKey: [...key, 'projects', organizationId],
     queryFn: () => github.getGithubProjects(organizationId),
-    enabled: Boolean(userId && visible?.configured),
-    retry: false,
-    gcTime: 0,
-  });
-  const suggestions = useQuery({
-    queryKey: [...key, 'suggestions', organizationId],
-    queryFn: () => github.getGithubSuggestions(organizationId),
     enabled: Boolean(userId && visible?.configured),
     retry: false,
     gcTime: 0,
@@ -372,59 +368,7 @@ export function TeamGithubPanel({ organizationId }: { organizationId: string }) 
                       </section>
                     )
                   ))}
-                <h4>Sessions not linked to work</h4>
-                {suggestions.isError ? (
-                  <p role="alert">Suggestions unavailable.</p>
-                ) : (
-                  suggestions.data?.map((s) => (
-                    <div key={`${s.session_id}:${s.repository_id}`}>
-                      <p>
-                        {s.evidence} · {s.status}
-                      </p>
-                      {s.candidates.map((c) => (
-                        <div key={c.external_id}>
-                          <Button
-                            disabled={operation.isPending}
-                            key={c.external_id}
-                            onClick={() =>
-                              run(async () => {
-                                const captured = scope;
-                                const link = await github.proposeGithubLink(
-                                  organizationId,
-                                  s.session_id,
-                                  s.repository_id,
-                                  c.external_id
-                                );
-                                if (scopeRef.current !== captured) return;
-                                await github.decideGithubLink(organizationId, link.id, 'confirmed');
-                              })
-                            }
-                          >
-                            Confirm PR #{c.number}
-                          </Button>
-                          <Button
-                            disabled={operation.isPending}
-                            onClick={() =>
-                              run(async () => {
-                                const captured = scope;
-                                const link = await github.proposeGithubLink(
-                                  organizationId,
-                                  s.session_id,
-                                  s.repository_id,
-                                  c.external_id
-                                );
-                                if (scopeRef.current !== captured) return;
-                                await github.decideGithubLink(organizationId, link.id, 'rejected');
-                              })
-                            }
-                          >
-                            Reject PR #{c.number}
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  ))
-                )}
+                <TeamGithubSessions key={scope} organizationId={organizationId} />
               </>
             )}
           </div>

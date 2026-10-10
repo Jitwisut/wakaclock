@@ -43,28 +43,32 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     ledger = OUT / 'independent-privacy-registry.json'
     try:
-        for i, name in enumerate(NAMES):
-            # Reuse only our known tmpfs source containers. Verify no volume/bind data exists.
-            try:
-                metadata = json.loads(run(['docker', 'inspect', name]))[0]
-                assert not any(m.get('Type') in ('bind', 'volume') for m in metadata.get('Mounts', [])), 'refuse persistent mounts'
-            except subprocess.CalledProcessError:
-                if i % 2 == 0:
-                    port = 55432 if i == 0 else 55433
-                    run(['docker','run','-d','--rm','--name',name,'--tmpfs','/var/lib/postgresql/data','-p',f'127.0.0.1:{port}:5432','-e','POSTGRES_PASSWORD=team_test_only','-e','POSTGRES_DB=atoaxis_team_test','postgres:16-alpine'])
-                else:
-                    port = 58123 if i == 1 else 58124
-                    run(['docker','run','-d','--rm','--name',name,'--tmpfs','/var/lib/clickhouse','--tmpfs','/var/log/clickhouse-server','-p',f'127.0.0.1:{port}:8123','-e','CLICKHOUSE_DB=wakaclock','-e','CLICKHOUSE_SKIP_USER_SETUP=1','clickhouse/clickhouse-server:24.10.2.80-alpine'])
-        for name in NAMES:
-            for _ in range(30):
+        def ready_instances(indices):
+            for i in indices:
+                name = NAMES[i]
+                # Reuse only our known tmpfs source containers. Verify no volume/bind data exists.
                 try:
-                    if 'postgres' in name or 'pg-restore' in name:
-                        run(['docker','exec',name,'pg_isready','-U','postgres'])
+                    metadata = json.loads(run(['docker', 'inspect', name]))[0]
+                    assert not any(m.get('Type') in ('bind', 'volume') for m in metadata.get('Mounts', [])), 'refuse persistent mounts'
+                except subprocess.CalledProcessError:
+                    if i % 2 == 0:
+                        port = 55432 if i == 0 else 55433
+                        run(['docker','run','-d','--rm','--name',name,'--tmpfs','/var/lib/postgresql/data','-p',f'127.0.0.1:{port}:5432','-e','POSTGRES_PASSWORD=team_test_only','-e','POSTGRES_DB=atoaxis_team_test','postgres:16-alpine'])
                     else:
-                        run(['docker','exec',name,'clickhouse-client','--query','SELECT 1'])
-                    break
-                except subprocess.CalledProcessError: time.sleep(1)
-            else: raise RuntimeError('fixture readiness timeout')
+                        port = 58123 if i == 1 else 58124
+                        run(['docker','run','-d','--rm','--name',name,'--tmpfs','/var/lib/clickhouse','--tmpfs','/var/log/clickhouse-server','-p',f'127.0.0.1:{port}:8123','-e','CLICKHOUSE_DB=wakaclock','-e','CLICKHOUSE_SKIP_USER_SETUP=1','clickhouse/clickhouse-server:24.10.2.80-alpine'])
+            for i in indices:
+                name = NAMES[i]
+                for _ in range(30):
+                    try:
+                        if 'postgres' in name or 'pg-restore' in name:
+                            run(['docker','exec',name,'pg_isready','-U','postgres'])
+                        else:
+                            run(['docker','exec',name,'clickhouse-client','--query','SELECT 1'])
+                        break
+                    except subprocess.CalledProcessError: time.sleep(1)
+                else: raise RuntimeError('fixture readiness timeout')
+        ready_instances(range(2))
         stage('seed',55432,58123,ledger)
         # Real logical database backups before consent withdrawal; payload is synthetic metadata only.
         pg_dump = run(['docker','exec',NAMES[0],'pg_dump','-U','postgres','-d','atoaxis_team_test','-Fc'])
@@ -76,6 +80,10 @@ def main():
             data = run(['docker','exec',NAMES[1],'clickhouse-client','--query',f'SELECT * FROM wakaclock.{table} FORMAT Native'])
             ch_backups.append((table,ddl,data))
         stage('revoke',55432,58123,ledger)
+        # Backups remain in memory; close source fixtures before opening restore fixtures.
+        for name in NAMES[:2]:
+            run(['docker','stop',name])
+        ready_instances(range(2,4))
         run(['docker','exec','-i',NAMES[2],'pg_restore','-U','postgres','-d','atoaxis_team_test','--no-owner'], input=pg_dump)
         run(['docker','exec',NAMES[3],'clickhouse-client','--query','CREATE DATABASE IF NOT EXISTS wakaclock'])
         for table, ddl, data in ch_backups:
@@ -93,8 +101,8 @@ def main():
         (OUT/'latest.json').write_text(json.dumps(result,indent=2))
         print(json.dumps(result))
     finally:
-        # Remove only the two restore instances; source fixtures can be used for remaining tests.
-        for name in NAMES[2:]:
+        # Fixture lifetime ends with this drill; no persistent user volumes are removed.
+        for name in NAMES:
             subprocess.run(['docker','stop',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
 

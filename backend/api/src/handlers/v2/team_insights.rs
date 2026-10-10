@@ -8,6 +8,7 @@ use crate::services::team_insights::TeamError;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TeamQuery {
+    after: Option<Uuid>,
     start: Option<String>,
     end: Option<String>,
     timezone: Option<String>,
@@ -48,7 +49,20 @@ pub async fn receipt(
     let actor = require_scope(&state, &headers, "read_org_dashboards").await?;
     let data = state
         .team_insights_service
-        .receipt(actor, org, query.team_id, repository, item)
+        .receipt_page(
+            actor,
+            org,
+            query.team_id,
+            repository,
+            item,
+            query.after,
+            false,
+        )
+        .await
+        .map_err(error)?;
+    state
+        .team_insights_service
+        .validate_response(actor, org, query.team_id, data.generation)
         .await
         .map_err(error)?;
     let mut cache = HeaderMap::new();
@@ -160,11 +174,55 @@ pub async fn export(
 ) -> Result<axum::response::Response, ApiError> {
     // No independent export SQL and no stored signed download to bypass withdrawal.
     let report = projection(&state, &headers, org, query).await?;
-    let metric = &report.estimated_ai_cost_microusd;
-    let csv = format!("start,end,timezone,currency,estimated_ai_cost_microusd,status,coverage,calculation_version\n{},{},{},USD,{},{},{},{}\n",
-        report.start, report.end, report.timezone,
-        metric.value.map(|v| v.to_string()).unwrap_or_default(), metric.status,
-        metric.coverage.map(|v| v.to_string()).unwrap_or_default(), metric.calculation_version);
+    let mut csv=String::from("start,end,timezone,currency,metric,value,status,coverage,reason,provenance,updated_at,calculation_version,pricing_versions\n");
+    let prices = report.merged_pr_cost.pricing_versions.join(";");
+    for (name, metric) in [
+        (
+            "estimated_ai_cost_microusd",
+            &report.estimated_ai_cost_microusd,
+        ),
+        ("merged_pr_cost_microusd", &report.merged_pr_cost_microusd),
+        (
+            "merged_pr_average_microusd",
+            &report.merged_pr_cost.average_microusd,
+        ),
+        ("merged_pr_with_cost", &report.merged_pr_cost.with_cost),
+        (
+            "merged_pr_without_cost",
+            &report.merged_pr_cost.without_cost,
+        ),
+        (
+            "merged_pr_complete_received_cost",
+            &report.merged_pr_cost.complete_prs,
+        ),
+    ] {
+        let fields = [
+            report.start.clone(),
+            report.end.clone(),
+            report.timezone.clone(),
+            "USD".into(),
+            name.into(),
+            metric.value.map(|v| v.to_string()).unwrap_or_default(),
+            metric.status.into(),
+            metric.coverage.map(|v| v.to_string()).unwrap_or_default(),
+            metric.reason.unwrap_or("").into(),
+            metric.provenance.into(),
+            metric
+                .updated_at
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_default(),
+            metric.calculation_version.into(),
+            prices.clone(),
+        ];
+        csv.push_str(
+            &fields
+                .iter()
+                .map(|v| format!("\"{}\"", v.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        csv.push('\n');
+    }
     final_projection_gate(&state, &headers, &report).await?;
     Ok((
         [
@@ -247,7 +305,7 @@ pub async fn decide(
     Ok(Json(envelope(
         state
             .team_insights_service
-            .decide(actor, org, link, &request.status)
+            .decide_revision(actor, org, link, &request.status, request.expected_revision)
             .await
             .map_err(error)?,
         "UTC",
@@ -269,4 +327,108 @@ pub async fn measurement_health(
     let mut cache = HeaderMap::new();
     cache.insert("cache-control", "private, no-store".parse().unwrap());
     Ok((cache, Json(envelope(data, "UTC", None))))
+}
+
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    after: Option<Uuid>,
+}
+pub async fn history(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, link)): Path<(Uuid, Uuid)>,
+    Query(q): Query<HistoryQuery>,
+) -> Result<(HeaderMap, Json<V2Envelope<Value>>), ApiError> {
+    let actor = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let mut cache = HeaderMap::new();
+    cache.insert("cache-control", "private, no-store".parse().unwrap());
+    Ok((
+        cache,
+        Json(envelope(
+            state
+                .team_insights_service
+                .history(actor, org, link, q.after)
+                .await
+                .map_err(error)?,
+            "UTC",
+            None,
+        )),
+    ))
+}
+pub async fn replace(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, link)): Path<(Uuid, Uuid)>,
+    Json(input): Json<crate::model::team_insights::LinkReplacement>,
+) -> Result<Json<V2Envelope<WorkLink>>, ApiError> {
+    let actor = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    Ok(Json(envelope(
+        state
+            .team_insights_service
+            .replace(actor, org, link, input)
+            .await
+            .map_err(error)?,
+        "UTC",
+        None,
+    )))
+}
+
+pub async fn links_page(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(org): Path<Uuid>,
+    Query(q): Query<HistoryQuery>,
+) -> Result<Json<V2Envelope<Value>>, ApiError> {
+    let user = auth::require_session_user(&s, &h)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    Ok(Json(envelope(
+        s.team_insights_service
+            .links_page(user, org, q.after)
+            .await
+            .map_err(error)?,
+        "UTC",
+        None,
+    )))
+}
+
+pub async fn own_receipt(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, repository, item)): Path<(Uuid, Uuid, i64)>,
+    Query(q): Query<TeamQuery>,
+) -> Result<
+    (
+        HeaderMap,
+        Json<V2Envelope<crate::model::team_insights::WorkReceipt>>,
+    ),
+    ApiError,
+> {
+    let actor = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let data = state
+        .team_insights_service
+        .receipt_page(actor, org, None, repository, item, q.after, true)
+        .await
+        .map_err(error)?;
+    state
+        .team_insights_service
+        .validate_own_response(actor, org, data.generation)
+        .await
+        .map_err(error)?;
+    let mut cache = HeaderMap::new();
+    cache.insert("cache-control", "private, no-store".parse().unwrap());
+    Ok((
+        cache,
+        Json(envelope(
+            data,
+            "UTC",
+            Some(json!({"sharing":"individual_opt_in_only","scope":"own_usage_only"})),
+        )),
+    ))
 }

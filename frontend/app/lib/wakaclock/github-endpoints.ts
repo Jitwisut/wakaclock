@@ -1,5 +1,6 @@
 import { unwrapV2, wakaclockV2Client } from './client-v2';
 
+import type { WorkReceipt } from './team-types';
 import type { V2Envelope } from './types';
 
 export interface GithubConnection {
@@ -100,7 +101,7 @@ export const proposeGithubLink = async (
   work: number
 ) =>
   unwrapV2(
-    await wakaclockV2Client.post<V2Envelope<{ id: string }>>(
+    await wakaclockV2Client.post<V2Envelope<{ id: string; revision: number }>>(
       `/organizations/${org}/me/session-links`,
       { session_id: session, repository_id: repository, work_item_id: work }
     )
@@ -108,8 +109,13 @@ export const proposeGithubLink = async (
 export const decideGithubLink = async (
   org: string,
   link: string,
-  status: 'confirmed' | 'rejected' | 'withdrawn'
-) => wakaclockV2Client.put(`/organizations/${org}/me/session-links/${link}`, { status });
+  status: 'confirmed' | 'rejected' | 'withdrawn',
+  expectedRevision?: number
+) =>
+  wakaclockV2Client.put(`/organizations/${org}/me/session-links/${link}`, {
+    status,
+    expected_revision: expectedRevision,
+  });
 
 export interface GithubWorkPage {
   items: Array<{
@@ -132,4 +138,108 @@ export const getGithubWorkPage = async (org: string, after?: string, teamId?: st
     await wakaclockV2Client.get<V2Envelope<GithubWorkPage>>(`${root(org)}/work-items`, {
       params: { after, team_id: teamId, limit: 50 },
     })
+  );
+
+export interface GithubSessionLink {
+  id: string;
+  repository_id: string;
+  revision: number;
+  status: string;
+  work_item_id: number;
+}
+export interface GithubSessionPage {
+  context_health: { capture_status: string; dead_letter: number; pending: number; };
+  items: Array<{
+    candidates: Array<{
+      external_id: number;
+      number: number;
+      repository_id: string;
+      state: string;
+    }>;
+    last_event_at: string;
+    links: GithubSessionLink[];
+    reason: string;
+    session_id: string;
+    started_at: string;
+  }>;
+  next: null | string;
+}
+export const getGithubSessions = async (org: string, after?: string) =>
+  unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<GithubSessionPage>>(
+      `/organizations/${org}/me/github/sessions`,
+      { params: { after } }
+    )
+  );
+export const getGithubOwnWorkPage = async (org: string, after?: string) =>
+  unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<GithubWorkPage>>(
+      `/organizations/${org}/me/github/work-items`,
+      { params: { after } }
+    )
+  );
+export const replaceGithubLink = async (
+  org: string,
+  link: GithubSessionLink,
+  repository: string,
+  work: number
+) =>
+  unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<GithubSessionLink>>(
+      `/organizations/${org}/me/session-links/${link.id}/replace`,
+      { repository_id: repository, work_item_id: work, expected_revision: link.revision }
+    )
+  );
+export interface GithubLinkHistory {
+  items: Array<{ changed_at: string; id: string; revision: null | number; status: string; }>;
+  next: null | string;
+}
+export const getGithubLinkHistory = async (org: string, link: string, after?: string) =>
+  unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<GithubLinkHistory>>(
+      `/organizations/${org}/me/session-links/${link}/history`,
+      { params: { after } }
+    )
+  );
+
+export const retryGithubContexts = async (org: string) =>
+  wakaclockV2Client.post(`/organizations/${org}/me/github/session-context/retry`);
+
+export interface GithubRelationshipPage {
+  coverage: string;
+  items: {
+    action: 'present' | 'removed';
+    event_id: string;
+    observed_at: string;
+    provenance: string;
+    related_issue_id: number;
+    relationship: 'closing' | 'reference';
+    source_at: null | string;
+    url: null | string;
+  }[];
+  next: null | string;
+}
+export const getGithubRelationships = async (
+  org: string,
+  repository: string,
+  item: number,
+  after?: string
+) =>
+  unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<GithubRelationshipPage>>(
+      `/organizations/${org}/me/github/work-items/${repository}/${item}/relationships`,
+      { params: { after } }
+    )
+  );
+export const getGithubOwnReceipt = async (
+  org: string,
+  repository: string,
+  item: number,
+  after?: string
+) =>
+  unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<WorkReceipt>>(
+      `/organizations/${org}/me/github/work-items/${repository}/${item}/receipt`,
+      { params: { after } }
+    )
   );

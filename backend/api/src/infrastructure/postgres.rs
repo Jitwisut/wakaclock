@@ -305,6 +305,14 @@ impl PostgresClient {
                 "Team GitHub installation and synchronization",
                 include_str!("../../migrations/postgres/032_team_github.sql"),
             ),
+            (
+                "Team GitHub closure",
+                include_str!("../../migrations/postgres/033_team_github_closure.sql"),
+            ),
+            (
+                "Team cross-week publication membership",
+                include_str!("../../migrations/postgres/034_team_publication_membership.sql"),
+            ),
         ] {
             client
                 .batch_execute(sql)

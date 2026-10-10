@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "base_commit": "8bdd0df1315c1bbfe6f631f321838f01bea08394",
+  "base_commit": "579967bba119634526d23d704cec6fd35c6d3571",
   "required_tools": ["codex", "claude_code", "cursor_ide", "copilot_vscode"],
   "required_operating_systems": ["macos", "windows"],
   "user_sessions_per_tool_os": 10,

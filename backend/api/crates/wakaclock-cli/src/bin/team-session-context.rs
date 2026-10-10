@@ -18,6 +18,11 @@ struct Args {
     observe: Option<PathBuf>,
     #[arg(long)]
     once: bool,
+    /// Opt-in native hook payload adapter. No transcript text is persisted.
+    #[arg(long)]
+    provider: Option<String>,
+    #[arg(long)]
+    status: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,7 +46,8 @@ struct LiveSession {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let config: Configuration = serde_json::from_slice(&std::fs::read(&args.config)?)?;
+    let config: Configuration = serde_json::from_slice(&std::fs::read(&args.config)?)
+        .map_err(|_| "invalid context configuration")?;
     let origin = reqwest::Url::parse(&config.origin)?;
     if !(origin.scheme() == "https"
         || (origin.scheme() == "http"
@@ -55,13 +61,86 @@ async fn main() -> Result<()> {
         return Err("invalid context server origin".into());
     }
     let mut queue = ContextQueue::open(&config.queue_path)?;
+    if args.status {
+        println!(
+            "{}",
+            queue.status(
+                &config.origin,
+                config.user_id,
+                config.organization_id,
+                Utc::now().timestamp()
+            )?
+        );
+        return Ok(());
+    }
+    if let Some(provider) = args.provider {
+        let mut bytes = Vec::new();
+        std::io::stdin().take(1_048_577).read_to_end(&mut bytes)?;
+        if bytes.len() > 1_048_576 {
+            return Err("native hook payload exceeds local processing limit".into());
+        }
+        let payload: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|_| "invalid native hook payload")?;
+        let Some(native) = wakaclock_core::session_context::native_context(&provider, &payload)
+        else {
+            println!(
+                "{{\"status\":\"unresolved\",\"reason\":\"native_session_identity_unavailable\"}}"
+            );
+            return Ok(());
+        };
+        drop(payload);
+        drop(bytes);
+        let at = Utc::now();
+        let device = wakaclock_core::queue::Queue::open()?.device_id()?;
+        if device != config.collector_id.to_string() {
+            return Err("collector differs from canonical usage producer".into());
+        }
+        let Some(git) = native
+            .workspaces
+            .iter()
+            .filter_map(|p| observe_git(p))
+            .find(|g| g.repository == config.repository.to_ascii_lowercase())
+        else {
+            println!("{{\"status\":\"unresolved\",\"reason\":\"mapped_repository_evidence_unavailable\"}}");
+            return Ok(());
+        };
+        let scoped = wakaclock_core::ai::usage::scoped_session_id(
+            &device,
+            native.agent,
+            &native.native_session,
+        );
+        let mut event = SessionContext::observed(
+            config.user_id,
+            native.agent,
+            config.collector_id,
+            &scoped,
+            config.project_id,
+            config.repository_id,
+            at,
+            git,
+        );
+        event.provenance = native.provenance.into();
+        let accepted = queue.observe_changed(
+            &config.origin,
+            config.user_id,
+            config.organization_id,
+            &event,
+        )?;
+        println!(
+            "{}",
+            serde_json::json!({"status":if accepted{"stored"}else{"unchanged"},"durable":true,"verification":"pending_canonical_evidence"})
+        );
+        return Ok(());
+    }
+
     if let Some(workspace) = args.observe {
         let mut bytes = Vec::new();
         std::io::stdin().take(16_385).read_to_end(&mut bytes)?;
         if bytes.len() > 16_384 {
             return Err("session metadata too large".into());
         }
-        let live: LiveSession = serde_json::from_slice(&bytes)?;
+        let live: LiveSession =
+            serde_json::from_slice(&bytes).map_err(|_| "invalid live session metadata")?;
         if live.agent.is_empty()
             || live.agent.len() > 64
             || live.usage_session_id.is_empty()

@@ -73,7 +73,7 @@ impl TeamTrustRepository {
         let row=self.postgres.query_one("SELECT r.generation,m.retention_before FROM team_rollouts r LEFT JOIN team_privacy_markers m USING(organization_id) WHERE r.organization_id=$1", &[&org]).await?;
         let access=self.postgres.query_one("SELECT jsonb_build_object('consents',COALESCE((SELECT jsonb_agg(jsonb_build_object('user',c.user_id,'version',c.consent_version,'aggregate',c.share_aggregate,'individual',c.share_individual,'aggregate_from',c.aggregate_from,'individual_from',c.individual_from) ORDER BY c.user_id) FROM organization_analytics_consents c WHERE c.organization_id=$1),'[]'::jsonb), 'members',COALESCE((SELECT jsonb_agg(to_jsonb(m) ORDER BY m.user_id) FROM organization_members m WHERE m.organization_id=$1),'[]'::jsonb), 'scopes',COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.repository_id) FROM team_repository_scopes s WHERE s.organization_id=$1),'[]'::jsonb), 'project_bindings',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.user_id,b.project_id) FROM team_member_project_bindings b WHERE b.organization_id=$1),'[]'::jsonb))", &[&org]).await?.get::<_,serde_json::Value>(0);
         let weeks=self.postgres.query("SELECT DISTINCT week_start FROM team_weekly_publications WHERE organization_id=$1 ORDER BY week_start", &[&org]).await?.iter().map(|r|r.get(0)).collect();
-        let rows=self.postgres.query("SELECT week_start,view_key,generation,fingerprint,contributors,invalidated_at FROM team_weekly_publications WHERE organization_id=$1 ORDER BY week_start,view_key",&[&org]).await?;
+        let rows=self.postgres.query("SELECT week_start,view_key,generation,fingerprint,contributors,invalidated_at,fact_membership FROM team_weekly_publications WHERE organization_id=$1 ORDER BY week_start,view_key",&[&org]).await?;
         let mut publication_marks: BTreeMap<NaiveDate, BTreeSet<String>> = BTreeMap::new();
         let mut invalidated_weeks = BTreeSet::new();
         for row in rows {
@@ -81,13 +81,16 @@ impl TeamTrustRepository {
             if row.get::<_, Option<DateTime<Utc>>>(5).is_some() {
                 invalidated_weeks.insert(week);
             }
-            let marker = serde_json::to_vec(&(
+            let mut marker = serde_json::to_vec(&(
                 week,
                 row.get::<_, String>(1),
                 row.get::<_, i64>(2),
                 row.get::<_, String>(3),
                 row.get::<_, Vec<Uuid>>(4),
             ))?;
+            if let Some(membership) = row.get::<_, Option<Vec<String>>>(6) {
+                marker.extend(serde_json::to_vec(&membership)?);
+            }
             publication_marks
                 .entry(week)
                 .or_default()
@@ -148,6 +151,22 @@ impl TeamTrustRepository {
         fingerprint: &str,
         contributors: &BTreeSet<Uuid>,
     ) -> Result<bool> {
+        self.release_with_facts(org, week, key, generation, fingerprint, contributors, None)
+            .await
+    }
+    /// Cross-week equations may only reuse exactly the same publication or disjoint facts.
+    /// Partial overlap and legacy histories without membership evidence fail closed.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn release_with_facts(
+        &self,
+        org: Uuid,
+        week: NaiveDate,
+        key: &str,
+        generation: i64,
+        fingerprint: &str,
+        contributors: &BTreeSet<Uuid>,
+        facts: Option<&BTreeSet<String>>,
+    ) -> Result<bool> {
         let mut client = self.postgres.transaction_client().await?;
         let tx = client.transaction().await?;
         let current: i64 = tx
@@ -188,8 +207,31 @@ impl TeamTrustRepository {
         if !safe_views(&previous, contributors, fingerprint) {
             return Ok(false);
         }
+        if let Some(facts) = facts {
+            let history = tx.query("SELECT fingerprint,contributors,fact_membership FROM team_weekly_publications WHERE organization_id=$1", &[&org]).await?;
+            for row in history {
+                let previous = row
+                    .get::<_, Option<Vec<String>>>("fact_membership")
+                    .map(|v| v.into_iter().collect());
+                let people = row
+                    .get::<_, Vec<Uuid>>("contributors")
+                    .into_iter()
+                    .collect();
+                if !crate::services::team_trust::safe_fact_view(
+                    previous.as_ref(),
+                    &people,
+                    &row.get::<_, String>("fingerprint"),
+                    facts,
+                    contributors,
+                    fingerprint,
+                ) {
+                    return Ok(false);
+                }
+            }
+        }
+        let membership = facts.map(|f| f.iter().cloned().collect::<Vec<_>>());
         let people = contributors.iter().copied().collect::<Vec<_>>();
-        tx.execute("INSERT INTO team_weekly_publications(organization_id,week_start,view_key,generation,fingerprint,contributors) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING", &[&org,&week,&key,&generation,&fingerprint,&people]).await?;
+        tx.execute("INSERT INTO team_weekly_publications(organization_id,week_start,view_key,generation,fingerprint,contributors,fact_membership) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING", &[&org,&week,&key,&generation,&fingerprint,&people,&membership]).await?;
         tx.execute("UPDATE team_report_policies SET locked_at=COALESCE(locked_at,now()) WHERE organization_id=$1", &[&org]).await?;
         tx.commit().await?;
         Ok(true)
@@ -344,6 +386,7 @@ impl TeamTrustRepository {
             &[],
         )
         .await?;
+        tx.execute("UPDATE team_session_contexts SET verification='blocked',verification_reason='restore_reauthorization_required',verification_lease=NULL,verification_until=NULL",&[]).await?;
         tx.execute("UPDATE team_github_sync_jobs SET retry_at='infinity',lease_token=NULL,lease_until=NULL,error_code='restore_reauthorization_required' WHERE completed_at IS NULL",&[]).await?;
         tx.execute("UPDATE team_rollouts SET enabled=FALSE", &[])
             .await?;
@@ -385,6 +428,14 @@ impl TeamTrustRepository {
             tx.execute("INSERT INTO team_cleanup_jobs(organization_id) VALUES($1) ON CONFLICT(organization_id) DO UPDATE SET phase=0,completed_at=NULL,retry_at=now()", &[&org]).await?;
         }
         for d in &ledger.dispositions {
+            if d.provider == "session_context" {
+                tx.execute(
+                    "DELETE FROM team_session_contexts WHERE user_id::text||':'||event_id=$1",
+                    &[&d.delivery_id],
+                )
+                .await?;
+            }
+
             tx.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",&[&d.provider,&d.delivery_id,&d.payload_hash,&d.reason,&d.disposed_at]).await?;
             tx.execute(
                 "DELETE FROM team_webhook_inbox WHERE provider=$1 AND delivery_id=$2",
@@ -431,8 +482,14 @@ impl TeamTrustRepository {
     tx.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) SELECT provider,delivery_id,payload_hash,COALESCE(error_code,'processed_retention'),$2 FROM team_webhook_inbox WHERE provider='github' AND received_at<$1 AND (processed_at IS NOT NULL OR metadata->>'disposition'='expired_before_processing') ORDER BY received_at,delivery_id LIMIT 100 ON CONFLICT DO NOTHING", &[&cutoff,&now]).await?;
     tx.execute("DELETE FROM team_webhook_inbox WHERE (provider,delivery_id) IN (SELECT provider,delivery_id FROM team_webhook_inbox WHERE provider='github' AND received_at<$1 AND EXISTS (SELECT 1 FROM team_webhook_dispositions d WHERE d.provider=team_webhook_inbox.provider AND d.delivery_id=team_webhook_inbox.delivery_id) LIMIT 100)", &[&cutoff]).await?
    },
-   7 => tx.execute("DELETE FROM team_session_contexts WHERE (user_id,event_id) IN (SELECT e.user_id,e.event_id FROM team_session_contexts e LEFT JOIN organization_analytics_consents c USING(organization_id,user_id) LEFT JOIN organization_members m USING(organization_id,user_id) JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE e.organization_id=$1 AND (e.occurred_at<$2 OR NOT COALESCE(c.share_individual,FALSE) OR e.occurred_at<c.individual_from OR m.user_id IS NULL OR m.deactivated_at IS NOT NULL OR NOT s.enabled) LIMIT 100)", &[&org,&cutoff]).await?,
-   8 => tx.execute("DELETE FROM team_github_facts WHERE (organization_id,repository_id,kind,external_id) IN (SELECT f.organization_id,f.repository_id,f.kind,f.external_id FROM team_github_facts f JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE f.organization_id=$1 AND (f.occurred_at<$2 OR NOT s.enabled) LIMIT 100)", &[&org,&cutoff]).await?,
+   7 => {
+    tx.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) SELECT 'session_context',e.user_id::text||':'||e.event_id,e.payload_hash,CASE WHEN e.occurred_at<$2 THEN 'retention_expired' ELSE 'sharing_or_scope_revoked' END,$3 FROM team_session_contexts e LEFT JOIN organization_analytics_consents c USING(organization_id,user_id) LEFT JOIN organization_members m USING(organization_id,user_id) JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE e.organization_id=$1 AND (e.occurred_at<$2 OR NOT COALESCE(c.share_individual,FALSE) OR e.occurred_at<c.individual_from OR m.user_id IS NULL OR m.deactivated_at IS NOT NULL OR NOT s.enabled) ORDER BY e.event_id LIMIT 100 ON CONFLICT DO NOTHING",&[&org,&cutoff,&now]).await?;
+    tx.execute("DELETE FROM team_session_contexts WHERE (user_id,event_id) IN (SELECT e.user_id,e.event_id FROM team_session_contexts e LEFT JOIN organization_analytics_consents c USING(organization_id,user_id) LEFT JOIN organization_members m USING(organization_id,user_id) JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE e.organization_id=$1 AND (e.occurred_at<$2 OR NOT COALESCE(c.share_individual,FALSE) OR e.occurred_at<c.individual_from OR m.user_id IS NULL OR m.deactivated_at IS NOT NULL OR NOT s.enabled) AND EXISTS(SELECT 1 FROM team_webhook_dispositions d WHERE d.provider='session_context' AND d.delivery_id=e.user_id::text||':'||e.event_id AND d.payload_hash=e.payload_hash) ORDER BY e.event_id LIMIT 100)", &[&org,&cutoff]).await?
+   },
+   8 => {
+    let relations=tx.execute("DELETE FROM team_github_relation_history WHERE (organization_id,repository_id,event_id) IN(SELECT h.organization_id,h.repository_id,h.event_id FROM team_github_relation_history h JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE h.organization_id=$1 AND (COALESCE(h.source_at,h.observed_at)<$2 OR NOT s.enabled) LIMIT 100)",&[&org,&cutoff]).await?;
+    relations+tx.execute("DELETE FROM team_github_facts WHERE (organization_id,repository_id,kind,external_id) IN (SELECT f.organization_id,f.repository_id,f.kind,f.external_id FROM team_github_facts f JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE f.organization_id=$1 AND (f.occurred_at<$2 OR NOT s.enabled) LIMIT 100)", &[&org,&cutoff]).await?
+   },
    9 => {
     tx.execute("UPDATE team_github_sync_jobs SET completed_at=now(),error_code='retention_expired',checkpoint='{}',lease_token=NULL,lease_until=NULL WHERE id IN (SELECT id FROM team_github_sync_jobs WHERE organization_id=$1 AND created_at<$2 AND completed_at IS NULL AND (lease_until IS NULL OR lease_until<now()) LIMIT 100)", &[&org,&cutoff]).await?;
     tx.execute("DELETE FROM team_github_sync_jobs WHERE id IN (SELECT id FROM team_github_sync_jobs WHERE organization_id=$1 AND created_at<$2 AND completed_at IS NOT NULL LIMIT 100)", &[&org,&cutoff]).await?

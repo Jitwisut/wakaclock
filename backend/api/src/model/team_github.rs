@@ -69,3 +69,15 @@ pub struct GithubWorkQuery {
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct GithubInputError(pub &'static str);
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionPageQuery {
+    pub after: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+pub struct RelationshipQuery {
+    pub after: Option<String>,
+}

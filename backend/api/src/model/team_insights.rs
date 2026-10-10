@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 pub const CALCULATION_VERSION: &str = "team_usage_v1";
@@ -78,6 +79,7 @@ pub struct TeamInsights {
     pub estimated_ai_cost_microusd: Metric<u64>,
     pub currency: &'static str,
     pub merged_pr_cost_microusd: Metric<u64>,
+    pub merged_pr_cost: MergedCost,
     pub provider_breakdown: Vec<ProviderCost>,
     pub measurement_health: Vec<&'static str>,
     pub production_ready: bool,
@@ -102,10 +104,12 @@ pub struct LinkRequest {
 #[serde(deny_unknown_fields)]
 pub struct LinkDecision {
     pub status: String,
+    pub expected_revision: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct WorkLink {
+    pub revision: i64,
     pub id: Uuid,
     pub repository_id: Uuid,
     pub work_item_id: i64,
@@ -142,10 +146,52 @@ pub struct ReceiptSession {
 
 #[derive(Debug, Serialize)]
 pub struct WorkReceipt {
+    pub next: Option<Uuid>,
+    pub cost_until: Option<DateTime<Utc>>,
+    pub pricing_versions: Vec<String>,
+    pub calculation_version: &'static str,
     pub repository_id: Uuid,
     pub work_item_id: i64,
     pub sessions: Vec<ReceiptSession>,
     pub estimated_cost_microusd: Metric<u64>,
     pub sharing: &'static str,
     pub generation: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkReplacement {
+    pub repository_id: Uuid,
+    pub work_item_id: i64,
+    pub expected_revision: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct MergedCost {
+    pub cost_microusd: Metric<u64>,
+    pub average_microusd: Metric<u64>,
+    pub with_cost: Metric<u64>,
+    pub without_cost: Metric<u64>,
+    pub complete_prs: Metric<u64>,
+    pub pricing_versions: Vec<String>,
+    pub calculation_version: &'static str,
+    #[serde(skip)]
+    pub people: BTreeSet<Uuid>,
+    #[serde(skip)]
+    pub admitted: BTreeSet<(Uuid, String)>,
+}
+impl MergedCost {
+    pub fn withheld(reason: &'static str) -> Self {
+        Self {
+            cost_microusd: Metric::unavailable(reason),
+            average_microusd: Metric::unavailable(reason),
+            with_cost: Metric::unavailable(reason),
+            without_cost: Metric::unavailable(reason),
+            complete_prs: Metric::unavailable(reason),
+            pricing_versions: vec![],
+            calculation_version: "confirmed_observed_usage_to_merge_v1",
+            people: BTreeSet::new(),
+            admitted: BTreeSet::new(),
+        }
+    }
 }

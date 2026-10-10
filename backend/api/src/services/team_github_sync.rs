@@ -226,12 +226,32 @@ impl GithubSyncWorker {
                             });
                         }
                     } else {
+                        let stamp = pr["updatedAt"].clone();
+                        if !cp["relations_updated_at"].is_null()
+                            && cp["relations_updated_at"] != stamp
+                        {
+                            // Persist a restart checkpoint; retrying the old cursor would
+                            // otherwise fail forever after a PR changed during pagination.
+                            cp["relations_updated_at"] = Value::Null;
+                            cp["cursor"] = Value::Null;
+                            cp["closing_relation_ids"] = json!([]);
+                            self.repo.commit_sync(job, &[], &[], &cp, false).await?;
+                            return Ok(());
+                        }
+                        cp["relations_updated_at"] = stamp;
+                        let mut seen = cp["closing_relation_ids"]
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_default();
                         for n in connection["nodes"]
                             .as_array()
                             .context("relation nodes missing")?
                         {
+                            seen.push(json!({"repository_id":n["repository"]["databaseId"],"issue_id":n["databaseId"]}));
+                            ensure!(seen.len() <= 10000, "relation ledger limit exceeded");
                             facts.push(SyncFact{kind:"closing_issue".into(),external_id:format!("{}:{}",item,n["id"].as_str().context("issue identity missing")?),work_item:Some(item),at:Utc::now(),metadata:json!({"issue_id":n["databaseId"],"issue_number":n["number"],"repository_id":n["repository"]["databaseId"],"relationship":"closing","provenance":"github_current_relation","historical_at":null})});
                         }
+                        cp["closing_relation_ids"] = json!(seen);
                     }
                     if connection["pageInfo"]["hasNextPage"].as_bool() == Some(true) {
                         cp["cursor"] = connection["pageInfo"]["endCursor"].clone();
@@ -240,8 +260,41 @@ impl GithubSyncWorker {
                         cp["phase"] = json!(if phase == "timeline" {
                             "relations"
                         } else {
-                            "checks"
+                            "reference_timeline"
                         });
+                    }
+                }
+                "reference_timeline" => {
+                    let path = cp["next"].as_str().map(str::to_string).unwrap_or(format!(
+                        "/repos/{name}/issues/{number}/timeline?per_page=100"
+                    ));
+                    let page = self.get(job, &token, &path).await?;
+                    for n in page.value.as_array().context("reference timeline schema")? {
+                        if n["event"].as_str() != Some("cross-referenced")
+                            || !n["source"]["issue"]["pull_request"].is_null()
+                        {
+                            continue;
+                        }
+                        let Some(repository_url) = n["source"]["issue"]["repository_url"].as_str()
+                        else {
+                            continue;
+                        };
+                        let Some(full) =
+                            repository_url.strip_prefix("https://api.github.com/repos/")
+                        else {
+                            continue;
+                        };
+                        let row = self.repo.selected_repository(job.org, full).await?;
+                        if let Some(row) = row {
+                            if let Some(mut fact) = reference_fact(n, row.get(0))? {
+                                fact.work_item = Some(item);
+                                facts.push(fact);
+                            }
+                        }
+                    }
+                    cp["next"] = page.next.map_or(Value::Null, |p| json!(p));
+                    if cp["next"].is_null() {
+                        cp["phase"] = json!("checks");
                     }
                 }
                 "checks" | "statuses" => {
@@ -411,9 +464,52 @@ pub fn ci_state(current_sha: &str, checks: &[Value]) -> &'static str {
         "unavailable"
     }
 }
+/// Allowlisted relationship metadata only. Never inspect issue title/body/comment contents.
+pub fn reference_fact(n: &Value, repository: i64) -> Result<Option<SyncFact>> {
+    if n["event"].as_str() != Some("cross-referenced") {
+        return Ok(None);
+    }
+    let issue = n["source"]["issue"]["id"]
+        .as_i64()
+        .context("referenced issue identity missing")?;
+    let id = n["id"]
+        .as_i64()
+        .context("reference event identity missing")?;
+    let at = n["created_at"]
+        .as_str()
+        .context("reference event time unavailable")?
+        .parse()?;
+    Ok(Some(SyncFact {
+        kind: "reference_issue".into(),
+        external_id: format!("reference:{id}"),
+        work_item: None,
+        at,
+        metadata: json!({"issue_id":issue,"repository_id":repository,"relationship":"reference","source_at":at,"action":"present","provenance":"github_reference_timeline"}),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn issue_reference_preserves_source_time_and_only_allowlisted_metadata() {
+        let input = json!({"id":111,"event":"cross-referenced","created_at":"2026-10-07T00:00:00Z","source":{"issue":{"id":222,"title":"FORBIDDEN_TITLE","body":"FORBIDDEN_BODY"}},"comment":{"body":"FORBIDDEN_COMMENT"}});
+        let fact = reference_fact(&input, 333).unwrap().unwrap();
+        assert_eq!(fact.external_id, "reference:111");
+        assert_eq!(fact.metadata["issue_id"], 222);
+        assert_eq!(fact.at.to_rfc3339(), "2026-10-07T00:00:00+00:00");
+        assert!(!fact.metadata.to_string().contains("FORBIDDEN"));
+        assert!(
+            reference_fact(&json!({"event":"commented","body":"FORBIDDEN"}), 333)
+                .unwrap()
+                .is_none()
+        );
+        assert!(reference_fact(
+            &json!({"event":"cross-referenced","id":111,"source":{"issue":{"id":222}}}),
+            333
+        )
+        .is_err());
+    }
     #[test]
     fn old_green_sha_is_not_current_green() {
         assert_eq!(

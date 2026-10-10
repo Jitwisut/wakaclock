@@ -46,14 +46,40 @@ async fn weekly_registry_revocation_cleanup_and_restore() {
     let generation = repo.registry_entry(org).await.unwrap().generation;
     let people = (1..=5).map(Uuid::from_u128).collect::<BTreeSet<_>>();
     let week = NaiveDate::from_ymd_opt(2026, 9, 28).unwrap();
+    let membership: BTreeSet<String> = ["fact-a".into(), "fact-b".into()].into_iter().collect();
     assert!(repo
-        .release(org, week, "org", generation, "original", &people)
+        .release_with_facts(
+            org,
+            week,
+            "org",
+            generation,
+            "original",
+            &people,
+            Some(&membership)
+        )
         .await
         .unwrap());
     assert!(repo
         .release(org, week, "org", generation, "original", &people)
         .await
         .unwrap());
+    let next_week = week + chrono::Duration::days(7);
+    let partial = ["fact-a".into(), "fact-b".into(), "one-person-extra".into()]
+        .into_iter()
+        .collect();
+    assert!(!repo
+        .release_with_facts(
+            org,
+            next_week,
+            "merged",
+            generation,
+            "new",
+            &people,
+            Some(&partial)
+        )
+        .await
+        .unwrap());
+    assert_eq!(pg.query_one("SELECT count(*) FROM team_weekly_publications WHERE organization_id=$1 AND week_start=$2", &[&org,&next_week]).await.unwrap().get::<_,i64>(0),0);
     let publication_ledger = repo.registry_entry(org).await.unwrap();
     assert_eq!(publication_ledger.publication_marks[&week].len(), 1);
     assert!(repo
@@ -390,6 +416,7 @@ async fn restore_drill_fixture_stages() {
             pg.execute("INSERT INTO team_member_project_bindings(organization_id,user_id,project_id,repository_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",&[&org,&user,&project,&repository]).await.unwrap();
             pg.execute("INSERT INTO team_session_contexts(organization_id,user_id,event_id,payload_hash,session_id,collector_id,project_id,repository_id,occurred_at,branch,commit_sha,provenance) VALUES($1,$2,$3,'fixture',$3,$2,$4,$5,now(),'fixture/branch',$6,'native_session_git') ON CONFLICT DO NOTHING",&[&org,&user,&"a".repeat(64),&project,&repository,&"b".repeat(40)]).await.unwrap();
             pg.execute("INSERT INTO team_github_facts(organization_id,repository_id,kind,external_id,occurred_at,metadata) VALUES($1,$2,'ready','fixture-ready',now(),jsonb_build_object('provenance','fixture')) ON CONFLICT DO NOTHING",&[&org,&repository]).await.unwrap();
+            pg.execute("INSERT INTO team_github_relation_history(organization_id,repository_id,work_item_id,related_repository_id,related_item_id,relation_kind,event_id,source_at,observed_at,action) VALUES($1,$2,741035,741033,741036,'closing','fixture-closing',NULL,now(),'present') ON CONFLICT DO NOTHING",&[&org,&repository]).await.unwrap();
             ch.get_client().query("CREATE TABLE IF NOT EXISTS member_daily(organization_id UUID,user_id UUID,date Date,total_seconds Float64,heartbeat_count UInt64) ENGINE=SummingMergeTree ORDER BY(organization_id,user_id,date)").execute().await.unwrap();
             ch.get_client().query("CREATE TABLE IF NOT EXISTS organization_daily(organization_id UUID,date Date,total_seconds Float64,heartbeat_count UInt64) ENGINE=SummingMergeTree ORDER BY(organization_id,date)").execute().await.unwrap();
             for table in ["member_daily", "organization_daily"] {
@@ -540,6 +567,17 @@ async fn restore_drill_fixture_stages() {
                 .get::<_, i64>(0),
                 0
             );
+            assert_eq!(
+                pg.query_one(
+                    "SELECT count(*) FROM team_github_relation_history WHERE organization_id=$1",
+                    &[&org]
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+                0
+            );
+            assert!(pg.query_one("SELECT count(*) FROM team_webhook_dispositions WHERE provider='session_context' AND delivery_id=$1",&[&format!("{user}:{}","a".repeat(64))]).await.unwrap().get::<_,i64>(0)>0);
             let count=ch.get_client().query("SELECT count() FROM wakaclock.ai_usage_events FINAL WHERE usage_event_id='restore-stable-usage'").fetch_one::<u64>().await.unwrap();
             assert_eq!(count, 1);
         }
