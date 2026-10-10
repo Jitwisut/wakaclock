@@ -25,6 +25,7 @@ import {
   TH_MORE_GUIDES,
   tradeoffFor,
 } from './answer-guide-more';
+import { ProductTour } from './product-tour';
 
 const WAKATIME_DEVELOPER_URL = 'https://wakatime.com/developers';
 
@@ -955,6 +956,7 @@ export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path
         {guide.heading}
       </h2>
       <p className="mt-4 text-lg">{guide.answer}</p>
+      <ProductTour locale={locale} />
       <h3 className="mt-8 text-lg font-semibold">
         {locale === 'th' ? 'สรุปสาระสำคัญ (Key takeaways)' : 'Key takeaways'}
       </h3>

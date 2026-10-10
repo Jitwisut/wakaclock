@@ -36,6 +36,7 @@ import {
 } from './marketing-copy';
 import { PageIllustration } from './page-illustration';
 import { PricingSection } from './pricing-section';
+import { productTourSchema } from './product-tour';
 import {
   Breadcrumbs,
   Bullets,
@@ -222,6 +223,35 @@ function PlacedIllustration({
   return positions[path] === placement ? <PageIllustration locale={locale} path={path} /> : null;
 }
 
+/** Everything the page's single JSON-LD graph describes, built from the visible copy. */
+function pageSchemas(
+  path: MarketingPageKey,
+  locale: SiteLocale,
+  copy: ReturnType<typeof getCopy>,
+  breadcrumbs: { name: string; path: string }[]
+) {
+  const schemas = [
+    breadcrumbSchema(breadcrumbs),
+    webPageSchema({
+      path,
+      locale,
+      name: copy.title,
+      description: copy.lead,
+      sections: copy.sections.map(({ id, heading }) => ({ id, name: heading })),
+    }),
+  ];
+  if (copy.faq) schemas.push(faqSchema(copy.faq.entries));
+  if (hasAnswerGuide(path, locale)) schemas.push(productTourSchema(locale));
+  if (copy.schema === 'organization') schemas.push(organizationSchema());
+  const steps = copy.howTo ? howToSteps(copy.sections) : [];
+  if (copy.howTo && steps.length > 0) {
+    schemas.push(
+      howToSchema({ name: copy.howTo.name, description: copy.howTo.description, steps })
+    );
+  }
+  return schemas;
+}
+
 export function LocalizedMarketingPage({
   path,
   locale,
@@ -234,26 +264,7 @@ export function LocalizedMarketingPage({
     ...entry,
     path: localizedPath(locale, entry.path),
   }));
-  const schemas = [
-    breadcrumbSchema(breadcrumbs),
-    webPageSchema({
-      path,
-      locale,
-      name: copy.title,
-      description: copy.lead,
-      sections: copy.sections.map(({ id, heading }) => ({ id, name: heading })),
-    }),
-  ];
-  if (copy.faq) schemas.push(faqSchema(copy.faq.entries));
-  if (copy.schema === 'organization') schemas.push(organizationSchema());
-  if (copy.howTo) {
-    const steps = howToSteps(copy.sections);
-    if (steps.length > 0) {
-      schemas.push(
-        howToSchema({ name: copy.howTo.name, description: copy.howTo.description, steps })
-      );
-    }
-  }
+  const schemas = pageSchemas(path, locale, copy, breadcrumbs);
 
   const comparisonIndex =
     copy.component?.kind === 'comparison'

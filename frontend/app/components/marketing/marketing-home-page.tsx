@@ -21,6 +21,7 @@ import { CtaSection } from './cta-section';
 import { FaqSection } from './faq-section';
 import { EN_HOME, TH_HOME } from './marketing-copy';
 import { PricingSection } from './pricing-section';
+import { productTourSchema } from './product-tour';
 import { Bullets, MUTED_TEXT, Section } from './prose';
 import { QuickStartSection } from './quick-start-section';
 import { TimeExperience } from './time/time-experience';
@@ -360,7 +361,8 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
             sections: copy.tableOfContents.map(({ id, label }) => ({ id, name: label })),
           }),
           faqSchema(copy.faq),
-          breadcrumbSchema([{ name: locale === 'th' ? 'หน้าหลัก' : 'Home', path: '/' }])
+          breadcrumbSchema([{ name: locale === 'th' ? 'หน้าหลัก' : 'Home', path: '/' }]),
+          productTourSchema(locale)
         )}
       />
     </>
