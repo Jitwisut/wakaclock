@@ -28,7 +28,7 @@ for (const locale of ['en', 'th'] as const) {
       expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
       expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(copy.title);
       const index = screen.getByRole('navigation', {
-        name: locale === 'th' ? 'หัวข้อในหน้านี้' : 'On this page',
+        name: locale === 'th' ? 'สารบัญ' : 'Table of contents',
       });
       for (const link of index.querySelectorAll('a')) {
         const id = link.getAttribute('href')?.slice(1);
