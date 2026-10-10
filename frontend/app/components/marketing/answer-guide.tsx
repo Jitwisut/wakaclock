@@ -16,6 +16,7 @@ import {
 
 import {
   EN_MORE_GUIDES,
+  evidenceFor,
   externalReferences,
   type Guide,
   type GuideSource,
@@ -940,6 +941,7 @@ export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path
   if (!guide) return null;
   const sources = sourcesFor(guide, path, locale);
   const tradeoff = tradeoffFor(path, locale);
+  const evidence = evidenceFor(path, locale);
   const table = guide.table ?? (locale === 'th' ? THAI_DEFAULT_TABLE : DEFAULT_TABLE);
   const reviewDate = contentModified(path, locale) ?? SITE_MODIFIED;
   return (
@@ -1027,17 +1029,32 @@ export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path
           ? 'ข้อความเกี่ยวกับผลิตภัณฑ์อ้างอิงจากระบบที่พัฒนาอยู่ ตัวอย่างเป็นข้อมูลสมมติ ไม่ใช่งานวิจัยหรือข้อมูลลูกค้า'
           : 'Product claims describe our implementation; examples are illustrative, not customer research.'}
       </p>
+      {evidence ? (
+        <p className="mt-3">
+          {evidence.text}{' '}
+          <cite>
+            <a className="underline" href={evidence.href} rel="noopener noreferrer">
+              {locale === 'th' ? 'ที่มา' : 'Source'}
+            </a>
+          </cite>
+          .
+        </p>
+      ) : null}
       <ul className="mt-4 space-y-3">
         {sources.map((source) => (
           <li key={source.href}>
             {source.href.startsWith('/') ? (
-              <Link className="underline" href={localizedPath(locale, source.href)}>
-                <cite>{source.label}</cite>
-              </Link>
+              <cite>
+                <Link className="underline" href={localizedPath(locale, source.href)}>
+                  {source.label}
+                </Link>
+              </cite>
             ) : (
-              <a className="underline" href={source.href} rel="noopener noreferrer">
-                <cite>{source.label}</cite>
-              </a>
+              <cite>
+                <a className="underline" href={source.href} rel="noopener noreferrer">
+                  {source.label}
+                </a>
+              </cite>
             )}
             : {source.note}.
           </li>

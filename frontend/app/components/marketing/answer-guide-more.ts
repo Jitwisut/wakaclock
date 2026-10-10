@@ -1,4 +1,3 @@
- 
 /**
  * Answer-guide content that every marketing page carries: the trade-off a reader should
  * weigh, primary external references, and full guides for the pages that had none.
@@ -584,3 +583,25 @@ export const TH_MORE_GUIDES: Record<string, Guide> = {
       'เก็บไฟล์ export ของ WakaTime ไว้จนกว่าจะตรวจโปรเจกต์และวันที่ที่ import มาแล้ว ย้ายเครื่องแรกก่อน แล้วค่อยเปลี่ยนเครื่องที่เหลือเมื่อเครื่องแรกรายงานถูกต้อง',
   },
 };
+
+/** The one third-party statistic the site relies on, attributed inline to its source. */
+const AI_EVIDENCE = {
+  en: '84% of developers use or plan to use AI tools in development, yet 46% distrust the accuracy of AI output and 33% trust it (Stack Overflow Developer Survey 2025).',
+  th: 'นักพัฒนา 84% ใช้หรือวางแผนจะใช้เครื่องมือ AI ในการพัฒนา แต่ 46% ไม่เชื่อถือความถูกต้องของผลลัพธ์จาก AI และ 33% เชื่อถือ (Stack Overflow Developer Survey 2025)',
+} as const;
+
+const AI_EVIDENCE_PAGES = new Set([
+  '/',
+  '/ai-coding-tracker',
+  '/ai-cost-tracking',
+  '/developer-analytics',
+  '/docs/ai-attribution-and-coverage',
+]);
+
+export function evidenceFor(
+  path: string,
+  locale: SiteLocale
+): { href: string; text: string } | undefined {
+  if (!AI_EVIDENCE_PAGES.has(path)) return undefined;
+  return { href: REFERENCES.soSurveyAi.href, text: AI_EVIDENCE[locale] };
+}
