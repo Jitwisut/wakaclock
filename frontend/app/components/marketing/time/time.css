@@ -1546,9 +1546,12 @@ html.lenis.lenis-smooth {
   }
 }
 
+/* Starts faint, never invisible: Chrome does not count an opacity-0 element as the
+   largest contentful paint, so a fade from zero pushed the hero's LCP back by the whole
+   entrance (about 0.9 s on a throttled phone). */
 @keyframes tx-rise {
   from {
-    opacity: 0;
+    opacity: 0.15;
     transform: translateY(18px);
   }
 }

@@ -42,6 +42,11 @@ export function useTimeScroll(rootId: string) {
     const progress = chapters.map(() => 0);
     let lastY = window.scrollY;
     let lastTime = performance.now();
+    // Custom properties written on the root restyle the whole experience, so they are
+    // written only when their rounded value changes, and the still hand gets its own.
+    const hand = root.querySelector<SVGElement>('.tx-still-hand');
+    let lastHand = '';
+    let lastDay = '';
 
     const publish = () => {
       const g = progress.reduce((sum, value) => sum + value, 0);
@@ -63,9 +68,13 @@ export function useTimeScroll(rootId: string) {
       }
       timeMotion.target = g;
       const chapter = chapterAt(g);
-      root.dataset.chapter = String(chapter);
+      if (root.dataset.chapter !== String(chapter)) root.dataset.chapter = String(chapter);
       // The still drawing's hand follows the scroll through CSS, no animation frame needed.
-      root.style.setProperty('--tx-hand', `${((handMinuteAt(g) / 1440) * 360).toFixed(2)}deg`);
+      const angle = `${((handMinuteAt(g) / 1440) * 360).toFixed(1)}deg`;
+      if (hand && angle !== lastHand) {
+        lastHand = angle;
+        hand.style.setProperty('--tx-hand', angle);
+      }
       setTimeUi({ chapter });
       // Without the 3D scene the ending is a plain state: reaching the end is midnight.
       if (getTimeUi().sceneStatus !== 'ready') setTimeUi({ midnight: g >= MIDNIGHT_FIRE_AT });
@@ -107,9 +116,14 @@ export function useTimeScroll(rootId: string) {
       const update = (self: ScrollTrigger) => {
         timeMotion.dawnTarget = self.progress;
         const daylight = daylightAt(self.progress);
-        root.style.setProperty('--tx-day', daylight.toFixed(3));
+        const day = daylight.toFixed(2);
+        if (day !== lastDay) {
+          lastDay = day;
+          root.style.setProperty('--tx-day', day);
+        }
         // Past the middle of the dawn the page is light: the site nav follows.
-        root.dataset.dawn = String(daylight > 0.5);
+        const dawnLight = String(daylight > 0.5);
+        if (root.dataset.dawn !== dawnLight) root.dataset.dawn = dawnLight;
       };
       dayTriggers.push(
         ScrollTrigger.create({

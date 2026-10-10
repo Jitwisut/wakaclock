@@ -45,7 +45,7 @@ export function SmoothScroll() {
     const start = async () => {
       const { default: LenisScroll } = await import('lenis');
       if (cancelled) return;
-      lenis = new LenisScroll({ autoRaf: false, lerp: 0.085 });
+      lenis = new LenisScroll({ autoRaf: false, lerp: 0.12 });
       gsap.registerPlugin(ScrollTrigger);
       lenis.on('scroll', ScrollTrigger.update);
       gsap.ticker.add(tick);

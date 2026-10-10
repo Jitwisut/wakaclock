@@ -27,6 +27,9 @@ import { TimeRings } from './time-rings';
 import type { TimeSceneQuality } from '../time-quality';
 import type { BloomEffect } from 'postprocessing';
 
+/** Below this monitor factor (sustained slow frames) the bloom pass is dropped. */
+const BLOOM_MIN_FACTOR = 0.5;
+
 /** Marks the scene ready after its first rendered frame, so the still can fade out. */
 function FirstFrame() {
   const done = useRef(false);
@@ -100,8 +103,11 @@ export default function TimeCanvas({
   quality: TimeSceneQuality;
 }) {
   const slices = useMemo(() => generateDemoDays(quality.days), [quality.days]);
-  const [dpr, setDpr] = useState(Math.min(quality.maxDpr, 1.5));
+  // Opens at the tier's full quality; the monitor only steps it down on sustained slow
+  // frames. (Starting at half and climbing took ~10 s to look right on a fast machine.)
+  const [factor, setFactor] = useState(1);
   const [bloom, setBloom] = useState(quality.bloom);
+  const dpr = 1 + factor * (quality.maxDpr - 1);
   const bloomEffect = useRef<BloomEffect | null>(null);
 
   return (
@@ -121,15 +127,17 @@ export default function TimeCanvas({
     >
       <color args={[SCENE.bg]} attach="background" />
       <fog args={[SCENE.bg, 11, 34]} attach="fog" />
-      {/* Adaptive quality: lower the pixel ratio when frames drop, raise it when idle. */}
+      {/* Adaptive quality: lower the pixel ratio when frames drop, raise it when they
+          recover. No flip-flop fallback: drei counts every step up as a flip, so a fast
+          machine climbing back to full quality would trip it and lose the glow for good. */}
       <PerformanceMonitor
         bounds={() => [45, 58]}
-        flipflops={3}
-        onChange={({ factor }) => setDpr(Math.max(1, Math.min(quality.maxDpr, 1 + factor)))}
-        onFallback={() => {
-          // Struggling device: drop the expensive glow first, then the resolution.
-          setBloom(false);
-          setDpr(1);
+        factor={1}
+        onChange={({ factor: next }) => {
+          setFactor(next);
+          // Struggling device: the expensive glow goes for good once the resolution has
+          // already been cut well down.
+          if (next < BLOOM_MIN_FACTOR) setBloom(false);
         }}
       />
       <TimeRig parallax={quality.parallax} />

@@ -830,7 +830,8 @@ describe('useTimeScroll', () => {
     root.id = 'scroll-root';
     root.innerHTML =
       '<section data-chapter="0"></section><section data-chapter="1"></section>' +
-      '<section data-chapter="2" data-pin></section>';
+      '<section data-chapter="2" data-pin></section>' +
+      '<svg><path class="tx-still-hand"></path></svg>';
     document.body.append(root);
     const now = vi.spyOn(performance, 'now').mockReturnValue(1000);
     const { unmount } = render(<Hook rootId="scroll-root" />);
@@ -865,7 +866,16 @@ describe('useTimeScroll', () => {
     expect(timeMotion.teleport).toBe(false);
     expect(root.dataset.chapter).toBe('1');
     expect(getTimeUi().chapter).toBe(1);
-    expect(root.style.getPropertyValue('--tx-hand')).toMatch(/deg$/);
+    // The hand angle is written on the still hand, never on the root: a root custom
+    // property would restyle the whole experience on every scroll event.
+    const hand = root.querySelector<SVGElement>('.tx-still-hand') as SVGElement;
+    const angle = hand.style.getPropertyValue('--tx-hand');
+    expect(angle).toMatch(/deg$/);
+    expect(root.style.getPropertyValue('--tx-hand')).toBe('');
+    // An update that does not move the hand leaves it alone.
+    const setHand = vi.spyOn(hand.style, 'setProperty');
+    act(() => second.config.onRefresh({ progress: 1 }));
+    expect(setHand).not.toHaveBeenCalled();
     expect(getTimeUi().midnight).toBe(false);
 
     // A jump of more than a screen and a half (anchor, Home/End) snaps and carries no speed.
@@ -938,8 +948,12 @@ describe('useTimeScroll — after the story', () => {
     const dawn = byTrigger(root.querySelector('#tx-dawn') as Element);
     act(() => dawn.config.onUpdate({ progress: 0.25 }));
     expect(timeMotion.dawnTarget).toBe(0.25);
-    expect(root.style.getPropertyValue('--tx-day')).toBe(daylightAt(0.25).toFixed(3));
+    expect(root.style.getPropertyValue('--tx-day')).toBe(daylightAt(0.25).toFixed(2));
     expect(root.dataset.dawn).toBe('false');
+    // The same rounded daylight is not written again.
+    const setDay = vi.spyOn(root.style, 'setProperty');
+    act(() => dawn.config.onUpdate({ progress: 0.25 }));
+    expect(setDay).not.toHaveBeenCalled();
     act(() => dawn.config.onRefresh({ progress: 0.9 }));
     expect(root.dataset.dawn).toBe('true');
 

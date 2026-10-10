@@ -12,7 +12,7 @@ import { useTimeScroll } from './use-time-scroll';
 
 import type { TimeCopyShape } from './time-copy';
 
-/** three.js and the scene download only after the page has painted and gone idle. */
+/** three.js and the scene download as the page loads and mount once it has gone idle. */
 const TimeCanvas = dynamic(() => import('./scene/time-canvas'), { ssr: false });
 
 export function whenIdle(callback: () => void) {
@@ -65,6 +65,9 @@ export function TimeStage({
       setTimeUi({ sceneStatus: 'fallback' });
       return;
     }
+    // Fetch the scene's code straight away, in parallel with the rest of the page, so it is
+    // already there when the page goes idle and the scene mounts without a second wait.
+    void import('./scene/time-canvas');
     return whenIdle(() => {
       setTimeUi({ sceneStatus: 'loading' });
       setQuality(chosen);
