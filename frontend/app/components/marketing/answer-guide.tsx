@@ -14,30 +14,17 @@ import {
   type SiteLocale,
 } from '@/lib/seo/site';
 
+import {
+  EN_MORE_GUIDES,
+  externalReferences,
+  type Guide,
+  type GuideSource,
+  type GuideTable,
+  TH_MORE_GUIDES,
+  tradeoffFor,
+} from './answer-guide-more';
+
 const WAKATIME_DEVELOPER_URL = 'https://wakatime.com/developers';
-
-type GuideSource = {
-  href: string;
-  label: string;
-  note: string;
-};
-
-type GuideTable = {
-  caption: string;
-  columns: readonly [string, string, string];
-  rows: readonly (readonly [string, string, string])[];
-};
-
-type Guide = {
-  answer: string;
-  example: string;
-  facts: readonly (readonly [string, string])[];
-  heading: string;
-  question: string;
-  recommendation: string;
-  sources?: readonly GuideSource[];
-  table?: GuideTable;
-};
 
 const DEFAULT_TABLE: GuideTable = {
   caption: 'How to read coding activity metrics',
@@ -928,7 +915,20 @@ const TH_GUIDES: Record<string, Guide> = {
 };
 
 function guideFor(path: string, locale: SiteLocale): Guide | undefined {
-  return locale === 'th' ? TH_GUIDES[path] : EN_GUIDES[path];
+  return locale === 'th'
+    ? (TH_GUIDES[path] ?? TH_MORE_GUIDES[path])
+    : (EN_GUIDES[path] ?? EN_MORE_GUIDES[path]);
+}
+
+/** The page's own sources first, then its primary external references, without repeats. */
+function sourcesFor(guide: Guide, path: string, locale: SiteLocale): GuideSource[] {
+  const own = guide.sources ?? (locale === 'th' ? THAI_DEFAULT_SOURCES : DEFAULT_SOURCES);
+  const seen = new Set<string>();
+  return [...own, ...externalReferences(path, locale)].filter((source) => {
+    if (seen.has(source.href)) return false;
+    seen.add(source.href);
+    return true;
+  });
 }
 
 export function hasAnswerGuide(path: string, locale: SiteLocale): boolean {
@@ -938,7 +938,8 @@ export function hasAnswerGuide(path: string, locale: SiteLocale): boolean {
 export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path: string }) {
   const guide = guideFor(path, locale);
   if (!guide) return null;
-  const sources = guide.sources ?? (locale === 'th' ? THAI_DEFAULT_SOURCES : DEFAULT_SOURCES);
+  const sources = sourcesFor(guide, path, locale);
+  const tradeoff = tradeoffFor(path, locale);
   const table = guide.table ?? (locale === 'th' ? THAI_DEFAULT_TABLE : DEFAULT_TABLE);
   const reviewDate = contentModified(path, locale) ?? SITE_MODIFIED;
   return (
@@ -1003,6 +1004,14 @@ export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path
         {locale === 'th' ? 'คำแนะนำ' : 'Recommendation'}
       </h3>
       <p className="mt-3 leading-relaxed">{guide.recommendation}</p>
+      {tradeoff ? (
+        <>
+          <h3 className="mt-8 text-lg font-semibold">
+            {locale === 'th' ? 'ข้อจำกัดที่ควรพิจารณา' : 'Trade-offs to weigh'}
+          </h3>
+          <p className="mt-3 leading-relaxed">{tradeoff}</p>
+        </>
+      ) : null}
       <h3 className="mt-8 text-lg font-semibold">
         {locale === 'th' ? 'แหล่งอ้างอิงและการตรวจทาน' : 'Sources and review'}
       </h3>
