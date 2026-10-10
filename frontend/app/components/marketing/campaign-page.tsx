@@ -44,6 +44,8 @@ const COPY = {
     badge: 'Early Access, no card required',
     breadcrumb: 'Join Early Access',
     title: 'Your coding history,\nkept whole.',
+    description:
+      'Join AtoAxis Early Access: WakaTime-compatible developer time tracking with your complete coding history and AI attribution. No card required.',
     lead: `${SITE_NAME} turns editor heartbeats into time, project, language and AI-attribution analytics, and never ages your history out to a recent window. Point an existing WakaTime plugin at it and keep the setup you already have.`,
     primaryCta: 'Get my Early Access key',
     secondaryCta: 'See the 5-minute setup',
@@ -122,6 +124,8 @@ const COPY = {
     badge: 'Early Access ไม่ต้องใช้บัตร',
     breadcrumb: 'เข้าร่วม Early Access',
     title: 'ประวัติการเขียนโค้ดของคุณ\nเก็บไว้ครบทุกวัน',
+    description:
+      'เข้าร่วม Early Access ของ AtoAxis ติดตามเวลาเขียนโค้ดที่รองรับ WakaTime เก็บประวัติครบทุกวัน และแยกงานจาก AI ไม่ต้องใช้บัตรเครดิต',
     lead: `${SITE_NAME} เปลี่ยน heartbeat จาก editor เป็นข้อมูลเวลา โปรเจกต์ ภาษา และ AI attribution โดยไม่ตัดประวัติเหลือเฉพาะช่วงล่าสุด ถ้าคุณมี WakaTime plugin อยู่แล้ว ก็ชี้มาที่นี่ได้เลยโดยไม่ต้องเปลี่ยนวิธีทำงาน`,
     primaryCta: 'ขอ key สำหรับ Early Access',
     secondaryCta: 'ดูวิธีติดตั้งใน 5 นาที',
@@ -199,7 +203,7 @@ export function campaignPageMetadata(locale: SiteLocale) {
   const title = `${SITE_NAME} — ${copy.title.replace('\n', ' ')}`;
 
   return {
-    ...createMarketingMetadata({ description: copy.lead, locale, path: '/join', title }),
+    ...createMarketingMetadata({ description: copy.description, locale, path: '/join', title }),
     // A plain string title is rendered through the root layout's `%s | AtoAxis` template.
     // This one already names the product, so it has to opt out or the brand appears twice.
     title: { absolute: title },

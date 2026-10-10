@@ -71,6 +71,9 @@ export function PageIllustration({ path, locale }: { locale: SiteLocale; path: s
       <Image
         alt={art.alt[locale]}
         height={1024}
+        // One illustration per page and it is the page's largest image, so it is never
+        // lazy: lazy-loading the largest image delays LCP whenever it is near the top.
+        loading="eager"
         preload={path === '/ai-coding-tracker' || path === '/integrations'}
         sizes="(max-width: 767px) 76vw, 340px"
         src={art.src}

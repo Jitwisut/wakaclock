@@ -11,10 +11,13 @@ import {
   webPageSchema,
 } from '@/lib/seo/schema';
 import {
+  contentModified,
   createMarketingMetadata,
+  FOUNDER,
   localizedPath,
   ORGANIZATION,
   PUBLIC_EVIDENCE_URL,
+  SITE_MODIFIED,
   SITE_NAME,
   type SiteLocale,
 } from '@/lib/seo/site';
@@ -137,7 +140,9 @@ function howToSteps(sections: readonly MarketingSectionCopy[]): HowToStep[] {
 
 function PageIndex({ copy, locale }: { copy: ReturnType<typeof getCopy>; locale: SiteLocale }) {
   return (
-    <aside className="mkt-page-index">
+    // A plain block, not <aside>: crawlers drop asides as sidebar boilerplate, and this is
+    // the page's table of contents.
+    <div className="mkt-page-index">
       <nav aria-label={locale === 'th' ? 'หัวข้อในหน้านี้' : 'On this page'}>
         <p className="mkt-index-label">{locale === 'th' ? 'หัวข้อในหน้านี้' : 'On this page'}</p>
         <ol>
@@ -163,7 +168,23 @@ function PageIndex({ copy, locale }: { copy: ReturnType<typeof getCopy>; locale:
           ) : null}
         </ol>
       </nav>
-    </aside>
+    </div>
+  );
+}
+
+/** Who wrote the page and when it was last reviewed, as plain, linkable text. */
+function Byline({ locale, path }: { locale: SiteLocale; path: MarketingPageKey }) {
+  const reviewed = contentModified(path, locale) ?? SITE_MODIFIED;
+  const th = locale === 'th';
+  return (
+    <p className="mkt-byline">
+      {th ? 'เขียนโดย ' : 'By '}
+      <a href={localizedPath(locale, '/about')} rel="author">
+        {FOUNDER.name}
+      </a>
+      , {th ? FOUNDER.thJobTitle : FOUNDER.jobTitle}, {SITE_NAME} · {th ? 'ตรวจทาน ' : 'Reviewed '}
+      <time dateTime={reviewed}>{reviewed}</time>
+    </p>
   );
 }
 
@@ -254,6 +275,7 @@ export function LocalizedMarketingPage({
             ) : null}
             <PageTitle>{copy.title}</PageTitle>
             <LeadAnswer>{copy.lead}</LeadAnswer>
+            <Byline locale={locale} path={path} />
           </header>
           <PlacedIllustration locale={locale} path={path} placement="intro" />
         </div>

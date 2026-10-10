@@ -123,6 +123,15 @@ export function Bullets({ items }: { items: readonly string[] }) {
   );
 }
 
+/**
+ * Escapes only what HTML text requires. React's own escaping also turns every `"` and `'`
+ * into `&quot;` / `&#x27;`, which is valid but makes JSON and shell samples read as runs of
+ * the word "quot" to any crawler that does not decode entities.
+ */
+function escapeCode(value: string) {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+
 export function CodeBlock({ children, label }: { children: string; label?: string }) {
   return (
     <figure
@@ -148,7 +157,9 @@ export function CodeBlock({ children, label }: { children: string; label?: strin
           fontFamily: 'var(--font-mkt-body), ui-monospace, monospace',
         }}
       >
-        <code>{children}</code>
+        {/* Escaped by escapeCode above; the sample text is static copy, never user input. */}
+        {/* eslint-disable-next-line react/no-danger */}
+        <code dangerouslySetInnerHTML={{ __html: escapeCode(children) }} />
       </pre>
     </figure>
   );

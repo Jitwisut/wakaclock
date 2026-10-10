@@ -6,6 +6,7 @@ import Link from 'next/link';
 
 import {
   contentModified,
+  FOUNDER,
   localizedPath,
   PRICING,
   PUBLIC_EVIDENCE_URL,
@@ -956,7 +957,9 @@ export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path
       <dl className="mt-4 divide-y divide-current/15">
         {guide.facts.map(([term, definition]) => (
           <div className="grid gap-2 py-4 sm:grid-cols-[10rem_1fr]" key={term}>
-            <dt className="font-semibold">{term}:</dt>
+            <dt>
+              <strong>{term}:</strong>
+            </dt>
             <dd>{definition}</dd>
           </div>
         ))}
@@ -1004,11 +1007,12 @@ export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path
         {locale === 'th' ? 'แหล่งอ้างอิงและการตรวจทาน' : 'Sources and review'}
       </h3>
       <p className="mt-3">
-        {locale === 'th' ? 'จัดทำโดย' : 'Prepared by the'}{' '}
-        <Link className="underline" href={localizedPath(locale, '/about')}>
-          {locale === 'th' ? 'ทีมพัฒนา AtoAxis' : 'AtoAxis development team'}
+        {locale === 'th' ? 'เขียนและตรวจทานโดย' : 'Written and reviewed by'}{' '}
+        <Link className="underline" href={localizedPath(locale, '/about')} rel="author">
+          {FOUNDER.name}
         </Link>
-        . {locale === 'th' ? 'ตรวจทานเมื่อ ' : 'Reviewed '}
+        , {locale === 'th' ? FOUNDER.thJobTitle : FOUNDER.jobTitle} {locale === 'th' ? 'ของ' : 'of'}{' '}
+        AtoAxis. {locale === 'th' ? 'ตรวจทานเมื่อ ' : 'Reviewed '}
         <time dateTime={reviewDate}>{reviewDate}</time>.{' '}
         {locale === 'th'
           ? 'ข้อความเกี่ยวกับผลิตภัณฑ์อ้างอิงจากระบบที่พัฒนาอยู่ ตัวอย่างเป็นข้อมูลสมมติ ไม่ใช่งานวิจัยหรือข้อมูลลูกค้า'
@@ -1019,11 +1023,11 @@ export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path
           <li key={source.href}>
             {source.href.startsWith('/') ? (
               <Link className="underline" href={localizedPath(locale, source.href)}>
-                {source.label}
+                <cite>{source.label}</cite>
               </Link>
             ) : (
               <a className="underline" href={source.href} rel="noopener noreferrer">
-                {source.label}
+                <cite>{source.label}</cite>
               </a>
             )}
             : {source.note}.

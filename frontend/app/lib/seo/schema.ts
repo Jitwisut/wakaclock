@@ -1,6 +1,7 @@
 import {
   absoluteUrl,
   contentModified,
+  FOUNDER,
   localizedPath,
   ORGANIZATION,
   PRODUCT_ANSWER,
@@ -21,6 +22,7 @@ import {
 
 type JsonLdValue = Record<string, unknown>;
 const ORGANIZATION_ID = absoluteUrl('/#organization');
+const FOUNDER_ID = absoluteUrl('/about#founder');
 
 export interface FaqEntry {
   answer: string;
@@ -45,7 +47,9 @@ export function organizationSchema(): JsonLdValue {
     legalName: ORGANIZATION.legalName,
     logo: ORGANIZATION.logo,
     name: ORGANIZATION.name,
+    sameAs: [...ORGANIZATION.sameAs],
     url: ORGANIZATION.url,
+    founder: { '@id': FOUNDER_ID },
     contactPoint: {
       '@type': 'ContactPoint',
       contactType: 'customer support',
@@ -56,11 +60,24 @@ export function organizationSchema(): JsonLdValue {
 }
 
 /**
- * The site is written and maintained by the company, not by individual bylined authors,
- * so `author` points at the Organization entity rather than a Person. Schema.org permits
- * either, and naming a person who does not actually write these pages would be a
- * fabricated credential — the same reason there is no `Review` or `aggregateRating` here.
+ * The founder, who writes and reviews the site's pages. Pages name this Person as their
+ * author; the company stays the publisher. Only the owner-confirmed profile is listed in
+ * `sameAs` — an invented profile would be a fabricated credential, the same reason there
+ * is no `Review` or `aggregateRating` here.
  */
+export function founderSchema(): JsonLdValue {
+  return {
+    '@type': 'Person',
+    '@id': FOUNDER_ID,
+    name: FOUNDER.name,
+    jobTitle: FOUNDER.jobTitle,
+    url: absoluteUrl('/about'),
+    sameAs: [...FOUNDER.sameAs],
+    worksFor: { '@id': ORGANIZATION_ID },
+    knowsAbout: ['Developer time tracking', 'WakaTime API', 'AI coding attribution'],
+  };
+}
+
 export function websiteSchema(): JsonLdValue {
   return {
     '@type': 'WebSite',
@@ -69,7 +86,7 @@ export function websiteSchema(): JsonLdValue {
     url: SITE_URL,
     inLanguage: ['en', 'th'],
     dateModified: SITE_MODIFIED,
-    author: { '@id': ORGANIZATION_ID },
+    author: { '@id': FOUNDER_ID },
     publisher: { '@id': ORGANIZATION_ID },
   };
 }
@@ -206,9 +223,12 @@ export function webPageSchema({
     description,
     inLanguage: locale === 'th' ? 'th-TH' : 'en',
     ...(contentModified(path, locale) ? { dateModified: contentModified(path, locale) } : {}),
-    author: { '@id': ORGANIZATION_ID },
+    author: { '@id': FOUNDER_ID },
+    reviewedBy: { '@id': FOUNDER_ID },
     isPartOf: { '@id': absoluteUrl('/#website') },
     publisher: { '@id': ORGANIZATION_ID },
+    // The page title and the opening answer are the passages written to be read aloud.
+    speakable: { '@type': 'SpeakableSpecification', cssSelector: ['h1', '.axis-page-lead'] },
     hasPart: sections.map((section) => ({
       '@type': 'WebPageElement',
       '@id': `${url}#${section.id}`,
