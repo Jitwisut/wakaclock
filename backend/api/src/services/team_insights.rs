@@ -147,10 +147,34 @@ impl TeamInsightsService {
         let users: Vec<_> = scope.contributors.iter().map(|c| c.user_id).collect();
         let facts = repo.facts(&users, from as u32, to as u32).await?;
         let mut projection = project_cost(&facts, &scope, &range)?;
+        let retention = crate::services::team_trust::cutoff(Utc::now());
+        let cumulative = repo
+            .facts(&users, retention.timestamp() as u32, to as u32)
+            .await?;
+        let mut merged_links = repo
+            .merged_links(
+                org,
+                team,
+                DateTime::from_timestamp(from as i64, 0).context("range start")?,
+                DateTime::from_timestamp(to as i64, 0).context("range end")?,
+            )
+            .await?;
+        for link in &mut merged_links {
+            link.visible &= scope
+                .contributors
+                .iter()
+                .any(|c| Some(c.user_id) == link.user);
+        }
+        let mut merged =
+            crate::services::team_merged_cost::calculate(&cumulative, &merged_links, retention)?;
+
         // Hash metadata in memory only. The registry stores no raw usage or credentials.
         use sha2::{Digest, Sha256};
-        let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&facts)?));
-        let people = facts
+        let fingerprint = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(&facts, &cumulative, &merged_links))?)
+        );
+        let mut people: BTreeSet<Uuid> = facts
             .iter()
             .filter(|f| {
                 scope
@@ -165,23 +189,49 @@ impl TeamInsightsService {
             })
             .map(|f| f.user_id)
             .collect();
-        if projection.0.value.is_some()
+
+        if merged.cost_microusd.value.is_some()
+            && !crate::services::team_merged_cost::joint_partition(
+                &cumulative,
+                (from as u32, to as u32),
+                &people,
+                &merged,
+            )
+        {
+            merged = crate::services::team_merged_cost::MergedCost::withheld(
+                "joint_metric_privacy_suppressed",
+            );
+        }
+        let mut publication_facts: BTreeSet<String> = facts
+            .iter()
+            .map(|f| usage_identity(f.user_id, &f.usage_event_id))
+            .collect();
+        publication_facts.extend(
+            merged
+                .admitted
+                .iter()
+                .map(|(user, event)| usage_identity(*user, event)),
+        );
+        people.extend(merged.people.iter().copied());
+        if (projection.0.value.is_some() || merged.cost_microusd.value.is_some())
             && !trust
-                .release(
+                .release_with_facts(
                     org,
                     range.start,
                     &team.map_or_else(|| "organization".into(), |id| id.to_string()),
                     scope.generation,
                     &fingerprint,
                     &people,
+                    Some(&publication_facts),
                 )
                 .await?
         {
             projection = (Metric::unavailable("privacy_suppressed"), vec![]);
+            merged = crate::services::team_merged_cost::MergedCost::withheld("privacy_suppressed");
         }
 
         // No numeric publication is acknowledged before its independent history is durable.
-        if projection.0.value.is_some() {
+        if projection.0.value.is_some() || merged.cost_microusd.value.is_some() {
             let path = std::env::var("ATOAXIS_TEAM_PRIVACY_LEDGER_PATH")?;
             trust.export_registry(std::path::Path::new(&path)).await?;
         }
@@ -219,7 +269,8 @@ impl TeamInsightsService {
             generation: scope.generation,
             estimated_ai_cost_microusd: projection.0,
             provider_breakdown: projection.1,
-            merged_pr_cost_microusd: Metric::unavailable("confirmed_usage_allocation_not_ready"),
+            merged_pr_cost_microusd: merged.cost_microusd.clone(),
+            merged_pr_cost: merged,
             currency: "USD",
             measurement_health: vec!["capture_delivery_coverage_unconfirmed"],
             production_ready: false,
@@ -318,16 +369,75 @@ impl TeamInsightsService {
         repository: Uuid,
         item: i64,
     ) -> Result<WorkReceipt> {
-        let repo = self.readable(actor, org, team).await?;
-        let scope = repo.scope(org, team).await?;
+        self.receipt_page(actor, org, team, repository, item, None, false)
+            .await
+    }
+    pub async fn validate_own_response(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        generation: i64,
+    ) -> Result<()> {
+        self.authorization
+            .require(actor, org, OrganizationAction::ReadSelf, None)
+            .await?;
+        let repo = self.repo()?;
+        anyhow::ensure!(
+            self.enabled && repo.enabled(org).await?,
+            TeamError::Disabled
+        );
+        crate::repository::team_trust::TeamTrustRepository::new(repo.postgres.clone())
+            .guard(org)
+            .await?;
+        anyhow::ensure!(
+            repo.generation(org).await? == generation,
+            TeamError::ProjectionChanged
+        );
+        Ok(())
+    }
+    pub async fn receipt_page(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        team: Option<Uuid>,
+        repository: Uuid,
+        item: i64,
+        after: Option<Uuid>,
+        owner_only: bool,
+    ) -> Result<WorkReceipt> {
+        let repo = if owner_only {
+            self.authorization
+                .require(actor, org, OrganizationAction::ReadSelf, None)
+                .await?;
+            let repo = self.repo()?;
+            self.validate_own_response(actor, org, repo.generation(org).await?)
+                .await?;
+            let work_team = repo
+                .work_item_team(org, repository, item)
+                .await?
+                .ok_or(TeamError::NotFound)?;
+            if let Some(t) = work_team {
+                self.authorization
+                    .require_team_read(actor, org, Some(t))
+                    .await?;
+            }
+            repo
+        } else {
+            self.readable(actor, org, team).await?
+        };
+        let mut scope = repo.scope(org, team).await?;
+        if owner_only {
+            scope.contributors.retain(|c| c.user_id == actor);
+        }
         let project = repo
             .work_item_project(org, repository, item)
             .await?
             .ok_or(TeamError::NotFound)?;
         anyhow::ensure!(scope.projects.contains(&project), TeamError::NotFound);
+        let until = repo.work_item_merge(org, repository, item).await?;
         let links = repo.receipt_links(org, repository, item, team).await?;
         anyhow::ensure!(
-            links.len() <= 200,
+            links.len() <= 10_000,
             TeamError::Invalid("receipt is too large")
         );
         let mut sessions = vec![];
@@ -335,11 +445,22 @@ impl TeamInsightsService {
         let mut any = false;
         let mut partial = false;
         let mut updated = None;
+        let mut pricing_versions = BTreeSet::new();
         let retention_start = Utc::now() - chrono::Months::new(12);
-        for record in links {
+        for record in links
+            .into_iter()
+            .filter(|r| !owner_only || r.user_id == actor)
+        {
             let facts = repo
                 .session_facts(record.user_id, &record.link.session_id)
-                .await?;
+                .await?
+                .into_iter()
+                .filter(|f| {
+                    until.is_none_or(|end| {
+                        DateTime::from_timestamp(f.event_time as i64, 0).is_some_and(|at| at <= end)
+                    })
+                })
+                .collect::<Vec<_>>();
             anyhow::ensure!(
                 facts.len() <= 10_000,
                 TeamError::Invalid("session is too large")
@@ -390,6 +511,7 @@ impl TeamInsightsService {
                 .into_iter()
                 .filter(|f| allocated.contains(&usage_identity(f.user_id, &f.usage_event_id)))
                 .collect::<Vec<_>>();
+            pricing_versions.extend(admitted.iter().filter_map(|f| f.pricing_version.clone()));
             let mut cost = receipt_cost_projects(&admitted, &record.projects, since)?;
             if cost.value.is_some() {
                 cost.status = "partial";
@@ -410,13 +532,13 @@ impl TeamInsightsService {
                 allocation: "confirmed_single_work_item",
             });
         }
-        self.authorization
-            .require_team_read(actor, org, team)
-            .await?;
-        if !repo.enabled(org).await? || repo.generation(org).await? != scope.generation {
-            return Err(TeamError::ProjectionChanged.into());
+        if owner_only {
+            self.validate_own_response(actor, org, scope.generation)
+                .await?;
+        } else {
+            self.validate_response(actor, org, team, scope.generation)
+                .await?;
         }
-        self.readable(actor, org, team).await?;
         let sharing = if sessions.is_empty() {
             "withheld_or_unlinked"
         } else {
@@ -439,13 +561,29 @@ impl TeamInsightsService {
         } else {
             Metric::unavailable("withheld_or_unallocated")
         };
+        sessions.sort_by_key(|b| std::cmp::Reverse(b.link_id));
+        let remaining = sessions
+            .into_iter()
+            .filter(|s| after.is_none_or(|a| s.link_id < a))
+            .collect::<Vec<_>>();
+        let more = remaining.len() > 50;
+        let sessions = remaining.into_iter().take(50).collect::<Vec<_>>();
+        let next = if more {
+            sessions.last().map(|s| s.link_id)
+        } else {
+            None
+        };
         Ok(WorkReceipt {
+            next,
             repository_id: repository,
             work_item_id: item,
             sessions,
             estimated_cost_microusd: metric,
             sharing,
             generation: scope.generation,
+            cost_until: until,
+            pricing_versions: pricing_versions.into_iter().collect(),
+            calculation_version: "confirmed_observed_usage_to_merge_v1",
         })
     }
 
@@ -504,6 +642,16 @@ impl TeamInsightsService {
     }
 
     pub async fn decide(&self, actor: Uuid, org: Uuid, id: Uuid, status: &str) -> Result<WorkLink> {
+        self.decide_revision(actor, org, id, status, None).await
+    }
+    pub async fn decide_revision(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        id: Uuid,
+        status: &str,
+        expected: Option<i64>,
+    ) -> Result<WorkLink> {
         self.authorization
             .require(actor, org, OrganizationAction::ReadSelf, None)
             .await?;
@@ -519,9 +667,93 @@ impl TeamInsightsService {
             return Err(TeamError::Invalid("aggregate consent required").into());
         }
         self.repo()?
-            .decide_link(org, actor, id, status)
+            .decide_link_revision(org, actor, id, status, expected)
             .await?
-            .ok_or_else(|| TeamError::NotFound.into())
+            .ok_or_else(|| {
+                if expected.is_some() {
+                    TeamError::ProjectionChanged.into()
+                } else {
+                    TeamError::NotFound.into()
+                }
+            })
+    }
+
+    pub async fn links_page(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        after: Option<Uuid>,
+    ) -> Result<serde_json::Value> {
+        self.authorization
+            .require(actor, org, OrganizationAction::ReadSelf, None)
+            .await?;
+        let repo = self.repo()?;
+        let generation = repo.generation(org).await?;
+        let result = repo.links_page(org, actor, after).await?;
+        self.authorization
+            .require(actor, org, OrganizationAction::ReadSelf, None)
+            .await?;
+        anyhow::ensure!(
+            repo.generation(org).await? == generation,
+            TeamError::ProjectionChanged
+        );
+        Ok(result)
+    }
+    pub async fn replace(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        id: Uuid,
+        input: LinkReplacement,
+    ) -> Result<WorkLink> {
+        anyhow::ensure!(
+            input.expected_revision > 0,
+            TeamError::Invalid("revision required")
+        );
+        self.authorization
+            .require(actor, org, OrganizationAction::ReadSelf, None)
+            .await?;
+        let old = self
+            .repo()?
+            .link(org, actor, id)
+            .await?
+            .ok_or(TeamError::NotFound)?;
+        let target = self
+            .propose(
+                actor,
+                org,
+                LinkRequest {
+                    session_id: old.session_id,
+                    repository_id: input.repository_id,
+                    work_item_id: input.work_item_id,
+                },
+            )
+            .await?;
+        self.repo()?
+            .replace_link(org, actor, id, target.id, input.expected_revision)
+            .await
+    }
+    pub async fn history(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        id: Uuid,
+        after: Option<Uuid>,
+    ) -> Result<serde_json::Value> {
+        self.authorization
+            .require(actor, org, OrganizationAction::ReadSelf, None)
+            .await?;
+        let repo = self.repo()?;
+        let generation = repo.generation(org).await?;
+        let result = repo.link_history(org, actor, id, after).await?;
+        self.authorization
+            .require(actor, org, OrganizationAction::ReadSelf, None)
+            .await?;
+        anyhow::ensure!(
+            repo.generation(org).await? == generation,
+            TeamError::ProjectionChanged
+        );
+        Ok(result)
     }
 }
 

@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import re
 ROOT=Path(__file__).resolve().parents[1]
-FIELDS={'schema_version','session_id','tool','os','architecture','provider_version','client_version','build_sha','activity_origin','started_at','ended_at','metrics','expected_ledger_sha256','server_evidence_sha256','inline_ledger_sha256'}
+FIELDS={'schema_version','session_id','tool','os','architecture','provider_version','client_version','build_sha','activity_origin','started_at','ended_at','metrics','expected_ledger_sha256','server_evidence_sha256','inline_ledger_sha256','availability_reasons','approved_limitation_refs'}
 METRICS={'repository_identity','branch','commit_sha','context_delivery','usage','suggested','accepted','agent_edits'}
 HEX=re.compile(r'^[a-f0-9]{64}$')
 
@@ -34,7 +34,23 @@ def validate(record):
     metrics=record.get('metrics',{})
     if set(metrics)!=METRICS or any(v not in ('observed','unavailable','pending','failed') for v in metrics.values()):raise ValueError('each metric needs an explicit availability verdict')
     if record['tool'] in ('cursor_ide','copilot_vscode') and not HEX.fullmatch(record.get('inline_ledger_sha256','')):raise ValueError('independent inline ledger required')
+    reasons=record.get('availability_reasons',{})
+    approvals=record.get('approved_limitation_refs',{})
+    if set(reasons)-METRICS or set(approvals)-METRICS:raise ValueError('non-allowlisted metric availability metadata')
+    for metric,status in metrics.items():
+        if status in ('unavailable','pending','failed'):
+            if not re.fullmatch(r'[a-z0-9_]{1,96}',reasons.get(metric,'')):raise ValueError('explicit content-free availability reason required: '+metric)
+        if metric in approvals and not HEX.fullmatch(approvals[metric]):raise ValueError('owner-reviewed limitation evidence hash required')
     return record
+
+def verdict(records,matrix):
+    blockers=[]
+    if not all(n>=10 for n in matrix.values()):blockers.append('session_matrix_incomplete')
+    if any(v in ('pending','failed') for r in records for v in r['metrics'].values()):blockers.append('metric_pending_or_failed')
+    if any(v=='unavailable' and not r.get('approved_limitation_refs',{}).get(m) for r in records for m,v in r['metrics'].items()):blockers.append('provider_limitation_requires_owner_review')
+    # A hash is intake only; verify its referenced ledger and approval before signing a certificate.
+    blockers.extend(['referenced_ledgers_not_independently_verified','second_github_account_pending','live_staging_gates_not_verified'])
+    return {'matrix':matrix,'minimum_sessions_present':all(n>=10 for n in matrix.values()),'certificate_status':'pending','blockers':blockers,'production_ready':False}
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('reports',type=Path,nargs='+');args=parser.parse_args()
@@ -44,6 +60,6 @@ def main():
     builds={r['build_sha'] for r in records}
     if len(builds)>1:raise SystemExit('Mac and Windows must use the same clean build SHA')
     matrix={tool+':'+os:sum(r['tool']==tool and r['os']==os for r in records) for tool in ('codex','claude_code','cursor_ide','copilot_vscode') for os in ('macos','windows')}
-    print(json.dumps({'matrix':matrix,'minimum_sessions_present':all(n>=10 for n in matrix.values()),'certificate_status':'pending_independent_review','provider_limits_require_owner_review':any(v=='unavailable' for r in records for v in r['metrics'].values())},indent=2))
+    print(json.dumps(verdict(records,matrix),indent=2))
 
 if __name__=='__main__':main()

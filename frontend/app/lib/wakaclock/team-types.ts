@@ -29,6 +29,14 @@ export interface TeamInsights {
   estimated_ai_cost_microusd: TeamMetric;
   generation: number;
   measurement_health: string[];
+  merged_pr_cost?: {
+    average_microusd: TeamMetric;
+    calculation_version: string;
+    complete_prs: TeamMetric;
+    pricing_versions: string[];
+    with_cost: TeamMetric;
+    without_cost: TeamMetric;
+  };
   merged_pr_cost_microusd: TeamMetric;
   organization_id: string;
   production_ready: boolean;
@@ -54,8 +62,12 @@ export interface TeamWorkItem {
 }
 
 export interface WorkReceipt {
+  calculation_version?: string;
+  cost_until?: null | string;
   estimated_cost_microusd: TeamMetric;
   generation: number;
+  next?: null | string;
+  pricing_versions?: string[];
   repository_id: string;
   sessions: Array<{
     allocation: string;

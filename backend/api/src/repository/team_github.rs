@@ -28,6 +28,28 @@ pub struct SyncFact {
     pub metadata: Value,
 }
 impl GithubRepositoryStore {
+    pub async fn selected_repository(&self, org: Uuid, full: &str) -> Result<Option<Row>> {
+        self.pg.query_opt("SELECT s.github_repository_id FROM team_github_repositories r JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE r.organization_id=$1 AND r.full_name=$2 AND s.enabled",&[&org,&full]).await
+    }
+
+    pub async fn session_links(
+        &self,
+        org: Uuid,
+        user: Uuid,
+        session: &str,
+    ) -> Result<Vec<tokio_postgres::Row>> {
+        self.pg.query("SELECT id,status,revision,repository_id,work_item_id FROM team_session_links l JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE l.organization_id=$1 AND l.user_id=$2 AND l.session_id=$3 AND s.enabled AND (s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.role IN ('owner','admin') AND m.deactivated_at IS NULL)) AND l.created_at>=now()-interval '12 months' ORDER BY l.id",&[&org,&user,&session]).await
+    }
+    pub async fn session_verifications(
+        &self,
+        org: Uuid,
+        user: Uuid,
+        session: &str,
+        from: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<tokio_postgres::Row>> {
+        self.pg.query("SELECT verification,verification_reason FROM team_session_contexts c JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE c.organization_id=$1 AND c.user_id=$2 AND c.session_id=$3 AND s.enabled AND (s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.role IN ('owner','admin') AND m.deactivated_at IS NULL)) AND c.occurred_at>=$4",&[&org,&user,&session,&from]).await
+    }
+
     pub fn new(pg: Arc<PostgresClient>) -> Self {
         Self { pg }
     }
@@ -237,17 +259,32 @@ impl GithubRepositoryStore {
         event: &SessionContext,
         hash: &str,
     ) -> Result<()> {
+        self.store_context(org, user, event, hash, "verified").await
+    }
+    pub async fn store_context(
+        &self,
+        org: Uuid,
+        user: Uuid,
+        event: &SessionContext,
+        hash: &str,
+        verification: &str,
+    ) -> Result<()> {
+        ensure!(
+            matches!(verification, "verified" | "pending"),
+            "invalid verification state"
+        );
         let mut client = self.pg.transaction_client().await?;
         let tx = client.transaction().await?;
         let row=tx.query_opt("SELECT c.individual_from FROM organization_analytics_consents c JOIN organization_members m USING(organization_id,user_id) JOIN users u ON u.id=m.user_id WHERE c.organization_id=$1 AND c.user_id=$2 AND c.share_individual AND c.individual_from<=$3 AND m.deactivated_at IS NULL AND m.seat_type='developer' AND m.role<>'viewer' AND u.is_active AND u.deleted_at IS NULL FOR SHARE OF c,m",&[&org,&user,&event.occurred_at]).await?;
         ensure!(row.is_some(), "individual consent required for context");
+        ensure!(tx.query_opt("SELECT 1 FROM team_webhook_dispositions WHERE provider='session_context' AND delivery_id=$1", &[&format!("{user}:{}",event.event_id)]).await?.is_none(), "context event previously disposed");
         ensure!(tx.query_opt("SELECT 1 FROM team_member_project_bindings b JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE b.organization_id=$1 AND b.user_id=$2 AND b.project_id=$3 AND b.repository_id=$4 AND s.enabled AND (s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.deactivated_at IS NULL AND m.role IN ('owner','admin'))) FOR SHARE OF b,s",&[&org,&user,&event.project_id,&event.repository_id]).await?.is_some(),"repository binding missing");
-        ensure!(tx.query_opt("INSERT INTO team_session_contexts(organization_id,user_id,event_id,payload_hash,session_id,collector_id,project_id,repository_id,occurred_at,branch,commit_sha,provenance) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(user_id,event_id) DO UPDATE SET event_id=EXCLUDED.event_id WHERE team_session_contexts.payload_hash=EXCLUDED.payload_hash RETURNING event_id",&[&org,&user,&event.event_id,&hash,&event.session_id,&event.collector_id,&event.project_id,&event.repository_id,&event.occurred_at,&event.branch,&event.commit_sha,&event.provenance]).await?.is_some(),"context identity conflict");
+        ensure!(tx.query_opt("INSERT INTO team_session_contexts(organization_id,user_id,event_id,payload_hash,session_id,collector_id,project_id,repository_id,occurred_at,branch,commit_sha,provenance,verification) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(user_id,event_id) DO UPDATE SET event_id=EXCLUDED.event_id WHERE team_session_contexts.payload_hash=EXCLUDED.payload_hash AND team_session_contexts.organization_id=EXCLUDED.organization_id RETURNING event_id",&[&org,&user,&event.event_id,&hash,&event.session_id,&event.collector_id,&event.project_id,&event.repository_id,&event.occurred_at,&event.branch,&event.commit_sha,&event.provenance,&verification]).await?.is_some(),"context identity conflict");
         tx.commit().await?;
         Ok(())
     }
     pub async fn suggestions(&self, org: Uuid, user: Uuid) -> Result<Value> {
-        let rows=self.pg.query("SELECT c.session_id,c.repository_id,c.branch,c.commit_sha,w.external_id,w.number FROM team_session_contexts c JOIN team_repository_scopes s USING(organization_id,repository_id) JOIN team_work_items w ON w.organization_id=c.organization_id AND w.repository_id=c.repository_id AND w.kind='pull_request' AND w.head_branch=c.branch AND w.head_sha=c.commit_sha AND w.head_repository_id=s.github_repository_id JOIN organization_analytics_consents consent ON consent.organization_id=c.organization_id AND consent.user_id=c.user_id AND consent.share_individual AND c.occurred_at>=consent.individual_from WHERE c.organization_id=$1 AND c.user_id=$2 AND s.enabled AND (s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.role IN ('owner','admin') AND m.deactivated_at IS NULL)) AND c.occurred_at>=now()-interval '12 months' AND c.commit_sha IS NOT NULL AND w.state='open' AND NOT EXISTS(SELECT 1 FROM team_session_links l WHERE l.organization_id=c.organization_id AND l.user_id=c.user_id AND l.session_id=c.session_id AND l.repository_id=c.repository_id AND l.work_item_id=w.external_id AND l.status IN ('confirmed','rejected')) ORDER BY c.occurred_at DESC LIMIT 201",&[&org,&user]).await?;
+        let rows=self.pg.query("SELECT c.session_id,c.repository_id,c.branch,c.commit_sha,w.external_id,w.number FROM team_session_contexts c JOIN team_repository_scopes s USING(organization_id,repository_id) JOIN team_work_items w ON w.organization_id=c.organization_id AND w.repository_id=c.repository_id AND w.kind='pull_request' AND w.head_branch=c.branch AND w.head_sha=c.commit_sha AND w.head_repository_id=s.github_repository_id JOIN organization_analytics_consents consent ON consent.organization_id=c.organization_id AND consent.user_id=c.user_id AND consent.share_individual AND c.occurred_at>=consent.individual_from WHERE c.organization_id=$1 AND c.user_id=$2 AND s.enabled AND (s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.role IN ('owner','admin') AND m.deactivated_at IS NULL)) AND c.occurred_at>=now()-interval '12 months' AND c.verification='verified' AND c.commit_sha IS NOT NULL AND w.opened_at<=c.occurred_at AND (w.closed_at IS NULL OR c.occurred_at<=w.closed_at) AND (w.merged_at IS NULL OR c.occurred_at<=w.merged_at) AND NOT EXISTS(SELECT 1 FROM team_session_links l WHERE l.organization_id=c.organization_id AND l.user_id=c.user_id AND l.session_id=c.session_id AND l.repository_id=c.repository_id AND l.work_item_id=w.external_id AND l.status IN ('confirmed','rejected')) ORDER BY c.occurred_at DESC LIMIT 201",&[&org,&user]).await?;
         ensure!(rows.len() <= 200, "suggestion page too large");
         let mut groups = std::collections::BTreeMap::new();
         for r in rows {
@@ -261,7 +298,107 @@ impl GithubRepositoryStore {
         }
         Ok(json!(groups.into_iter().map(|((session,repo),items)|json!({"session_id":session,"repository_id":repo,"status":if items.len()==1{"proposed"}else{"unresolved"},"evidence":"repository_branch_commit","candidates":items.into_iter().map(|(id,number)|json!({"external_id":id,"number":number})).collect::<Vec<_>>()})).collect::<Vec<_>>()))
     }
+
+    pub async fn own_projects(&self, org: Uuid, user: Uuid) -> Result<Vec<Uuid>> {
+        Ok(self.pg.query("SELECT DISTINCT COALESCE(b.project_id,s.project_id) FROM team_repository_scopes s LEFT JOIN team_member_project_bindings b ON b.organization_id=s.organization_id AND b.repository_id=s.repository_id AND b.user_id=$2 WHERE s.organization_id=$1 AND s.enabled AND (s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.deactivated_at IS NULL AND m.role IN ('owner','admin')))",&[&org,&user]).await?.into_iter().map(|r|r.get(0)).collect())
+    }
+    pub async fn candidates(&self, org: Uuid, user: Uuid, session: &str) -> Result<Value> {
+        let rows=self.pg.query("SELECT DISTINCT w.repository_id,w.external_id,w.number,w.state FROM team_session_contexts c JOIN team_repository_scopes s USING(organization_id,repository_id) JOIN team_work_items w ON w.organization_id=c.organization_id AND w.repository_id=c.repository_id AND w.kind='pull_request' AND w.head_branch=c.branch AND w.head_sha=c.commit_sha AND w.head_repository_id=s.github_repository_id JOIN organization_analytics_consents consent ON consent.organization_id=c.organization_id AND consent.user_id=c.user_id AND consent.share_individual AND c.occurred_at>=consent.individual_from WHERE c.organization_id=$1 AND c.user_id=$2 AND c.session_id=$3 AND s.enabled AND c.verification='verified' AND c.occurred_at>=now()-interval '12 months' AND w.opened_at<=c.occurred_at AND (w.closed_at IS NULL OR c.occurred_at<=w.closed_at) AND (w.merged_at IS NULL OR c.occurred_at<=w.merged_at) AND (s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.role IN ('owner','admin') AND m.deactivated_at IS NULL)) AND NOT EXISTS(SELECT 1 FROM team_session_links l WHERE l.organization_id=c.organization_id AND l.user_id=c.user_id AND l.session_id=c.session_id AND l.repository_id=c.repository_id AND l.work_item_id=w.external_id AND l.status IN ('confirmed','rejected')) ORDER BY w.repository_id,w.external_id LIMIT 101",&[&org,&user,&session]).await?;
+        ensure!(
+            rows.len() <= 100,
+            GithubInputError("candidate limit exceeded; use paginated work selection")
+        );
+        Ok(json!(rows.into_iter().map(|r|json!({"repository_id":r.get::<_,Uuid>(0),"external_id":r.get::<_,i64>(1),"number":r.get::<_,i32>(2),"state":r.get::<_,String>(3)})).collect::<Vec<_>>()))
+    }
+
+    pub async fn retry_contexts(&self, org: Uuid, user: Uuid) -> Result<u64> {
+        self.pg.execute("UPDATE team_session_contexts e SET verification='pending',verification_attempts=0,verification_retry_at=now(),verification_reason='owner_requested_verification' WHERE organization_id=$1 AND user_id=$2 AND verification='dead_letter' AND EXISTS(SELECT 1 FROM organization_analytics_consents c JOIN organization_members m USING(organization_id,user_id) JOIN team_repository_scopes s ON s.organization_id=c.organization_id AND s.repository_id=e.repository_id JOIN team_member_project_bindings b ON b.organization_id=e.organization_id AND b.user_id=e.user_id AND b.project_id=e.project_id AND b.repository_id=e.repository_id WHERE c.organization_id=e.organization_id AND c.user_id=e.user_id AND c.share_individual AND c.individual_from<=e.occurred_at AND m.deactivated_at IS NULL AND m.seat_type='developer' AND m.role<>'viewer' AND s.enabled AND (s.team_id IS NULL OR m.role IN ('owner','admin') OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=e.user_id)))",&[&org,&user]).await
+    }
+    pub async fn claim_context(&self, lease: Uuid) -> Result<Option<Row>> {
+        let row=self.pg.query_opt("UPDATE team_session_contexts SET verification_lease=$1,verification_until=now()+interval '90 seconds',verification_attempts=verification_attempts+1 WHERE (user_id,event_id)=(SELECT c.user_id,c.event_id FROM team_session_contexts c JOIN team_rollouts r USING(organization_id) WHERE r.enabled AND c.verification='pending' AND c.verification_retry_at<=now() AND (c.verification_until IS NULL OR c.verification_until<now()) ORDER BY c.verification_retry_at,c.event_id FOR UPDATE OF c SKIP LOCKED LIMIT 1) RETURNING *",&[&lease]).await?;
+        Ok(row)
+    }
+    pub async fn finish_context(
+        &self,
+        user: Uuid,
+        org: Uuid,
+        event: &str,
+        lease: Uuid,
+        resolution: (&str, Option<&str>, i64),
+    ) -> Result<bool> {
+        let (state, reason, wait) = resolution;
+        let at = Utc::now();
+        let mut client = self.pg.transaction_client().await?;
+        let tx = client.transaction().await?;
+        // Recheck consent, membership and current repo mapping under locks at publication.
+        let allowed=tx.query_opt("SELECT 1 FROM team_session_contexts e JOIN organization_analytics_consents c USING(organization_id,user_id) JOIN organization_members m USING(organization_id,user_id) JOIN users u ON u.id=e.user_id JOIN team_rollouts r USING(organization_id) JOIN team_repository_scopes s USING(organization_id,repository_id) JOIN team_member_project_bindings b ON b.organization_id=e.organization_id AND b.user_id=e.user_id AND b.project_id=e.project_id AND b.repository_id=e.repository_id WHERE e.user_id=$1 AND e.event_id=$2 AND r.enabled AND c.share_individual AND c.individual_from<=e.occurred_at AND m.deactivated_at IS NULL AND m.seat_type='developer' AND m.role<>'viewer' AND u.is_active AND u.deleted_at IS NULL AND s.enabled AND e.occurred_at>=now()-interval '12 months' AND (s.team_id IS NULL OR m.role IN ('owner','admin') OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=e.user_id)) FOR SHARE OF c,m,u,s,b,r",&[&user,&event]).await?.is_some();
+        let (state, reason) = if allowed {
+            (state, reason)
+        } else {
+            ("blocked", Some("sharing_or_repository_access_revoked"))
+        };
+        let changed=tx.execute("UPDATE team_session_contexts SET verification=$3,verification_reason=$4,verification_retry_at=$5::timestamptz+$6::bigint*interval '1 second',verification_lease=NULL,verification_until=NULL WHERE user_id=$1 AND event_id=$2 AND verification_lease=$7 AND verification_until>now() AND organization_id=$8",&[&user,&event,&state,&reason,&at,&wait,&lease,&org]).await.context("context disposition unavailable")?;
+        tx.commit().await?;
+        Ok(changed == 1)
+    }
+    pub async fn context_health(&self, org: Uuid, user: Uuid) -> Result<Value> {
+        let row=self.pg.query_one("SELECT count(*) FILTER(WHERE verification='pending') AS pending,count(*) FILTER(WHERE verification='dead_letter') AS dead,count(*) FILTER(WHERE verification='blocked') AS blocked,max(occurred_at) AS last_observed,min(received_at) FILTER(WHERE verification='pending') AS oldest FROM team_session_contexts WHERE organization_id=$1 AND user_id=$2 AND occurred_at>=now()-interval '12 months'",&[&org,&user]).await?;
+        Ok(
+            json!({"scope":"own_account","pending":row.get::<_,i64>("pending"),"dead_letter":row.get::<_,i64>("dead"),"blocked":row.get::<_,i64>("blocked"),"last_observed_at":row.get::<_,Option<DateTime<Utc>>>("last_observed"),"oldest_pending_at":row.get::<_,Option<DateTime<Utc>>>("oldest"),"capture_status":"unconfirmed","reason":"server_cannot_verify_native_capture_completeness"}),
+        )
+    }
+    pub async fn relation_history(
+        &self,
+        org: Uuid,
+        user: Uuid,
+        repository: Uuid,
+        item: i64,
+        after: Option<&str>,
+    ) -> Result<Value> {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+        let cursor: Option<(DateTime<Utc>, String)> = after
+            .map(|s| {
+                ensure!(
+                    s.len() < 1024,
+                    GithubInputError("invalid relationship cursor")
+                );
+                let bytes = URL_SAFE_NO_PAD
+                    .decode(s)
+                    .map_err(|_| GithubInputError("invalid relationship cursor"))?;
+                Ok::<_, anyhow::Error>(
+                    serde_json::from_slice(&bytes)
+                        .map_err(|_| GithubInputError("invalid relationship cursor"))?,
+                )
+            })
+            .transpose()?;
+        let (at, id) = cursor
+            .map(|(t, s)| (Some(t), Some(s)))
+            .unwrap_or((None, None));
+        let rows=self.pg.query("SELECT h.*,r.full_name,w.number FROM team_github_relation_history h JOIN team_repository_scopes s USING(organization_id,repository_id) JOIN team_repository_scopes related ON related.organization_id=h.organization_id AND related.github_repository_id=h.related_repository_id JOIN team_github_repositories r ON r.organization_id=related.organization_id AND r.repository_id=related.repository_id LEFT JOIN team_work_items w ON w.organization_id=h.organization_id AND w.repository_id=related.repository_id AND w.external_id=h.related_item_id WHERE h.organization_id=$1 AND h.repository_id=$3 AND h.work_item_id=$4 AND s.enabled AND related.enabled AND COALESCE(h.source_at,h.observed_at)>=now()-interval '12 months' AND ($5::timestamptz IS NULL OR (h.observed_at,h.event_id)<($5,$6::text)) AND (s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.role IN ('owner','admin') AND m.deactivated_at IS NULL)) AND (related.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=related.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.role IN ('owner','admin') AND m.deactivated_at IS NULL)) ORDER BY h.observed_at DESC,h.event_id DESC LIMIT 51",&[&org,&user,&repository,&item,&at,&id]).await?;
+        let more = rows.len() > 50;
+        let mut next = None;
+        let mut items = vec![];
+        for r in rows.into_iter().take(50) {
+            let observed: DateTime<Utc> = r.get("observed_at");
+            let id: String = r.get("event_id");
+            let number: Option<i32> = r.get("number");
+            let name: String = r.get("full_name");
+            next = Some(URL_SAFE_NO_PAD.encode(serde_json::to_vec(&(observed, &id))?));
+            items.push(json!({"event_id":id,"relationship":r.get::<_,String>("relation_kind"),"action":r.get::<_,String>("action"),"source_at":r.get::<_,Option<DateTime<Utc>>>("source_at"),"observed_at":observed,"related_issue_id":r.get::<_,i64>("related_item_id"),"url":number.map(|n|format!("https://github.com/{name}/issues/{n}")),"provenance":if r.get::<_,Option<DateTime<Utc>>>("source_at").is_some(){"github_reference_timeline"}else{"github_current_closing_relationship_snapshot"}}));
+        }
+        Ok(
+            json!({"items":items,"next":if more{next}else{None},"coverage":"observed_not_complete_history"}),
+        )
+    }
     pub async fn work_page(&self, org: Uuid, query: &GithubWorkQuery) -> Result<Value> {
+        self.work_page_scoped(org, query, None).await
+    }
+    pub async fn work_page_scoped(
+        &self,
+        org: Uuid,
+        query: &GithubWorkQuery,
+        user: Option<Uuid>,
+    ) -> Result<Value> {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
         let limit = query.limit.unwrap_or(50);
         if !(1..=100).contains(&limit) {
@@ -283,7 +420,7 @@ impl GithubRepositoryStore {
         let (at, repo, id) = cursor
             .map(|(at, r, id)| (Some(at), Some(r), Some(id)))
             .unwrap_or((None, None, None));
-        let rows=self.pg.query("SELECT w.*,r.full_name FROM team_work_items w JOIN team_repository_scopes s USING(organization_id,repository_id) JOIN team_github_repositories r USING(organization_id,repository_id) WHERE w.organization_id=$1 AND s.enabled AND (w.provider_updated_at>=now()-interval '12 months' OR w.state='open') AND ($2::uuid IS NULL OR s.team_id=$2) AND ($3::timestamptz IS NULL OR (w.provider_updated_at,w.repository_id,w.external_id)<($3,$4::uuid,$5::bigint)) ORDER BY w.provider_updated_at DESC,w.repository_id DESC,w.external_id DESC LIMIT $6",&[&org,&query.team_id,&at,&repo,&id,&(limit+1)]).await?;
+        let rows=self.pg.query("SELECT w.*,r.full_name FROM team_work_items w JOIN team_repository_scopes s USING(organization_id,repository_id) JOIN team_github_repositories r USING(organization_id,repository_id) WHERE w.organization_id=$1 AND s.enabled AND (w.provider_updated_at>=now()-interval '12 months' OR w.state='open') AND ($2::uuid IS NULL OR s.team_id=$2) AND ($3::timestamptz IS NULL OR (w.provider_updated_at,w.repository_id,w.external_id)<($3,$4::uuid,$5::bigint)) AND ($7::uuid IS NULL OR s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$7) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$7 AND m.deactivated_at IS NULL AND m.role IN ('owner','admin'))) ORDER BY w.provider_updated_at DESC,w.repository_id DESC,w.external_id DESC LIMIT $6",&[&org,&query.team_id,&at,&repo,&id,&(limit+1),&user]).await?;
         let has_more = rows.len() > limit as usize;
         let mut items = vec![];
         let mut next = None;
@@ -428,7 +565,67 @@ impl GithubRepositoryStore {
             .transpose()?
             .unwrap_or_else(Utc::now);
         for fact in facts {
+            if matches!(fact.kind.as_str(), "closing_issue" | "reference_issue") {
+                let related = fact.metadata["repository_id"]
+                    .as_i64()
+                    .context("relation repository identity missing")?;
+                let issue = fact.metadata["issue_id"]
+                    .as_i64()
+                    .context("relation issue identity missing")?;
+                if tx.query_opt("SELECT 1 FROM team_repository_scopes WHERE organization_id=$1 AND github_repository_id=$2 AND enabled",&[&job.org,&related]).await?.is_none(){continue;}
+                let source: Option<DateTime<Utc>> = if fact.kind == "reference_issue" {
+                    Some(fact.at)
+                } else {
+                    None
+                };
+                let key = if source.is_some() {
+                    fact.external_id.clone()
+                } else {
+                    format!(
+                        "closing:{}:{}:{}",
+                        fact.work_item.unwrap_or(0),
+                        related,
+                        issue
+                    )
+                };
+                let old=tx.query_opt("SELECT action FROM team_github_relation_history WHERE organization_id=$1 AND repository_id=$2 AND work_item_id=$3 AND related_repository_id=$4 AND related_item_id=$5 AND relation_kind=$6 ORDER BY observed_at DESC,event_id DESC LIMIT 1",&[&job.org,&repo,&fact.work_item,&related,&issue,&if source.is_some(){"reference"}else{"closing"}]).await?;
+                if source.is_some() || old.is_none_or(|r| r.get::<_, String>(0) != "present") {
+                    let id = if source.is_some() {
+                        key
+                    } else {
+                        crate::services::team_github::hash(&format!("{key}:{observed_at}"))
+                    };
+                    tx.execute("INSERT INTO team_github_relation_history(organization_id,repository_id,work_item_id,related_repository_id,related_item_id,relation_kind,event_id,source_at,observed_at,action) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'present') ON CONFLICT DO NOTHING",&[&job.org,&repo,&fact.work_item,&related,&issue,&if source.is_some(){"reference"}else{"closing"},&id,&source,&observed_at]).await?;
+                }
+            }
             upsert_fact(&tx, job.org, repo, fact, observed_at).await?;
+        }
+        if job.kind == "detail"
+            && job.checkpoint["phase"].as_str() == Some("relations")
+            && checkpoint["phase"].as_str() == Some("reference_timeline")
+        {
+            let work = checkpoint["external_id"]
+                .as_i64()
+                .context("relation work item missing")?;
+            let seen = checkpoint["closing_relation_ids"]
+                .as_array()
+                .context("completed relation ledger missing")?;
+            let prior=tx.query("SELECT DISTINCT ON(related_repository_id,related_item_id) related_repository_id,related_item_id,action FROM team_github_relation_history WHERE organization_id=$1 AND repository_id=$2 AND work_item_id=$3 AND relation_kind='closing' ORDER BY related_repository_id,related_item_id,observed_at DESC,event_id DESC",&[&job.org,&repo,&work]).await?;
+            for r in prior {
+                let related: i64 = r.get(0);
+                let issue: i64 = r.get(1);
+                if r.get::<_, String>(2) == "present"
+                    && !seen.iter().any(|s| {
+                        s["repository_id"].as_i64() == Some(related)
+                            && s["issue_id"].as_i64() == Some(issue)
+                    })
+                {
+                    let id = crate::services::team_github::hash(&format!(
+                        "removed:{work}:{related}:{issue}:{observed_at}"
+                    ));
+                    tx.execute("INSERT INTO team_github_relation_history(organization_id,repository_id,work_item_id,related_repository_id,related_item_id,relation_kind,event_id,source_at,observed_at,action) VALUES($1,$2,$3,$4,$5,'closing',$6,NULL,$7,'removed') ON CONFLICT DO NOTHING",&[&job.org,&repo,&work,&related,&issue,&id,&observed_at]).await?;
+                }
+            }
         }
         tx.execute("UPDATE team_github_sync_jobs SET checkpoint=$3,completed_at=CASE WHEN $4 THEN now() ELSE NULL END,lease_token=NULL,lease_until=NULL,error_code=NULL,retry_at=now(),updated_at=now() WHERE id=$1 AND lease_token=$2",&[&job.id,&job.lease,&checkpoint,&complete]).await?;
         if complete && job.kind == "detail" {

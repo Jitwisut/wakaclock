@@ -98,6 +98,15 @@ pub(crate) async fn submit_activity(
     event: BrokerActivityEventV2,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     event.validate().map_err(std::io::Error::other)?;
+    if !event.monitoring_only {
+        crate::team_context_capture::observe(
+            config,
+            "codex",
+            Some(&event.session_id),
+            Some(&event.project_root),
+            event.occurred_at,
+        )?;
+    }
     let scope = scope_key(api);
     let store = ActivityStore::open(&directory()?.join("capture.db"))?;
     let duplicate = store

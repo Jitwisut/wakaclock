@@ -229,3 +229,88 @@ fn session_hash(headers: &HeaderMap) -> Result<String, ApiError> {
         .ok_or_else(ApiError::unauthorized)?;
     Ok(crate::services::team_github::hash(bearer))
 }
+
+pub async fn sessions(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(org): Path<Uuid>,
+    Query(q): Query<SessionPageQuery>,
+) -> Result<(HeaderMap, Json<V2Envelope<Value>>), ApiError> {
+    let user = actor(&s, &h).await?;
+    Ok((
+        private_headers(),
+        Json(envelope(
+            s.team_github_service
+                .sessions(user, org, q)
+                .await
+                .map_err(error)?,
+            "UTC",
+            None,
+        )),
+    ))
+}
+
+pub async fn own_work_page(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(org): Path<Uuid>,
+    Query(q): Query<GithubWorkQuery>,
+) -> Result<(HeaderMap, Json<V2Envelope<Value>>), ApiError> {
+    let user = actor(&s, &h).await?;
+    Ok((
+        private_headers(),
+        Json(envelope(
+            s.team_github_service
+                .own_work_page(user, org, q)
+                .await
+                .map_err(error)?,
+            "UTC",
+            None,
+        )),
+    ))
+}
+
+pub async fn retry_contexts(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(org): Path<Uuid>,
+) -> Result<(HeaderMap, Json<V2Envelope<Value>>), ApiError> {
+    let user = actor(&s, &h).await?;
+    Ok((
+        private_headers(),
+        Json(envelope(
+            s.team_github_service
+                .retry_contexts(user, org)
+                .await
+                .map_err(error)?,
+            "UTC",
+            None,
+        )),
+    ))
+}
+
+pub async fn relations(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path((org, repository, item)): Path<(Uuid, Uuid, i64)>,
+    Query(q): Query<RelationshipQuery>,
+) -> Result<(HeaderMap, Json<V2Envelope<Value>>), ApiError> {
+    let user = actor(&s, &h).await?;
+    Ok((
+        private_headers(),
+        Json(envelope(
+            s.team_github_service
+                .relations(user, org, repository, item, q)
+                .await
+                .map_err(error)?,
+            "UTC",
+            None,
+        )),
+    ))
+}
+
+fn private_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert("cache-control", "private, no-store".parse().unwrap());
+    headers
+}

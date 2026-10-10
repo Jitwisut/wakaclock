@@ -153,6 +153,53 @@ impl ContextQueue {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS session_context_queue(origin TEXT NOT NULL,owner TEXT NOT NULL,organization TEXT NOT NULL,event_id TEXT NOT NULL,payload TEXT NOT NULL,payload_hash TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0,lease TEXT,lease_until INTEGER,dead_letter TEXT,PRIMARY KEY(origin,owner,organization,event_id));")?;
         Ok(Self { conn })
     }
+    /// Persist context and the last observed state in the same transaction. The
+    /// observation survives ACK/restart; unchanged activity creates no extra rows.
+    pub fn observe_changed(
+        &mut self,
+        origin: &str,
+        owner: Uuid,
+        org: Uuid,
+        event: &SessionContext,
+    ) -> Result<bool> {
+        self.conn.execute_batch("CREATE TABLE IF NOT EXISTS session_context_observations(origin TEXT NOT NULL,owner TEXT NOT NULL,organization TEXT NOT NULL,session TEXT NOT NULL,repository TEXT NOT NULL,state_hash TEXT NOT NULL,observed_at TEXT NOT NULL,PRIMARY KEY(origin,owner,organization,session,repository))")?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let state = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(
+                event.project_id,
+                &event.branch,
+                &event.commit_sha
+            ))?)
+        );
+        let owner = owner.to_string();
+        let org = org.to_string();
+        let repository = event.repository_id.to_string();
+        let at = event
+            .occurred_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let prior=tx.query_row("SELECT state_hash,observed_at FROM session_context_observations WHERE origin=?1 AND owner=?2 AND organization=?3 AND session=?4 AND repository=?5",params![origin,owner,org,event.session_id,repository],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional()?;
+        if prior.as_ref().is_some_and(|(_, old)| old >= &at) {
+            tx.commit()?;
+            return Ok(false);
+        }
+        if prior.as_ref().is_some_and(|(hash, _)| hash == &state) {
+            tx.execute("UPDATE session_context_observations SET observed_at=?6 WHERE origin=?1 AND owner=?2 AND organization=?3 AND session=?4 AND repository=?5",params![origin,owner,org,event.session_id,repository,at])?;
+            tx.commit()?;
+            return Ok(false);
+        }
+        let payload = serde_json::to_string(event)?;
+        let hash = format!("{:x}", Sha256::digest(payload.as_bytes()));
+        let n=tx.execute("INSERT INTO session_context_queue(origin,owner,organization,event_id,payload,payload_hash) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin,owner,organization,event_id) DO UPDATE SET event_id=excluded.event_id WHERE payload_hash=excluded.payload_hash",params![origin,owner,org,event.event_id,payload,hash])?;
+        if n != 1 {
+            return Err("context identity conflict".into());
+        }
+        tx.execute("INSERT INTO session_context_observations(origin,owner,organization,session,repository,state_hash,observed_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(origin,owner,organization,session,repository) DO UPDATE SET state_hash=excluded.state_hash,observed_at=excluded.observed_at",params![origin,owner,org,event.session_id,repository,state,at])?;
+        tx.commit()?;
+        Ok(true)
+    }
     pub fn enqueue(
         &self,
         origin: &str,
@@ -167,6 +214,18 @@ impl ContextQueue {
             return Err("context identity conflict".into());
         }
         Ok(())
+    }
+    pub fn status(
+        &self,
+        origin: &str,
+        owner: Uuid,
+        org: Uuid,
+        now: i64,
+    ) -> Result<serde_json::Value> {
+        let (pending,ready,leased,dead,oldest)=self.conn.query_row("SELECT count(*) FILTER(WHERE dead_letter IS NULL),count(*) FILTER(WHERE dead_letter IS NULL AND retry_at<=?4 AND (lease_until IS NULL OR lease_until<=?4)),count(*) FILTER(WHERE dead_letter IS NULL AND lease_until>?4),count(*) FILTER(WHERE dead_letter IS NOT NULL),min(json_extract(payload,'$.occurred_at')) FILTER(WHERE dead_letter IS NULL) FROM session_context_queue WHERE origin=?1 AND owner=?2 AND organization=?3",params![origin,owner.to_string(),org.to_string(),now],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,Option<String>>(4)?)))?;
+        Ok(
+            serde_json::json!({"pending":pending,"eligible":ready,"leased":leased,"dead_letter":dead,"oldest_pending_at":oldest,"capture_status":"unconfirmed","capture_reason":"queue_state_does_not_prove_provider_capture_completeness"}),
+        )
     }
     pub fn claim(
         &mut self,
@@ -282,5 +341,173 @@ mod tests {
             .is_none());
         drop(q);
         let _ = std::fs::remove_file(file);
+    }
+    #[test]
+    fn observed_changes_commit_with_cursor_and_survive_ack_restart() {
+        let path = std::env::temp_dir().join(format!("context-change-{}.sqlite", Uuid::new_v4()));
+        let owner = Uuid::new_v4();
+        let org = Uuid::new_v4();
+        let mut e = SessionContext::observed(
+            owner,
+            "codex",
+            Uuid::new_v4(),
+            "ws1_s",
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            DateTime::from_timestamp(10, 0).unwrap(),
+            GitMetadata {
+                repository: "o/r".into(),
+                branch: Some("a".into()),
+                commit_sha: Some("a".repeat(40)),
+            },
+        );
+        {
+            let mut q = ContextQueue::open(&path).unwrap();
+            assert!(q
+                .observe_changed("https://stage.test", owner, org, &e)
+                .unwrap());
+            let pending = q
+                .claim("https://stage.test", owner, org, 1)
+                .unwrap()
+                .unwrap();
+            assert!(q.acknowledge(&pending).unwrap());
+        }
+        let mut q = ContextQueue::open(&path).unwrap();
+        e.occurred_at = DateTime::from_timestamp(20, 0).unwrap();
+        assert!(!q
+            .observe_changed("https://stage.test", owner, org, &e)
+            .unwrap());
+        e.branch = Some("b".into());
+        e.occurred_at = DateTime::from_timestamp(15, 0).unwrap();
+        assert!(!q
+            .observe_changed("https://stage.test", owner, org, &e)
+            .unwrap());
+        e.occurred_at = DateTime::from_timestamp(21, 0).unwrap();
+        e.event_id = "changed".into();
+        q.conn.execute_batch("PRAGMA query_only=ON").unwrap();
+        assert!(q
+            .observe_changed("https://stage.test", owner, org, &e)
+            .is_err());
+        q.conn.execute_batch("PRAGMA query_only=OFF").unwrap();
+        assert!(q
+            .observe_changed("https://stage.test", owner, org, &e)
+            .unwrap());
+        let old = q
+            .claim("https://stage.test", owner, org, 1)
+            .unwrap()
+            .unwrap();
+        let recovered = q
+            .claim("https://stage.test", owner, org, 92)
+            .unwrap()
+            .unwrap();
+        assert!(!q.acknowledge(&old).unwrap());
+        assert_eq!(recovered.event.branch, Some("b".into()));
+        assert!(q.acknowledge(&recovered).unwrap());
+        drop(q);
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Native hooks are parsed locally. Only session identity and workspace metadata
+/// survive this adapter; contents, edits, prompts and tool responses are discarded.
+#[derive(Debug)]
+pub struct NativeContext {
+    pub agent: &'static str,
+    pub native_session: String,
+    pub workspaces: Vec<std::path::PathBuf>,
+    pub provenance: &'static str,
+}
+pub fn native_context(provider: &str, payload: &serde_json::Value) -> Option<NativeContext> {
+    let (agent, session, roots, inline) = match provider {
+        "codex" => (
+            "codex",
+            payload["session_id"].as_str()?,
+            vec![std::path::PathBuf::from(payload["cwd"].as_str()?)],
+            false,
+        ),
+        "claude-code" => (
+            "claude-code",
+            payload["session_id"].as_str()?,
+            vec![std::path::PathBuf::from(payload["cwd"].as_str()?)],
+            false,
+        ),
+        "cursor" => {
+            let hook = payload["hook_event_name"].as_str()?;
+            if !matches!(
+                hook,
+                "sessionStart"
+                    | "sessionEnd"
+                    | "preToolUse"
+                    | "postToolUse"
+                    | "postToolUseFailure"
+                    | "beforeShellExecution"
+                    | "afterShellExecution"
+                    | "afterFileEdit"
+                    | "afterTabFileEdit"
+                    | "stop"
+            ) {
+                return None;
+            }
+            let roots = payload["workspace_roots"]
+                .as_array()?
+                .iter()
+                .filter_map(|v| v.as_str().map(std::path::PathBuf::from))
+                .collect::<Vec<_>>();
+            (
+                "cursor",
+                payload["conversation_id"].as_str()?,
+                roots,
+                hook == "afterTabFileEdit",
+            )
+        }
+        // Daily provider metrics and general document changes provide no session identity.
+        "copilot-vscode" => return None,
+        _ => return None,
+    };
+    if session.is_empty()
+        || session.len() > 512
+        || session.chars().any(char::is_control)
+        || roots.is_empty()
+        || roots.len() > 32
+        || roots.iter().any(|p| !p.is_absolute())
+    {
+        return None;
+    }
+    Some(NativeContext {
+        agent,
+        native_session: session.to_string(),
+        workspaces: roots,
+        provenance: if inline {
+            "native_inline_git"
+        } else {
+            "native_session_git"
+        },
+    })
+}
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    #[test]
+    fn native_provider_fields_do_not_create_usage_or_copy_sensitive_payload() {
+        for provider in ["codex", "claude-code"] {
+            let parsed=native_context(provider,&serde_json::json!({"session_id":"native-session","cwd":std::env::temp_dir(),"prompt":"FORBIDDEN_PROMPT","tool_response":"FORBIDDEN_RESPONSE","source":"FORBIDDEN_SOURCE"})).unwrap();
+            assert_eq!(parsed.native_session, "native-session");
+            assert_eq!(parsed.workspaces.len(), 1);
+            assert!(!format!("{parsed:?}").contains("FORBIDDEN"));
+        }
+        let inline=native_context("cursor",&serde_json::json!({"conversation_id":"native-session","hook_event_name":"afterTabFileEdit","workspace_roots":[std::env::temp_dir()],"edits":[{"old_string":"FORBIDDEN_SOURCE","new_string":"FORBIDDEN_RESPONSE"}]})).unwrap();
+        assert_eq!(inline.provenance, "native_inline_git");
+        assert!(!format!("{inline:?}").contains("FORBIDDEN"));
+    }
+    #[test]
+    fn absent_or_daily_identity_is_explicitly_unresolved() {
+        for provider in ["codex", "claude-code", "cursor", "copilot-vscode"] {
+            assert!(native_context(
+                provider,
+                &serde_json::json!({"file_path":"/tmp/fixture","day":"2026-10-08","accepted":3})
+            )
+            .is_none());
+        }
+        assert!(native_context("cursor",&serde_json::json!({"conversation_id":"s","hook_event_name":"workspaceOpen","workspace_roots":[std::env::temp_dir()]})).is_none());
     }
 }

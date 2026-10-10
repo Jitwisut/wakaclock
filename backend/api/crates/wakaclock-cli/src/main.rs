@@ -21,6 +21,7 @@ mod ai_setup;
 mod broker;
 mod capture_service;
 mod delivery_service;
+mod team_context_capture;
 mod tool_snapshot;
 use tool_snapshot::{AiToolInput, ToolSnapshot, WorkspaceChange};
 use wakaclock_ast::detect_file;
@@ -2171,11 +2172,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
             AiAction::Doctor { json, upload } => run_ai_doctor(&api_client, json, upload).await?,
             AiAction::Emit { json } => run_ai_emit(&config, &api_client, json).await?,
-            AiAction::ToolBefore { json } => run_ai_tool_before(json)?,
+            AiAction::ToolBefore { json } => run_ai_tool_before(&config, json)?,
             AiAction::ToolAfter { json } => run_ai_tool_after(&config, &api_client, json).await?,
             AiAction::ToolAbort { json } => run_ai_tool_abort(json)?,
-            AiAction::SessionStart { json } => run_ai_session(false, json)?,
-            AiAction::SessionEnd { json } => run_ai_session(true, json)?,
+            AiAction::SessionStart { json } => run_ai_session(&config, false, json)?,
+            AiAction::SessionEnd { json } => run_ai_session(&config, true, json)?,
             AiAction::Sync {
                 agent,
                 dry_run,
@@ -6090,7 +6091,7 @@ fn normalize_session_cwd(cwd: Option<PathBuf>) -> Result<Option<String>, Box<dyn
     Ok(Some(absolute.to_string_lossy().into_owned()))
 }
 
-fn run_ai_session(ended: bool, json: bool) -> Result<(), Box<dyn Error>> {
+fn run_ai_session(config: &Config, ended: bool, json: bool) -> Result<(), Box<dyn Error>> {
     let input = read_ai_session_input()?;
     let now = input.occurred_at.unwrap_or_else(chrono::Utc::now);
     if now > chrono::Utc::now() + chrono::Duration::minutes(5) {
@@ -6104,6 +6105,13 @@ fn run_ai_session(ended: bool, json: bool) -> Result<(), Box<dyn Error>> {
         .transpose()?;
     let model = input.model.as_deref().map(normalize_model_id).transpose()?;
     let cwd = normalize_session_cwd(input.cwd)?;
+    team_context_capture::observe(
+        config,
+        &agent,
+        Some(&input.session_id),
+        cwd.as_deref().map(Path::new),
+        now,
+    )?;
     let source = input
         .source
         .as_ref()
@@ -6195,9 +6203,16 @@ fn run_ai_session(ended: bool, json: bool) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_ai_tool_before(json: bool) -> Result<(), Box<dyn Error>> {
+fn run_ai_tool_before(config: &Config, json: bool) -> Result<(), Box<dyn Error>> {
     let input = read_ai_tool_input()?;
     let snapshot = tool_snapshot::capture(&input)?;
+    team_context_capture::observe(
+        config,
+        &snapshot.agent,
+        snapshot.session_id.as_deref(),
+        Some(&snapshot.workspace_root),
+        snapshot.started_at,
+    )?;
     let snapshot_json = serde_json::to_string(&snapshot)?;
     let state = AiAttributionState::open()?;
     // Keep interrupted tool calls retryable across an editor/CLI restart while bounding
@@ -6314,6 +6329,13 @@ async fn run_ai_tool_after(
     };
     let before: ToolSnapshot = serde_json::from_str(&snapshot_json)?;
     let after = tool_snapshot::capture_for_existing(&input, &before)?;
+    team_context_capture::observe(
+        config,
+        &after.agent,
+        after.session_id.as_deref(),
+        Some(&after.workspace_root),
+        Utc::now(),
+    )?;
     let changes = tool_snapshot::diff(&before, &after)?;
 
     if changes.is_empty() {
@@ -6723,6 +6745,15 @@ async fn run_ai_emit(
     }
     let parsed = parse_broker_event_input_with_context(&stdin)?;
     let event = parsed.event.clone();
+    if event.source == AiEventSource::AgentHook && event.confidence == AiConfidence::Verified {
+        team_context_capture::observe(
+            config,
+            &event.agent,
+            event.session_id.as_deref(),
+            event.project_root.as_deref().map(Path::new),
+            event.occurred_at,
+        )?;
+    }
     let mut handoff = match parsed.topology.as_ref() {
         Some(topology) => Some(prepare_handoff(topology, &parsed, &event)?),
         None => None,

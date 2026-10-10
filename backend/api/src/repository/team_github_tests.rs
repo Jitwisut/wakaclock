@@ -174,6 +174,45 @@ async fn github_binding_queue_context_and_revocation() {
     let saved:serde_json::Value=tx.query_one("SELECT metadata FROM team_github_facts WHERE organization_id=$1 AND repository_id=$2 AND kind='review' AND external_id='43'",&[&org,&repo]).await.unwrap().get(0);
     assert_eq!(saved["state"], "DISMISSED");
     tx.commit().await.unwrap();
+    // Pagination preserves observation/source time; revoked related scope blocks all pages.
+    pg.execute("INSERT INTO team_github_relation_history(organization_id,repository_id,work_item_id,related_repository_id,related_item_id,relation_kind,event_id,source_at,observed_at,action) SELECT $1,$2,900,$3,901,'reference','fixture-reference-'||lpad(n::text,3,'0'),$4,$5,'present' FROM generate_series(1,51) AS n", &[&org,&repo,&install,&at,&now]).await.unwrap();
+    let first_history = store
+        .relation_history(org, user, repo, 900, None)
+        .await
+        .unwrap();
+    assert_eq!(first_history["items"].as_array().unwrap().len(), 50);
+    assert_eq!(
+        first_history["items"][0]["provenance"],
+        "github_reference_timeline"
+    );
+    assert!(first_history["items"][0]["source_at"].is_string());
+    let cursor = first_history["next"].as_str().unwrap();
+    let rest = store
+        .relation_history(org, user, repo, 900, Some(cursor))
+        .await
+        .unwrap();
+    assert_eq!(rest["items"].as_array().unwrap().len(), 1);
+    assert!(rest["next"].is_null());
+    assert!(store
+        .relation_history(other, user, repo, 900, None)
+        .await
+        .unwrap()["items"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .relation_history(org, user, repo, 900, Some("invalid"))
+        .await
+        .is_err());
+    pg.execute("UPDATE team_repository_scopes SET enabled=false WHERE organization_id=$1 AND repository_id=$2", &[&org,&repo]).await.unwrap();
+    assert!(store
+        .relation_history(org, user, repo, 900, Some(cursor))
+        .await
+        .unwrap()["items"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    pg.execute("UPDATE team_repository_scopes SET enabled=true WHERE organization_id=$1 AND repository_id=$2", &[&org,&repo]).await.unwrap();
     let webhook = crate::repository::team_webhooks::TeamWebhookRepository::new(pg.clone());
     let mut work_event = GithubMetadata {
         event: "pull_request".into(),
@@ -262,6 +301,35 @@ async fn github_binding_queue_context_and_revocation() {
     assert_eq!(health.status, "degraded");
     assert_eq!(health.reason, "dead_letter");
     pg.execute("UPDATE team_webhook_inbox SET processed_at=now() WHERE provider='github' AND delivery_id=$1",&[&failed_delivery]).await.unwrap();
+    // Two independent refresh callers cannot consume one refresh token together.
+    store
+        .save_identity(user, install, "synthetic-identity", b"sealed-fixture", None)
+        .await
+        .unwrap();
+    let lease_a = Uuid::now_v7();
+    let lease_b = Uuid::now_v7();
+    let (a, b) = tokio::join!(
+        store.refresh_claim(user, lease_a),
+        store.refresh_claim(user, lease_b)
+    );
+    assert_ne!(a.as_ref().unwrap(), b.as_ref().unwrap());
+    let winner = if a.unwrap() { lease_a } else { lease_b };
+    let loser = if winner == lease_a { lease_b } else { lease_a };
+    assert!(store
+        .refresh_finish(user, loser, b"sealed-next", None)
+        .await
+        .is_err());
+    pg.execute(
+        "UPDATE team_github_identities SET revoked_at=now(),credentials=NULL WHERE user_id=$1",
+        &[&user],
+    )
+    .await
+    .unwrap();
+    assert!(store
+        .refresh_finish(user, winner, b"sealed-next", None)
+        .await
+        .is_err());
+    assert!(store.identity(user).await.unwrap().is_none());
     // Same project label does not bind across people: each personal UUID is explicit.
     let p1 = Uuid::now_v7();
     let p2 = Uuid::now_v7();
@@ -303,10 +371,181 @@ async fn github_binding_queue_context_and_revocation() {
         .get::<_, i64>(0),
         1
     );
+
+    // Arrival before usage is durable and excluded until verified, even after duplicate retry.
+    let mut early = event.clone();
+    early.event_id = "e".repeat(64);
+    let native_session = format!("fixture-context-{user}");
+    early.session_id = wakaclock_core::session_context::canonical_session(
+        user,
+        "codex",
+        early.collector_id,
+        &native_session,
+    );
+    store
+        .store_context(org, user, &early, "early-hash", "pending")
+        .await
+        .unwrap();
+    store
+        .store_context(org, user, &early, "early-hash", "pending")
+        .await
+        .unwrap();
+    assert_eq!(store.context_health(org, user).await.unwrap()["pending"], 1);
+    assert!(store
+        .candidates(org, user, &early.session_id)
+        .await
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
+    if std::env::var_os("CLICKHOUSE_TEST_URL").is_some() {
+        let ch = crate::test_support::clickhouse_client().await;
+        crate::repository::ai_usage::AiUsageRepository::new(ch.clone())
+            .migrate()
+            .await
+            .unwrap();
+        let usage = Arc::new(
+            crate::repository::team_insights::TeamInsightsRepository::new(pg.clone(), ch.clone()),
+        );
+        let verifier = crate::services::team_context::ContextVerifier {
+            store: Arc::new(GithubRepositoryStore::new(pg.clone())),
+            usage,
+        };
+        assert!(verifier.tick().await.unwrap());
+        let waiting=pg.query_one("SELECT verification,verification_reason FROM team_session_contexts WHERE user_id=$1 AND event_id=$2",&[&user,&early.event_id]).await.unwrap();
+        assert_eq!(waiting.get::<_, String>(0), "pending");
+        assert_eq!(waiting.get::<_, String>(1), "waiting_for_canonical_session");
+        let usage_id = format!("fixture-context-usage-{user}");
+        ch.get_client().query("INSERT INTO wakaclock.ai_usage_events(user_id,date,usage_event_id,ai_session_id,collector_id,event_time,project_id,project_attribution_method,ai_agent,token_source,version,received_at) VALUES(?,today(),?,?,?,toUInt32(now()),?,'explicit_project_hint','codex','provider',1,toUInt32(now()))").bind(user).bind(&usage_id).bind(&native_session).bind(early.collector_id.to_string()).bind(p1).execute().await.unwrap();
+        // A crash leaves a lease; the next worker waits, then resumes the same accepted ID.
+        pg.execute("UPDATE team_session_contexts SET verification_retry_at=now(),verification_lease=$3,verification_until=now()+interval '90 seconds' WHERE user_id=$1 AND event_id=$2",&[&user,&early.event_id,&Uuid::now_v7()]).await.unwrap();
+        assert!(!verifier.tick().await.unwrap());
+        pg.execute("UPDATE team_session_contexts SET verification_until=now()-interval '1 second' WHERE user_id=$1 AND event_id=$2",&[&user,&early.event_id]).await.unwrap();
+        assert!(verifier.tick().await.unwrap());
+        assert_eq!(
+            pg.query_one(
+                "SELECT verification FROM team_session_contexts WHERE user_id=$1 AND event_id=$2",
+                &[&user, &early.event_id]
+            )
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+            "verified"
+        );
+        store
+            .store_context(org, user, &early, "early-hash", "pending")
+            .await
+            .unwrap();
+        assert_eq!(
+            pg.query_one(
+                "SELECT count(*) FROM team_session_contexts WHERE user_id=$1 AND event_id=$2",
+                &[&user, &early.event_id]
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+            1
+        );
+        ch.get_client().query("ALTER TABLE wakaclock.ai_usage_events DELETE WHERE user_id=? AND usage_event_id=? SETTINGS mutations_sync=2").bind(user).bind(usage_id).execute().await.unwrap();
+    }
+    // Closed work is eligible only during its actual observed lifecycle.
+    pg.execute("UPDATE team_work_items SET head_branch=$3,head_sha=$4,head_repository_id=$5,closed_at=now()+interval '1 second' WHERE organization_id=$1 AND repository_id=$2 AND external_id=900",&[&org,&repo,&event.branch,&event.commit_sha,&install]).await.unwrap();
+    assert_eq!(
+        store
+            .candidates(org, user, &event.session_id)
+            .await
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    pg.execute("UPDATE team_work_items SET closed_at=$3::timestamptz-interval '1 second' WHERE organization_id=$1 AND repository_id=$2 AND external_id=900",&[&org,&repo,&event.occurred_at]).await.unwrap();
+    assert!(store
+        .candidates(org, user, &event.session_id)
+        .await
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
+    // Revision checks and replacement serialize with allocation and commit both states together.
+    let ch = Arc::new(
+        crate::infrastructure::database::ClickHouseClient::new(&crate::config::ClickHouseConfig {
+            url: "http://127.0.0.1:9".into(),
+            database: "wakaclock".into(),
+            user: None,
+            password: None,
+        })
+        .await
+        .unwrap(),
+    );
+    let links = crate::repository::team_insights::TeamInsightsRepository::new(pg.clone(), ch);
+    let old = links
+        .propose(
+            org,
+            user,
+            &crate::model::team_insights::LinkRequest {
+                session_id: event.session_id.clone(),
+                repository_id: repo,
+                work_item_id: 900,
+            },
+        )
+        .await
+        .unwrap();
+    let confirmed = links
+        .decide_link_revision(org, user, old.id, "confirmed", Some(old.revision))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(links
+        .decide_link_revision(org, user, old.id, "withdrawn", Some(old.revision))
+        .await
+        .unwrap()
+        .is_none());
+    let new = links
+        .propose(
+            org,
+            user,
+            &crate::model::team_insights::LinkRequest {
+                session_id: event.session_id.clone(),
+                repository_id: repo,
+                work_item_id: 1001,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(links
+        .replace_link(org, member, old.id, new.id, confirmed.revision)
+        .await
+        .is_err());
+    let replaced = links
+        .replace_link(org, user, old.id, new.id, confirmed.revision)
+        .await
+        .unwrap();
+    assert_eq!(replaced.status, "confirmed");
+    assert_eq!(
+        links.link(org, user, old.id).await.unwrap().unwrap().status,
+        "withdrawn"
+    );
+    assert!(links
+        .replace_link(org, user, old.id, new.id, confirmed.revision)
+        .await
+        .is_err());
+    assert_eq!(
+        links.link_history(org, user, old.id, None).await.unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     event.event_id = "d".repeat(64);
     assert!(store.context(org, member, &event, "hash2").await.is_err());
     pg.execute("UPDATE organization_analytics_consents SET share_individual=false WHERE organization_id=$1 AND user_id=$2",&[&org,&user]).await.unwrap();
     assert!(store.context(org, user, &event, "hash2").await.is_err());
+    // A disposition outlives cleanup and prevents a replay from resurrecting context.
+    pg.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) VALUES('session_context',$1,'hash','sharing_or_scope_revoked',now())",&[&format!("{user}:{}",event.event_id)]).await.unwrap();
+    pg.execute("UPDATE organization_analytics_consents SET share_individual=true WHERE organization_id=$1 AND user_id=$2",&[&org,&user]).await.unwrap();
+    assert!(store.context(org, user, &event, "hash").await.is_err());
     // A receipt must close as soon as the signed removal is durably accepted.
     let webhook = crate::repository::team_webhooks::TeamWebhookRepository::new(pg.clone());
     webhook

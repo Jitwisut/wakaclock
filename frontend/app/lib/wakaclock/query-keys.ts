@@ -2,10 +2,17 @@
  * Every key includes userId so switching users in the header never serves
  * stale cached data from another uuid.
  */
+const TEAM_GITHUB_KEY = 'team-github';
 export const wakaclockKeys = {
   all: ['wakaclock'] as const,
+  teamGithubSessions: (userId: string, org: string, after?: string) =>
+    [...wakaclockKeys.all, TEAM_GITHUB_KEY, userId, org, 'sessions', after] as const,
+  teamGithubOwnWork: (userId: string, org: string, after?: string) =>
+    [...wakaclockKeys.all, TEAM_GITHUB_KEY, userId, org, 'own-work', after] as const,
+  teamGithubHistory: (userId: string, org: string, link: string, after?: string) =>
+    [...wakaclockKeys.all, TEAM_GITHUB_KEY, userId, org, 'link-history', link, after] as const,
   teamGithub: (userId: string, organizationId: string) =>
-    [...wakaclockKeys.all, 'team-github', userId, organizationId] as const,
+    [...wakaclockKeys.all, TEAM_GITHUB_KEY, userId, organizationId] as const,
   // No userId: describes the server deployment, not an account — see useCapabilities.
   capabilities: () => [...wakaclockKeys.all, 'capabilities'] as const,
   organizations: (userId: string) => ['organizations', userId] as const,

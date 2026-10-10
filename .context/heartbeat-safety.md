@@ -56,6 +56,8 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ## Approval gate — ต้องถามก่อนแก้
 
+การอนุมัติ 2026-10-10 (GitHub closure): ผู้ใช้สั่ง “PLEASE IMPLEMENT THIS PLAN” ให้ปิด session-context adapters/durable verification, paginated sessions, atomic revisioned links, relationship history, merged-PR cost ถึงเวลา merge, privacy/retention/restore และ certification tests บน staging แยก ต่อจาก 579967b. รักษา canonical heartbeat/usage, duration/timeout และ baseline ทุกแถว; GitHub จริง/Windows/บัญชีที่สองยัง pending เมื่อหลักฐานไม่พร้อม. ไม่ครอบคลุม push/merge main หรืออ้าง production readiness.
+
 การอนุมัติเผยแพร่ 2026-10-09 (GitHub integration): ผู้ใช้สั่ง “commit แล้ว push ให้หน่อย” อนุญาต commit/push source, additive migration, tests, staging scripts และเอกสารของงานนี้ไปยัง `codex/atoaxis-team` ไม่รวม credential, รายงานส่วนตัว, backup, runtime/build artifacts หรือการแก้จากงานอื่น; ไม่อนุญาต push/merge เข้า main และไม่ใช่การรับรอง integration หรือ production release.
 
 การอนุมัติ 2026-10-08 (GitHub integration): ผู้ใช้สั่ง “PLEASE IMPLEMENT THIS PLAN” สำหรับ GitHub App/OAuth, durable webhook/sync, verified repository mapping รายสมาชิก, session-context stream แยกจาก heartbeat/usage, UI/privacy/retention และ staging แยกผ่าน tunnel พร้อม client certification macOS/Windows. อนุญาตเปลี่ยน client metadata/queue/tests ที่จำเป็นในขอบเขตนี้ รักษา heartbeat IDs, timestamp และ baseline ทุกแถว; ไม่อนุญาต commit/push ของงานใหม่หรือ push/merge main และห้ามอ้าง certification ก่อนมีผลจริง.

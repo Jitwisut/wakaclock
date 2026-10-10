@@ -276,7 +276,28 @@ export function TeamInsightsPanel({
           {report && (
             <div className="mt-3 space-y-2">
               <p>Estimated AI cost: {teamCostLabel(report.estimated_ai_cost_microusd)}</p>
-              <p>Confirmed cost for merged PRs: {teamCostLabel(report.merged_pr_cost_microusd)}</p>
+              <p>
+                Confirmed observed usage cost through merge:{' '}
+                {teamCostLabel(report.merged_pr_cost_microusd)}
+              </p>
+              {report.merged_pr_cost && (
+                <>
+                  <p>
+                    PRs with known cost: {report.merged_pr_cost.with_cost.value ?? 'withheld'} ·
+                    Without cost: {report.merged_pr_cost.without_cost.value ?? 'withheld'}
+                  </p>
+                  <p>
+                    Average for PRs with confirmed complete cost coverage:{' '}
+                    {teamCostLabel(report.merged_pr_cost.average_microusd)} · PR count:{' '}
+                    {report.merged_pr_cost.complete_prs.value ?? 'withheld'}
+                  </p>
+                  <p>
+                    Cost accumulates after consent up to merge, within retention. Capture
+                    completeness is shown separately. Calculation:{' '}
+                    {report.merged_pr_cost.calculation_version}
+                  </p>
+                </>
+              )}
               <p>
                 Data: {report.estimated_ai_cost_microusd.status} · coverage{' '}
                 {report.estimated_ai_cost_microusd.coverage === null
