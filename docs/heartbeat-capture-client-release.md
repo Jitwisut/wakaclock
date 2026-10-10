@@ -1,12 +1,36 @@
 # Heartbeat → Capture AI → Client Release: implementation ledger
 
 Updated: 2026-10-10, Asia/Bangkok. Branch: `codex/heartbeat-capture-release`.
-Base: `90774c9`. Foundation commits: `98c81d7`, `4a9d194`. The macOS arm64
-candidate from `4a9d194` passed native execution and package integrity checks;
-it does not contain subsequent editor redrive or Cline setup changes. A new
-candidate must be built from the next clean commit before exercising those paths.
+Base: `90774c9`. Foundation commits: `98c81d7`, `4a9d194`; editor redrive and
+Cline wiring: `3484e95`. The current internal macOS arm64 candidate was built
+from clean commit `3484e950b1db1b06a442d1f03b224256364e248e` and passed package
+integrity and native execution checks. The older `4a9d194` candidate does not
+contain editor redrive or Cline setup changes.
 Development remains **in progress**. No native/live certification or production
 release is implied by unit, fixture, or artifact-verifier tests.
+
+## Internal candidate evidence
+
+Artifacts and metadata are under
+`output/heartbeat-capture-client-release/3484e95/darwin-arm64/`:
+
+- VSIX and standalone archive contain the identical native binary, AI resources
+  and verified hashes. Both are internal, unsigned artifacts.
+- `candidate-darwin-arm64.json`: source/compiled inventory, architecture,
+  binary/bundle/VSIX/standalone hashes and verifier results.
+- `native-smoke.json`: the extracted binary ran with an isolated fixture home;
+  its build SHA matched the source. Cline file-hook setup, failed-tool marker
+  acceptance and uninstall preserving the inbox passed in a Thai/spaced path.
+  Marked tool parameters/results were absent from stored metadata. No real
+  account/provider, background service or server readback was used.
+- `support-matrix.json`: per-metric dispositions exported from that same binary's
+  `adapter list --json`. All fourteen registry IDs are present. Live certification
+  remains pending; the snapshot is not evidence of installed provider runtimes.
+
+Only macOS arm64 native execution is evidenced here. Actual extension installation,
+LaunchAgent lifecycle, Windows/x64 artifacts and live provider certification remain
+separate gates. Docker Desktop/API/VM were not started for this work; the installed
+macOS networking helper is not a running Docker engine.
 
 ## Implemented foundation
 
@@ -31,7 +55,7 @@ a difference.
 
 ## Adapter implementation disposition
 
-The authoritative machine-readable list is `wakaclock ai adapters --json` /
+The authoritative machine-readable list is `wakaclock adapter list --json` /
 the adapter catalog's `activity_capabilities`. All live certification fields
 remain pending. A missing installation/login is not proof of unsupported metrics.
 
