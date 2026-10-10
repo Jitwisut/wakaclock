@@ -10,6 +10,9 @@ fn directory() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .join(".wakaclock"))
 }
 fn manifest_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    if cfg!(target_os = "windows") {
+        return crate::runtime_service::manifest("delivery");
+    }
     let home = dirs::home_dir().ok_or("home directory unavailable")?;
     if cfg!(target_os = "macos") {
         Ok(home
@@ -40,7 +43,7 @@ pub fn status() -> Value {
     let state = fs::read(dir.join("delivery-state.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    json!({"running":running,"installed":manifest_path().is_ok_and(|path|path.exists()),"state":state})
+    json!({"running":running,"installed":manifest_path().is_ok_and(|path|path.exists()),"state":state,"paused_by_user":wakaclock_core::runtime::paused("delivery")})
 }
 pub async fn run(once: bool) -> Result<Value, Box<dyn std::error::Error>> {
     let dir = directory()?;
@@ -55,12 +58,27 @@ pub async fn run(once: bool) -> Result<Value, Box<dyn std::error::Error>> {
         .map_err(|_| "delivery worker already running")?;
     file.set_len(0)?;
     writeln!(file, "{}", std::process::id())?;
+    let binary_hash = crate::runtime_service::executable_hash()?;
+    fs::write(
+        dir.join("delivery-state.json"),
+        serde_json::to_vec(
+            &json!({"schema_version":2,"checked_at":chrono::Utc::now(),"status":"starting","binary_sha256":binary_hash,"pid":std::process::id(),"incomplete":true}),
+        )?,
+    )?;
     let mut interval = tokio::time::interval(Duration::from_secs(15));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut config = Config::load();
     let mut history_at = std::time::Instant::now() - Duration::from_secs(60);
     loop {
         interval.tick().await;
+        if wakaclock_core::runtime::paused("delivery") {
+            let state = json!({"schema_version":2,"checked_at":chrono::Utc::now(),"status":"paused_by_user","binary_sha256":binary_hash,"incomplete":true,"pid":std::process::id(),"git_sha":env!("WAKACLOCK_GIT_SHA")});
+            fs::write(dir.join("delivery-state.json"), serde_json::to_vec(&state)?)?;
+            if once {
+                return Ok(state);
+            }
+            continue;
+        }
         // Reload the credential/origin each round; queues remain scope-bound.
         if let Some(fresh) = Config::try_load() {
             config = fresh;
@@ -83,7 +101,7 @@ pub async fn run(once: bool) -> Result<Value, Box<dyn std::error::Error>> {
             result.is_err() || summary.is_none_or(|s| s.pending > 0 || s.dead_letter > 0);
         let capture_incomplete = capture["incomplete"].as_bool().unwrap_or(true);
         let state = json!({"schema_version":2,"checked_at":chrono::Utc::now(),
-            "pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),
+            "pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),"binary_sha256":binary_hash,
             "pending":summary.map(|s|s.pending),"dead_letter":summary.map(|s|s.dead_letter),"details":details,
             "tick_elapsed_ms":started.elapsed().as_millis(),
             "oldest_pending_at":summary.and_then(|s|s.oldest_pending_at).and_then(|at|chrono::DateTime::from_timestamp(at,0)),
@@ -93,9 +111,9 @@ pub async fn run(once: bool) -> Result<Value, Box<dyn std::error::Error>> {
             "capture":capture,
             "delivery_incomplete":delivery_incomplete,"capture_incomplete":capture_incomplete,
             "incomplete":delivery_incomplete || capture_incomplete});
-        let temp = dir.join("delivery-state.tmp");
-        fs::write(&temp, serde_json::to_vec(&state)?)?;
-        fs::rename(temp, dir.join("delivery-state.json"))?;
+        let temporary_path = dir.join("delivery-state.tmp");
+        fs::write(&temporary_path, serde_json::to_vec(&state)?)?;
+        fs::rename(temporary_path, dir.join("delivery-state.json"))?;
         if history_at.elapsed() >= Duration::from_secs(60) {
             let history = dir.join("delivery-history");
             fs::create_dir_all(&history)?;
@@ -123,6 +141,9 @@ pub async fn run(once: bool) -> Result<Value, Box<dyn std::error::Error>> {
     }
 }
 pub fn uninstall() -> Result<Value, Box<dyn std::error::Error>> {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        return crate::runtime_service::uninstall("delivery");
+    }
     if cfg!(target_os = "macos") {
         let uid = String::from_utf8(Command::new("id").arg("-u").output()?.stdout)?
             .trim()
@@ -193,6 +214,15 @@ fn bootstrap_launch_agent_using(
 }
 
 pub fn install(recovery_probe: bool) -> Result<Value, Box<dyn std::error::Error>> {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        let dir = directory()?;
+        fs::create_dir_all(&dir)?;
+        fs::write(
+            dir.join("delivery-recovery-enabled"),
+            if recovery_probe { "1" } else { "0" },
+        )?;
+        return crate::runtime_service::install("delivery");
+    }
     if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return Err("run `wakaclock delivery run` with your platform's service manager".into());
     }
@@ -201,9 +231,9 @@ pub fn install(recovery_probe: bool) -> Result<Value, Box<dyn std::error::Error>
     fs::create_dir_all(dir.join("bin"))?;
     // A separate runtime copy makes service upgrades atomic and reversible.
     let exe = dir.join("bin/wakaclock-delivery");
-    let temp = dir.join("bin/wakaclock-delivery.new");
-    fs::copy(std::env::current_exe()?, &temp)?;
-    fs::rename(temp, &exe)?;
+    let temporary_path = dir.join("bin/wakaclock-delivery.new");
+    fs::copy(std::env::current_exe()?, &temporary_path)?;
+    fs::rename(temporary_path, &exe)?;
     let path = manifest_path()?;
     fs::create_dir_all(path.parent().ok_or("invalid manifest path")?)?;
     let content = if cfg!(target_os = "macos") {

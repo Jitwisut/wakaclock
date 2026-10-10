@@ -10,8 +10,11 @@ use std::{
 };
 use wakaclock_core::{
     ai::{
-        activity::{opaque, parse_activity, ActivityCursor, ActivityStore, BrokerActivityEventV2},
-        AiActivityParser, CodexParser, DiscoveryContext, DiscoveryState,
+        activity::{
+            opaque, parse_shared_activity, ActivityCursor, ActivityStore, BrokerActivityEventV2,
+        },
+        AdapterRegistry, AiActivityParser, ClaudeCodeParser, CodexParser, DiscoveryContext,
+        DiscoveryState,
     },
     api_client::ApiClient,
     config::Config,
@@ -90,6 +93,79 @@ fn heartbeat(config: &Config, event: &BrokerActivityEventV2, device: &str) -> He
     }
     h
 }
+
+pub(crate) async fn submit_activity_v3(
+    config: &Config,
+    api: &ApiClient,
+    event: wakaclock_core::ai::activity::BrokerActivityEventV3,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    event.validate().map_err(std::io::Error::other)?;
+    if wakaclock_core::runtime::paused("capture")
+        || !wakaclock_core::runtime::capture_allowed_at(event.activity.occurred_at.timestamp())
+    {
+        return Ok(json!({"schema_version":3,"status":"paused_by_user","durable":false}));
+    }
+    let mut normalized = event.normalized().map_err(std::io::Error::other)?;
+    if let Some(start) = normalized.started_at {
+        if wakaclock_core::runtime::read()?.intervals.iter().any(|i| {
+            i.component == "capture"
+                && i.started_at < normalized.occurred_at.timestamp()
+                && i.ended_at.is_none_or(|end| end > start.timestamp())
+        }) {
+            normalized.started_at = None;
+        }
+    }
+    let scope = scope_key(api);
+    let store = ActivityStore::open(&directory()?.join("capture.db"))?;
+    store.rebind_verified_scopes(&Queue::open()?, &api.queue_scope())?;
+    let duplicate = store
+        .evidence_revision(&scope, &normalized.event_id)?
+        .is_some_and(|r| r >= normalized.revision);
+    if duplicate {
+        if let Some(previous) =
+            store.evidence_at_revision(&scope, &normalized.event_id, normalized.revision)?
+        {
+            let mut candidate = normalized.clone();
+            // Re-observing the same native operation after stdout loss does not
+            // move its original timestamp. Provider timestamps remain immutable.
+            if event.provider_schema_version.ends_with("-hook_observed") {
+                candidate.occurred_at = previous.occurred_at;
+            }
+            if candidate != previous
+                || store
+                    .contract_for(&scope, &normalized.event_id, normalized.revision)?
+                    .is_some_and(|contract| contract != event.contract())
+            {
+                return Err("activity_duplicate_evidence_conflict".into());
+            }
+        }
+        return Ok(
+            json!({"schema_version":3,"event_id":normalized.event_id,"status":"duplicate","durable":true}),
+        );
+    }
+    let contracts = std::collections::BTreeMap::from([(
+        (normalized.event_id.clone(), normalized.revision),
+        event.contract(),
+    )]);
+    store.commit_for_adapter(
+        &scope,
+        "broker-activity-v3",
+        &wakaclock_core::ai::activity::ActivityBatch {
+            events: vec![normalized.clone()],
+            cursor: ActivityCursor::default(),
+            records: 1,
+            contracts,
+        },
+        &event.adapter_id,
+        &event.execution_surface,
+    )?;
+    // The ACK is entirely local. The collector negotiates receiver capability
+    // and drains this inbox independently of future tool calls or connectivity.
+    let _ = config;
+    Ok(
+        json!({"schema_version":3,"event_id":normalized.event_id,"status":if duplicate{"duplicate"}else{"accepted"},"durable":true}),
+    )
+}
 /// Shared one-shot broker v2 adapter. The durable inbox commit is the producer
 /// acknowledgement boundary, including while the backend is unavailable.
 pub(crate) async fn submit_activity(
@@ -98,6 +174,13 @@ pub(crate) async fn submit_activity(
     event: BrokerActivityEventV2,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     event.validate().map_err(std::io::Error::other)?;
+    if wakaclock_core::runtime::paused("capture")
+        || !wakaclock_core::runtime::capture_allowed_at(event.occurred_at.timestamp())
+    {
+        return Ok(
+            json!({"schema_version":2,"status":"paused_by_user","event_id":event.event_id,"durable":false}),
+        );
+    }
     if !event.monitoring_only {
         crate::team_context_capture::observe(
             config,
@@ -116,12 +199,19 @@ pub(crate) async fn submit_activity(
         events: vec![event.clone()],
         cursor: ActivityCursor::default(),
         records: 1,
+        contracts: std::collections::BTreeMap::new(),
     };
     store.commit(&scope, "broker-activity-v2", &batch)?;
     // Processing is best effort after acceptance. The independent collector
     // resumes this inbox after any failed capability check or durable handoff.
     if api.capture_activity_supported().await {
-        let _ = handoff_pending(config, api, &store, &scope);
+        let _ = handoff_pending(
+            config,
+            api,
+            &store,
+            &scope,
+            api.capture_activity_version_supported(3).await,
+        );
     }
     Ok(
         json!({"schema_version":2,"status":if duplicate{"duplicate"}else{"accepted"},"event_id":event.event_id,"durable":true}),
@@ -132,12 +222,28 @@ fn handoff_pending(
     api: &ApiClient,
     store: &ActivityStore,
     scope: &str,
+    v3_supported: bool,
 ) -> Result<u32, Box<dyn std::error::Error>> {
     let queue = Queue::open()?;
+    store.rebind_verified_scopes(&queue, &api.queue_scope())?;
     let device = queue.device_id()?;
     let mut queued = 0;
     for event in store.pending(scope)? {
+        let adapter = store.adapter_for(scope, &event.event_id)?;
+        if adapter != "codex" && !v3_supported {
+            continue;
+        }
         let mut h = heartbeat(config, &event, &device);
+        if adapter != "codex" {
+            h.entity = adapter.clone();
+            h.ai_agent = Some(adapter.clone());
+            h.user_agent = "wakaclock-cli/provider-activity-v3".into();
+            h.session_id = Some(wakaclock_core::ai::usage::scoped_session_id(
+                &device,
+                &adapter,
+                &event.session_id,
+            ));
+        }
         h.revision = store.wire_revision(scope, &event.event_id, event.revision)?;
         h.enforce_attribution_policy();
         h.validate().map_err(std::io::Error::other)?;
@@ -149,14 +255,14 @@ fn handoff_pending(
 }
 
 fn save(path: &Path, state: &Value) -> Result<(), Box<dyn std::error::Error>> {
-    let temp = path.with_extension("tmp");
-    fs::write(&temp, serde_json::to_vec(state)?)?;
+    let temporary_path = path.with_extension("tmp");
+    fs::write(&temporary_path, serde_json::to_vec(state)?)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temp, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(&temporary_path, fs::Permissions::from_mode(0o600))?;
     }
-    fs::rename(temp, path)?;
+    fs::rename(temporary_path, path)?;
     Ok(())
 }
 #[derive(Debug)]
@@ -218,19 +324,60 @@ pub fn status() -> Value {
         .unwrap_or_else(|| json!({"status":"unavailable"}));
     assess_status(state, Utc::now())
 }
-fn sources() -> Vec<PathBuf> {
-    CodexParser::new()
-        .discover_sources(&DiscoveryContext {
-            home_dir: dirs::home_dir().unwrap_or_default(),
-            config_override: None,
-        })
-        .into_iter()
-        .filter_map(|v| match v.state {
-            DiscoveryState::TranscriptFound { path } => Some(path),
-            _ => None,
-        })
-        .collect()
+#[derive(Clone)]
+struct ActivitySource {
+    adapter: String,
+    surface: String,
+    path: PathBuf,
+    metadata_contract: bool,
 }
+fn sources(scope: &str) -> Vec<ActivitySource> {
+    let discovery = DiscoveryContext {
+        home_dir: dirs::home_dir().unwrap_or_default(),
+        config_override: None,
+    };
+    let parsers: Vec<Box<dyn AiActivityParser>> = vec![
+        Box::new(CodexParser::new()),
+        Box::new(ClaudeCodeParser::new()),
+    ];
+    let mut sources = Vec::new();
+    for parser in parsers {
+        for result in parser.discover_sources(&discovery) {
+            if let DiscoveryState::TranscriptFound { path } = result.state {
+                sources.push(ActivitySource {
+                    adapter: parser.id().into(),
+                    surface: "cli".into(),
+                    path,
+                    metadata_contract: false,
+                });
+            }
+        }
+    }
+    // Explicit metadata producers may spool the validated v3 contract. Discovery
+    // is shallow and scoped; it never recursively searches the user's home.
+    let root = discovery
+        .home_dir
+        .join(".wakaclock/activity-sources")
+        .join(scope);
+    for manifest in AdapterRegistry::builtin().manifests() {
+        for surface in ["cli", "ide", "desktop", "inline", "mcp"] {
+            if let Ok(entries) = fs::read_dir(root.join(&manifest.id).join(surface)) {
+                for entry in entries.take(256).flatten() {
+                    if entry.path().extension().is_some_and(|s| s == "jsonl") {
+                        sources.push(ActivitySource {
+                            adapter: manifest.id.clone(),
+                            surface: surface.into(),
+                            path: entry.path(),
+                            metadata_contract: true,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    sources
+}
+
 pub async fn run(
     once: bool,
     dry_run: bool,
@@ -285,10 +432,45 @@ async fn run_inner(
     } else {
         Some(ActivityStore::open(&dir.join("capture.db"))?)
     };
+    let binary_hash = crate::runtime_service::executable_hash()?;
+    if !dry_run {
+        save(
+            &dir.join("capture-state.json"),
+            &json!({"schema_version":2,"checked_at":Utc::now(),"status":"starting","pid":std::process::id(),"binary_sha256":binary_hash,"incomplete":true}),
+        )?;
+    }
     let mut interval = tokio::time::interval(Duration::from_secs(15));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut next_source = 0usize;
     loop {
         interval.tick().await;
+        if !dry_run && wakaclock_core::runtime::paused("capture") {
+            let mut scope = None;
+            let mut pending = None;
+            if let Some(store) = &store {
+                let mut config = Config::load();
+                super::apply_env_overrides(&mut config)?;
+                let api = ApiClient::new(config.clone())?;
+                scope = Some(scope_key(&api));
+                store.rebind_verified_scopes(&Queue::open()?, &api.queue_scope())?;
+                if api.capture_activity_supported().await {
+                    handoff_pending(
+                        &config,
+                        &api,
+                        store,
+                        &scope_key(&api),
+                        api.capture_activity_version_supported(3).await,
+                    )?;
+                }
+                pending = Some(store.pending_count(&scope_key(&api))?);
+            }
+            let state = json!({"schema_version":2,"checked_at":Utc::now(),"status":"paused_by_user","binary_sha256":binary_hash,"enabled":true,"scope":scope,"pending":pending,"incomplete":true,"pid":std::process::id()});
+            save(&dir.join("capture-state.json"), &state)?;
+            if once {
+                return Ok(state);
+            }
+            continue;
+        }
         if !once
             && !dry_run
             && date.is_none()
@@ -308,6 +490,9 @@ async fn run_inner(
         super::apply_env_overrides(&mut config)?;
         let api = ApiClient::new(config.clone())?;
         let scope = scope_key(&api);
+        if let Some(store) = &store {
+            store.rebind_verified_scopes(&Queue::open()?, &api.queue_scope())?;
+        }
         let began = std::time::Instant::now();
         let now = Utc::now();
         let mut scanned = 0;
@@ -322,7 +507,24 @@ async fn run_inner(
             .as_deref()
             .map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d"))
             .transpose()?;
-        let mut paths = transcript.clone().map(|p| vec![p]).unwrap_or_else(sources);
+        let mut paths = transcript
+            .clone()
+            .map(|path| {
+                vec![ActivitySource {
+                    adapter: "codex".into(),
+                    surface: "cli".into(),
+                    path,
+                    metadata_contract: false,
+                }]
+            })
+            .unwrap_or_else(|| sources(&scope));
+        if transcript.is_none() {
+            for alias in Queue::open()?.verified_editor_journal_scopes(&api.queue_scope())? {
+                paths.extend(sources(&wakaclock_core::editor_health::scope_id(&alias)));
+            }
+            paths.sort_by(|a, b| a.path.cmp(&b.path));
+            paths.dedup_by(|a, b| a.path == b.path);
+        }
         if transcript.is_none() {
             if let Some(day) = selected_day {
                 let start = day
@@ -333,7 +535,7 @@ async fn run_inner(
                     .ok_or("invalid replay date")?
                     .timestamp();
                 paths.retain(|p| {
-                    fs::metadata(p)
+                    fs::metadata(&p.path)
                         .and_then(|m| m.modified())
                         .ok()
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -341,16 +543,27 @@ async fn run_inner(
                 });
             }
         }
-        paths.sort_by_key(|p| std::cmp::Reverse(fs::metadata(p).and_then(|m| m.modified()).ok()));
-        for path in paths {
+        paths.sort_by(|a, b| a.adapter.cmp(&b.adapter).then(a.path.cmp(&b.path)));
+        if !paths.is_empty() {
+            let index = next_source % paths.len();
+            paths.rotate_left(index);
+            next_source = (index + 1) % paths.len();
+        }
+        for input in paths {
+            let path = input.path;
             if began.elapsed() > Duration::from_secs(10) && !dry_run && date.is_none() {
                 break;
             }
-            let source = opaque(&format!(
+            let identity = format!(
                 "{}\0{}",
                 path.to_string_lossy(),
                 date.as_deref().unwrap_or("live")
-            ));
+            );
+            let source = opaque(&if input.adapter == "codex" && !input.metadata_contract {
+                identity
+            } else {
+                format!("{}\0{}\0{}", input.adapter, input.surface, identity)
+            });
             let previous = if let Some(store) = &store {
                 store.cursor(&scope, &source)?
             } else {
@@ -361,10 +574,16 @@ async fn run_inner(
             if previous.file_identity.is_empty()
                 && date.is_none()
                 && !dry_run
-                && fs::metadata(&path)?
-                    .modified()?
-                    .elapsed()
-                    .is_ok_and(|a| a > Duration::from_secs(86400))
+                && match fs::metadata(&path).and_then(|metadata| metadata.modified()) {
+                    Ok(modified) => modified,
+                    Err(_) => {
+                        errors += 1;
+                        parser_failure_codes.insert("activity_source_unreadable".into());
+                        continue;
+                    }
+                }
+                .elapsed()
+                .is_ok_and(|a| a > Duration::from_secs(86400))
             {
                 scanned += 1;
                 continue;
@@ -389,10 +608,41 @@ async fn run_inner(
                 previous.capture_until = Some(start + chrono::Duration::days(1));
             }
             loop {
-                match parse_activity(&path, &previous, now) {
-                    Ok(mut batch) => {
+                match parse_shared_activity(
+                    &input.adapter,
+                    &input.surface,
+                    input.metadata_contract,
+                    &path,
+                    &previous,
+                    now,
+                ) {
+                    Ok((mut batch, blocked)) => {
+                        if let Some(code) = blocked.as_ref() {
+                            errors += 1;
+                            parser_failure_codes.insert(code.clone());
+                        }
                         scanned += 1;
                         parsed += batch.records;
+                        if !dry_run {
+                            batch.events.retain(|e| {
+                                wakaclock_core::runtime::capture_allowed_at(
+                                    e.occurred_at.timestamp(),
+                                )
+                            });
+                            for event in &mut batch.events {
+                                if let Some(start) = event.started_at {
+                                    let state = wakaclock_core::runtime::read()?;
+                                    if state.intervals.iter().any(|i| {
+                                        i.component == "capture"
+                                            && i.started_at < event.occurred_at.timestamp()
+                                            && i.ended_at.is_none_or(|end| end > start.timestamp())
+                                    }) {
+                                        // End marker remains real; a tool crossing a user pause has no fully measured interval.
+                                        event.started_at = None;
+                                    }
+                                }
+                            }
+                        }
                         if let Some(day) = &date {
                             batch.events.retain(|e| {
                                 e.occurred_at
@@ -422,9 +672,16 @@ async fn run_inner(
                         }
                         previous = batch.cursor.clone();
                         if let Some(store) = &store {
-                            store.commit(&scope, &source, &batch)?;
+                            store.commit_for_adapter(
+                                &scope,
+                                &source,
+                                &batch,
+                                &input.adapter,
+                                &input.surface,
+                            )?;
                         }
-                        if (dry_run || date.is_some()) && batch.records == 2000 {
+                        if blocked.is_none() && (dry_run || date.is_some()) && batch.records == 2000
+                        {
                             continue;
                         }
                     }
@@ -443,7 +700,13 @@ async fn run_inner(
         };
         if let Some(store) = &store {
             if capability {
-                queued += handoff_pending(&config, &api, store, &scope)?;
+                queued += handoff_pending(
+                    &config,
+                    &api,
+                    store,
+                    &scope,
+                    api.capture_activity_version_supported(3).await,
+                )?;
             }
         }
         let pending = store
@@ -452,7 +715,7 @@ async fn run_inner(
             .transpose()?
             .unwrap_or(0)
             .saturating_add(unread_sources);
-        let state = json!({"schema_version":2,"checked_at":now,"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),"scope":scope,"enabled":true,"status":if errors>0{"parser_failure"}else if scanned==0{"unavailable"}else{"fresh"},"last_scan_success_at":if errors==0&&scanned>0{json!(now)}else{status()["last_scan_success_at"].clone()},"parser_errors":errors,"parser_failure_codes":parser_failure_codes,"pending":pending,"unread_sources":unread_sources,"scanned_sources":scanned,"parsed_records":parsed,"queued":queued,"receiver_capable":capability,"last_event_at":last_event,"tick_elapsed_ms":began.elapsed().as_millis(),"incomplete":errors>0||pending>0||scanned==0,"dry_run":dry_run,"candidates":if dry_run{Some(candidates)}else{None}});
+        let state = json!({"schema_version":2,"checked_at":now,"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),"binary_sha256":binary_hash,"scope":scope,"enabled":true,"status":if errors>0{"parser_failure"}else if scanned==0{"unavailable"}else{"fresh"},"last_scan_success_at":if errors==0&&scanned>0{json!(now)}else{status()["last_scan_success_at"].clone()},"parser_errors":errors,"parser_failure_codes":parser_failure_codes,"pending":pending,"unread_sources":unread_sources,"scanned_sources":scanned,"parsed_records":parsed,"queued":queued,"receiver_capable":capability,"last_event_at":last_event,"tick_elapsed_ms":began.elapsed().as_millis(),"incomplete":errors>0||pending>0||scanned==0,"dry_run":dry_run,"candidates":if dry_run{Some(candidates)}else{None}});
         if !dry_run {
             save(&dir.join("capture-state.json"), &state)?;
         }
@@ -464,6 +727,9 @@ async fn run_inner(
 
 /// Disable only capture. Accepted inbox/queue records, IDs and schema survive.
 pub fn uninstall() -> Result<Value, Box<dyn std::error::Error>> {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        return crate::runtime_service::uninstall("capture");
+    }
     let dir = directory()?;
     fs::write(dir.join("capture-enabled"), "0")?;
     let uid = String::from_utf8(std::process::Command::new("id").arg("-u").output()?.stdout)?
@@ -491,6 +757,9 @@ pub fn uninstall() -> Result<Value, Box<dyn std::error::Error>> {
 }
 
 pub fn install() -> Result<Value, Box<dyn std::error::Error>> {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        return crate::runtime_service::install("capture");
+    }
     if !cfg!(target_os = "macos") {
         return Err("install currently supports macOS".into());
     }
@@ -498,9 +767,9 @@ pub fn install() -> Result<Value, Box<dyn std::error::Error>> {
     fs::create_dir_all(dir.join("bin"))?;
     fs::write(dir.join("capture-enabled"), "1")?;
     let exe = dir.join("bin/wakaclock-capture");
-    let temp = exe.with_extension("new");
-    fs::copy(std::env::current_exe()?, &temp)?;
-    fs::rename(temp, &exe)?;
+    let temporary_path = exe.with_extension("new");
+    fs::copy(std::env::current_exe()?, &temporary_path)?;
+    fs::rename(temporary_path, &exe)?;
     let uid = String::from_utf8(std::process::Command::new("id").arg("-u").output()?.stdout)?
         .trim()
         .to_owned();

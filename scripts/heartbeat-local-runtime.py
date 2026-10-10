@@ -71,6 +71,18 @@ def verify_binding():
     if hashlib.sha256(binary.read_bytes()).hexdigest()!=binding['backend_sha256']:raise ValueError('backend_build_mismatch')
     return binary
 
+class RuntimePaused(Exception):
+    pass
+
+def backend_paused():
+    """Missing state preserves legacy behavior; unknown/corrupt intent fails closed."""
+    try:
+        value=json.loads((HOME_DIR/'runtime-desired.json').read_text())
+        if value.get('schema_version')!=1 or not isinstance(value.get('desired'),dict):return True
+        return value['desired'].get('backend-local',True) is not True
+    except FileNotFoundError:return False
+    except (OSError,ValueError,TypeError):return True
+
 def run(once=False):
     HOME_DIR.mkdir(exist_ok=True);lock=open(HOME_DIR/'backend-runtime.lock','a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     child=None;stopping=False;restart_count=0;backoff=15;next_attempt=0;last_exit=None;last_tick=time.monotonic();health_failures=0;last_health_failure=None;last_restart=None;previous_status=None
@@ -83,6 +95,13 @@ def run(once=False):
             now=time.monotonic();wake_gap=now-last_tick;last_tick=now
             code=None
             try:
+                if backend_paused():
+                    if child and child.poll() is None:
+                        child.terminate()
+                        try:child.wait(timeout=15)
+                        except subprocess.TimeoutExpired:child.kill();child.wait()
+                        last_exit=child.returncode;child=None
+                    raise RuntimePaused()
                 if docker(['info','--format','{{.ServerVersion}}']).returncode:
                     if now>=next_attempt:
                         subprocess.run(['/usr/bin/open','-g','-a','Docker'],capture_output=True,check=False)
@@ -108,6 +127,7 @@ def run(once=False):
                 elif deps and connected(8080) and not child:code='unmanaged_backend_present'
                 elif not deps:code=code or 'dependency_unavailable'
                 else:code='backend_starting'
+            except RuntimePaused:code='paused_by_user'
             except (OSError,ValueError,KeyError,subprocess.SubprocessError):code='runtime_binding_or_start_failed'
             observation={'checked_at':dt.datetime.now(dt.timezone.utc).isoformat(),'pid':os.getpid(),'backend_pid':child.pid if child else None,'restart_count':restart_count,'last_exit_status':last_exit,'last_restart_at':last_restart,'last_health_failure_at':last_health_failure,'healthy':healthy(),'error_code':code,'wake_gap_seconds':round(wake_gap,3)}
             private_save(STATE,observation)
@@ -129,6 +149,8 @@ def run(once=False):
 
 def install():
     import shutil
+    if backend_paused():
+        raise RuntimePaused('paused_by_user')
     verify_binding()
     RUNTIME.mkdir(mode=0o700,exist_ok=True);RUNTIME.chmod(0o700)
     existing=RUNTIME/'wakaclock-server'
@@ -138,7 +160,7 @@ def install():
     for source,target in [(ROOT/'backend/api/.env',RUNTIME/'backend.env'),(ROOT/'deployment/heartbeat-local/compose.yaml',RUNTIME/'compose.yaml'),(ROOT/'backend/api/target/debug/wakaclock-server',RUNTIME/'wakaclock-server'),(pathlib.Path(__file__).resolve(),RUNTIME/'supervisor.py')]:
         if source.resolve()!=target.resolve():
             temp=target.with_suffix('.new');shutil.copyfile(source,temp);temp.chmod(0o700 if target.name=='wakaclock-server' else 0o600);temp.replace(target)
-    binding=json.loads(MANIFEST.read_text());binding['backend_sha256']=hashlib.sha256((RUNTIME/'wakaclock-server').read_bytes()).hexdigest();binding['installed_at']=dt.datetime.now(dt.timezone.utc).isoformat();private_save(MANIFEST,binding)
+    binding=json.loads(MANIFEST.read_text());binding['backend_sha256']=hashlib.sha256((RUNTIME/'wakaclock-server').read_bytes()).hexdigest();binding['supervisor_sha256']=hashlib.sha256((RUNTIME/'supervisor.py').read_bytes()).hexdigest();binding['installed_at']=dt.datetime.now(dt.timezone.utc).isoformat();private_save(MANIFEST,binding)
     # Runtime lives outside Desktop so launchd needs no access to protected workspaces.
     path=pathlib.Path.home()/'Library/LaunchAgents'/f'{LABEL}.plist';uid=os.getuid()
     subprocess.run(['launchctl','bootout',f'gui/{uid}/{LABEL}'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
@@ -158,8 +180,35 @@ def install():
         if result.returncode==0:break
         time.sleep(1)
     if result.returncode:raise RuntimeError('backend_service_bootstrap_failed')
+
+def resume_preflight():
+    """Resume only the already-owned sealed runtime; no Docker probe here.
+
+    The supervisor checks the existing database binding before starting services.
+    A legacy installation missing this executable proof requires explicit upgrade.
+    """
+    path=pathlib.Path.home()/'Library/LaunchAgents'/f'{LABEL}.plist'
+    binding=json.loads(MANIFEST.read_text());supervisor=RUNTIME/'supervisor.py'
+    if not binding.get('account_verified') or not binding.get('canonical_data_verified') or binding.get('supervisor_sha256')!=hashlib.sha256(supervisor.read_bytes()).hexdigest():
+        raise ValueError('backend_resume_identity_or_build_unconfirmed')
+    value=plistlib.loads(path.read_bytes())
+    expected={'Label':LABEL,'ProgramArguments':['/usr/bin/python3',str(supervisor),'run'],'RunAtLoad':True,'KeepAlive':True,'ThrottleInterval':15,'EnvironmentVariables':{'PATH':'/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin','HOME':str(pathlib.Path.home()),'WAKACLOCK_REPOSITORY':str(ROOT)}}
+    if value!=expected:raise ValueError('backend_resume_ownership_unconfirmed')
+    return {'component':'backend-local','status':'ownership_verified'}
+
+def resume():
+    if backend_paused():raise RuntimePaused('paused_by_user')
+    resume_preflight()
+    path=pathlib.Path.home()/'Library/LaunchAgents'/f'{LABEL}.plist'
+    domain=f'gui/{os.getuid()}'
+    if subprocess.run(['launchctl','enable',f'{domain}/{LABEL}'],capture_output=True).returncode:raise RuntimeError('backend_service_enable_failed')
+    running=subprocess.run(['launchctl','print',f'{domain}/{LABEL}'],capture_output=True).returncode==0
+    if not running and subprocess.run(['launchctl','bootstrap',domain,str(path)],capture_output=True).returncode:raise RuntimeError('backend_service_bootstrap_failed')
+    return {'component':'backend-local','status':'supervisor_registered','readiness':'unconfirmed'}
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('action',choices=['run','install','preflight']);p.add_argument('--once',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('action',choices=['run','install','preflight','resume','resume-preflight']);p.add_argument('--once',action='store_true');a=p.parse_args()
     if a.action=='run':run(a.once)
     elif a.action=='install':install()
+    elif a.action=='resume':print(json.dumps(resume()))
+    elif a.action=='resume-preflight':print(json.dumps(resume_preflight()))
     else:print(json.dumps({'volumes':volume_metadata(),'endpoints_valid':bool(configuration()),'bound':MANIFEST.exists()}))

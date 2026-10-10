@@ -638,6 +638,65 @@ fn zero_fill_attribution(
         .collect()
 }
 
+/// Input has already been canonicalized and clipped: overlap belongs to one domain
+/// and project, so every breakdown sums to the same measured union.
+fn browsing_summary(
+    intervals: &[crate::services::activity_timeline::CanonicalInterval],
+    range: &ResolvedRange,
+) -> DashboardBrowsing {
+    let mut domains = HashMap::<String, f64>::new();
+    let mut projects = HashMap::<String, f64>::new();
+    let mut daily = Vec::new();
+    for interval in intervals {
+        let seconds = interval.end - interval.start;
+        *domains.entry(interval.entity.clone()).or_default() += seconds;
+        *projects
+            .entry(
+                interval
+                    .project
+                    .clone()
+                    .unwrap_or_else(|| "Unassigned".into()),
+            )
+            .or_default() += seconds;
+    }
+    for offset in 0..range.days_included() {
+        let day = range.start + Duration::days(offset);
+        let (start, end) = ResolvedRange {
+            start: day,
+            end: day,
+            timezone: range.timezone,
+        }
+        .unix_bounds();
+        let seconds = intervals
+            .iter()
+            .map(|i| (i.end.min(end) - i.start.max(start)).max(0.0))
+            .sum();
+        daily.push(BrowsingTotal {
+            name: day.to_string(),
+            seconds,
+        });
+    }
+    fn sorted(map: HashMap<String, f64>) -> Vec<BrowsingTotal> {
+        let mut rows: Vec<_> = map
+            .into_iter()
+            .map(|(name, seconds)| BrowsingTotal { name, seconds })
+            .collect();
+        rows.sort_by(|a, b| {
+            b.seconds
+                .total_cmp(&a.seconds)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        rows
+    }
+    DashboardBrowsing {
+        total_seconds: intervals.iter().map(|i| i.end - i.start).sum(),
+        domains: sorted(domains),
+        projects: sorted(projects),
+        daily,
+        calculation_version: "browser_foreground_v1",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
@@ -910,64 +969,5 @@ mod tests {
         assert_eq!(summary.priced_tokens, 135);
         assert_eq!(summary.estimated_cost_microusd, 123);
         assert_eq!(summary.priced_events, 1);
-    }
-}
-
-/// Input has already been canonicalized and clipped: overlap belongs to one domain
-/// and project, so every breakdown sums to the same measured union.
-fn browsing_summary(
-    intervals: &[crate::services::activity_timeline::CanonicalInterval],
-    range: &ResolvedRange,
-) -> DashboardBrowsing {
-    let mut domains = HashMap::<String, f64>::new();
-    let mut projects = HashMap::<String, f64>::new();
-    let mut daily = Vec::new();
-    for interval in intervals {
-        let seconds = interval.end - interval.start;
-        *domains.entry(interval.entity.clone()).or_default() += seconds;
-        *projects
-            .entry(
-                interval
-                    .project
-                    .clone()
-                    .unwrap_or_else(|| "Unassigned".into()),
-            )
-            .or_default() += seconds;
-    }
-    for offset in 0..range.days_included() {
-        let day = range.start + Duration::days(offset);
-        let (start, end) = ResolvedRange {
-            start: day,
-            end: day,
-            timezone: range.timezone,
-        }
-        .unix_bounds();
-        let seconds = intervals
-            .iter()
-            .map(|i| (i.end.min(end) - i.start.max(start)).max(0.0))
-            .sum();
-        daily.push(BrowsingTotal {
-            name: day.to_string(),
-            seconds,
-        });
-    }
-    fn sorted(map: HashMap<String, f64>) -> Vec<BrowsingTotal> {
-        let mut rows: Vec<_> = map
-            .into_iter()
-            .map(|(name, seconds)| BrowsingTotal { name, seconds })
-            .collect();
-        rows.sort_by(|a, b| {
-            b.seconds
-                .total_cmp(&a.seconds)
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        rows
-    }
-    DashboardBrowsing {
-        total_seconds: intervals.iter().map(|i| i.end - i.start).sum(),
-        domains: sorted(domains),
-        projects: sorted(projects),
-        daily,
-        calculation_version: "browser_foreground_v1",
     }
 }

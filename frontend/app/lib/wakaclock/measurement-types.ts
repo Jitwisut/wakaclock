@@ -74,6 +74,12 @@ export interface DeliveryStatusResponse {
       captured_at: string;
       enabled: boolean;
       last_scan_success_at: null | string;
+      editor_journal?: {
+        status: string;
+        pending: null | number;
+        dead_letter: number;
+        last_observed_at: string;
+      };
       parser_errors: number;
       pending: number;
       schema_version: number;

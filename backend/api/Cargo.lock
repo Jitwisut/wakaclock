@@ -6466,6 +6466,7 @@ dependencies = [
  "chrono-tz",
  "dirs",
  "dotenvy",
+ "fs2",
  "gix",
  "notify",
  "regex",

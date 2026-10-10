@@ -64,6 +64,8 @@ export function DeliveryStatusNotice() {
             : 'unknown'}
           {' · parser failures '}{device.capture?.parser_errors ?? 'unknown'}
           {' · capture pending '}{device.capture?.pending ?? 'unknown'}
+          {' · editor journal '}{device.capture?.editor_journal?.status ?? 'unknown'}
+          {' · editor handoff pending '}{device.capture?.editor_journal?.pending ?? 'unknown'}
           {' · ready '} {device.details?.eligible ?? 'unknown'} · leased{' '}
           {device.details?.leased ?? 'unknown'}
           {' · accepted '}

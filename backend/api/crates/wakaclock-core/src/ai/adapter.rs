@@ -216,6 +216,8 @@ pub struct AdapterCatalogEntry {
     pub runtime: AdapterRuntime,
     #[serde(default)]
     pub resources: Vec<String>,
+    #[serde(default)]
+    pub activity_capabilities: Vec<super::activity_capability::ActivityCapability>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -517,6 +519,7 @@ fn catalog_entry(manifest: AdapterManifest) -> AdapterCatalogEntry {
         ),
     };
     AdapterCatalogEntry {
+        activity_capabilities: super::activity_capability::for_adapter(&manifest.id),
         manifest,
         aliases,
         supported_platforms,

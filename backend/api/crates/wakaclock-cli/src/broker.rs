@@ -319,6 +319,7 @@ enum ProcessRecordOutcome {
 
 fn error_code(error: &AppError) -> &'static str {
     match error {
+        AppError::RuntimePaused => "paused_by_user",
         AppError::Validation(_) => "validation",
         AppError::Auth(_) => "auth",
         AppError::Http(_) | AppError::HttpStatus { .. } | AppError::HttpStatusRetry { .. } => {

@@ -120,6 +120,8 @@ export class StatusBarController implements vscode.Disposable {
   private deliveryFailureReported = false;
   private legacyCliReported = false;
   private deliveryHealthState?: string;
+  private journalHealthProvider?: () => import("./heartbeatJournal").JournalHealth | undefined;
+  public setJournalHealthProvider(provider: () => import("./heartbeatJournal").JournalHealth | undefined): void { this.journalHealthProvider = provider; }
   private lastSnapshot?: Awaited<ReturnType<Pick<WakaclockCliService, "getToday">["getToday"]>>;
   private lastBrokerStatus?: BrokerStatusSnapshot;
   private lastAiDiagnostics?: AiDiagnosticsSnapshot;
@@ -226,6 +228,8 @@ export class StatusBarController implements vscode.Disposable {
 
     try {
       const snapshot = await this.cli.getToday(localTimezone());
+      const journal = this.journalHealthProvider?.();
+      if (journal && (journal.status !== "ready" || journal.pending > 0 || journal.deadLetter)) snapshot.dataIncomplete = true;
       if (!this.inFlight.isCurrent(generation)) {
         this.logger.debug("discarded a status result from a previous scope");
         return;
@@ -258,7 +262,7 @@ export class StatusBarController implements vscode.Disposable {
       const captureState = !capture ? "unknown" : captureAge > 300 ? "stale" : capture.parser_errors || capture.status === "parser_failure" ? "critical" : capture.status !== "fresh" || capture.pending ? "warning" : "complete";
       const deliveryHealth = !details ? "unknown" : snapshot.deadLetter || ["auth_401", "payment_402"].includes(details.backlog_error?.kind ?? "") || (backlog > 0 && age > 1800)
         ? "critical" : backlog > 0 && age > 300 ? "warning" : backlog > 0 ? "pending" : "complete";
-      const health = deliveryHealth === "complete" ? captureState : deliveryHealth;
+      const health = journal && (journal.status !== "ready" || journal.deadLetter) ? "critical" : journal?.pending ? "pending" : deliveryHealth === "complete" ? captureState : deliveryHealth;
       if (this.deliveryHealthState !== health) {
         const previous = this.deliveryHealthState;
         this.deliveryHealthState = health;
@@ -269,6 +273,7 @@ export class StatusBarController implements vscode.Disposable {
         }
       }
       this.render(snapshot);
+      if (journal) this.item.tooltip = `${this.item.tooltip ?? ""}\nEditor journal: ${journal.status}; pending ${journal.pending}; dead letter ${journal.deadLetter ?? 0}${journal.errorCode ? ` (${journal.errorCode})` : ""}`;
       if (snapshot.legacyCli && !this.legacyCliReported) {
         this.legacyCliReported = true;
         void vscode.window.showWarningMessage(

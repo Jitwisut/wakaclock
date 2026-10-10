@@ -25,6 +25,9 @@ import type {
 } from "./types";
 import { appendSegment, MAX_ACTIVITY_GAP_MS, unionSeconds } from "./activity";
 import { randomUUID } from "node:crypto";
+import { HeartbeatJournal, type JournalHealth } from "./heartbeatJournal";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   getEditorEntity,
   getSelectionMetrics,
@@ -76,6 +79,15 @@ interface FlushSnapshot {
   lastActivityAt?: number;
 }
 
+interface JournalCheckpoint {
+  states: BufferedFileState[];
+  retries: [string, FlushSnapshot[]][];
+  detached: BufferedFileState[];
+  rejections?: [string, string][];
+  external?: [string, { entity: string; metadata: ExternalFileChangeMetadata; now: number; project?: string; workspaceRoot?: string }][];
+  externalPayloads?: [string, ExtraHeartbeatPayload][];
+}
+
 export class HeartbeatBufferManager {
   private readonly states = new Map<string, BufferedFileState>();
   private readonly lineMeasurements = new DocumentLineMeasurements();
@@ -101,11 +113,95 @@ export class HeartbeatBufferManager {
   private flushTail: Promise<void> = Promise.resolve();
   /** Snapshots whose CLI request failed. They retain their original heartbeat ID. */
   private readonly retrySnapshots = new Map<string, FlushSnapshot[]>();
+  private readonly detached = new Map<string, BufferedFileState>();
+  private journal?: HeartbeatJournal<JournalCheckpoint>;
+  private journalScope?: string;
+  private journalError?: string;
+  private readonly rejections = new Map<string, string>();
+  private readonly external = new Map<string, { entity: string; metadata: ExternalFileChangeMetadata; now: number; project?: string; workspaceRoot?: string }>();
+  private readonly externalPayloads = new Map<string, ExtraHeartbeatPayload>();
+  private readonly externalInFlight = new Set<string>();
+  private capturePaused = false;
+  public setCapturePaused(paused: boolean): void {
+    this.capturePaused = paused;
+    this.lastObservedActivityAt = undefined;
+    this.lastObservedEntity = undefined;
+  }
+
+  public enableJournal(directory: string, scope: string, verifiedRecoveryDirectories: readonly string[] = []): void {
+    this.journalScope = scope;
+    const abandoned: HeartbeatJournal<JournalCheckpoint>[] = [];
+    const importVerified = <T>(target: Map<string, T>, id: string, value: T) => {
+      if (target.has(id) && JSON.stringify(target.get(id)) !== JSON.stringify(value)) throw new Error("journal_recovery_identity_conflict");
+      target.set(id, value);
+    };
+    try {
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      this.journal = new HeartbeatJournal<JournalCheckpoint>(path.join(directory, randomUUID()));
+      for (const recoveryDirectory of [directory, ...verifiedRecoveryDirectories]) {
+      if (!fs.existsSync(recoveryDirectory)) continue;
+      for (const entry of fs.readdirSync(recoveryDirectory, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !fs.existsSync(path.join(recoveryDirectory, entry.name, "metadata.jsonl"))) continue;
+        let previous: HeartbeatJournal<JournalCheckpoint>;
+        try { previous = new HeartbeatJournal<JournalCheckpoint>(path.join(recoveryDirectory, entry.name)); }
+        catch (error) {
+          if (!(error instanceof Error) || error.message !== "journal_locked") this.journalError = "journal_recovery_ownership_unconfirmed";
+          continue;
+        }
+        abandoned.push(previous);
+        const recovered = previous.read();
+      if (recovered) {
+        for (const [id, value] of recovered.external ?? []) importVerified(this.external, id, value);
+        for (const [id, value] of recovered.externalPayloads ?? []) importVerified(this.externalPayloads, id, value);
+        for (const [id, code] of recovered.rejections ?? []) importVerified(this.rejections, id, code);
+        for (const [entity, retries] of recovered.retries) this.retrySnapshots.set(entity, [...(this.retrySnapshots.get(entity) ?? []), ...retries]);
+        for (const original of [...recovered.states, ...recovered.detached]) {
+          const state = structuredClone(original);
+          if (!this.hasPendingActivity(state)) continue;
+          this.getOrCreateState(state.entity);
+          const snapshot = this.captureSnapshot(state, "coding", state.pendingWrite, {
+            metricVersion: "editor-before-after-v1", boundary: "flush", status: "unavailable",
+            reason: "baseline_missing", changeEvents: state.pendingEditorChanges.length, containsReplay: true,
+          });
+          this.retrySnapshots.set(state.entity, [...(this.retrySnapshots.get(state.entity) ?? []), snapshot]);
+        }
+        // Earned intervals survive; restart itself never closes a new interval.
+        this.lastObservedActivityAt = undefined;
+        this.lastObservedEntity = undefined;
+      }
+      }
+      }
+      // Transfer ownership only after the new journal is durable. Corrupt source
+      // journals retain all evidence and make capture unhealthy until repaired.
+      this.checkpoint();
+      for (const previous of abandoned) {
+        if (previous.health().status === "ready") previous.append({ states: [], retries: [], detached: [] }, 0);
+        else this.journalError = "journal_corrupt_recovery_source";
+        previous.close();
+      }
+    } catch { this.journalError = "journal_initialization_failed"; }
+    finally { for (const previous of abandoned) previous.close(); }
+  }
+
+  public getJournalHealth(): JournalHealth | undefined {
+    const sidecarFailure = this.aiAttributionStore.checkpointHealth().errorCode;
+    const health = this.journalError ? { status: "write_failure" as const, pending: this.states.size + this.retrySnapshots.size, errorCode: this.journalError } : this.journal?.health();
+    return health ? { ...health, ...(sidecarFailure ? { status: "write_failure" as const, errorCode: sidecarFailure } : {}), deadLetter: this.rejections.size, handoffErrorCode: this.rejections.size ? "journal_dead_letter" : undefined } : undefined;
+  }
+
+  public closeJournal(): void { this.journal?.close(); }
+
+  private checkpoint(): void {
+    if (this.journalError) throw new Error(this.journalError);
+    if (!this.journal) return; // Legacy callers/tests opt in explicitly.
+    this.journal.append({ states: [...this.states.values()], retries: [...this.retrySnapshots], detached: [...this.detached.values()], rejections: [...this.rejections], external: [...this.external], externalPayloads: [...this.externalPayloads] },
+      Math.max([...this.states.values()].filter(s => this.hasPendingActivity(s)).length + [...this.retrySnapshots.values()].reduce((n, s) => n + s.length, 0) + this.detached.size + this.external.size + this.externalPayloads.size, this.rejections.size));
+  }
 
   public constructor(
     private readonly getConfig: () => WakaclockConfigSnapshot,
     private readonly cli: Pick<WakaclockCliService, "sendHeartbeat"> &
-      Partial<Pick<WakaclockCliService, "sendEditorObservation" | "getEditorObservationStatus">>,
+      Partial<Pick<WakaclockCliService, "sendEditorObservation" | "getEditorObservationStatus" | "acceptJournalBatch">>,
     private readonly logger: Logger,
     private readonly onHeartbeatSent?: HeartbeatSentHandler,
     private readonly aiAttributionStore: AiAttributionStore = new AiAttributionStore(),
@@ -123,7 +219,7 @@ export class HeartbeatBufferManager {
     changeReason?: number,
     paste?: ClipboardPasteMetrics
   ): Promise<void> {
-    if (!isFileDocument(document) || changes.length === 0) {
+    if (this.capturePaused || !isFileDocument(document) || changes.length === 0) {
       return;
     }
 
@@ -164,6 +260,7 @@ export class HeartbeatBufferManager {
     });
     this.updateSelectionState(state, selection);
 
+    this.checkpoint();
     this.onActivity?.();
 
     // WakaTime sends the first file-change heartbeat immediately. Subsequent
@@ -185,7 +282,7 @@ export class HeartbeatBufferManager {
     now = Date.now(),
     project?: string
   ): Promise<void> {
-    if (!this.getConfig().trackClipboardActions || !isFileDocument(document)) {
+    if (this.capturePaused || !this.getConfig().trackClipboardActions || !isFileDocument(document)) {
       return;
     }
     const entity = normalizeFsPath(document.uri.fsPath);
@@ -197,6 +294,7 @@ export class HeartbeatBufferManager {
     state.copyActions += 1;
     state.copiedChars += metrics.copiedChars;
     state.copiedLines += metrics.copiedLines;
+    this.checkpoint();
     this.onActivity?.();
     if (
       state.lastHeartbeatAt === undefined ||
@@ -211,7 +309,7 @@ export class HeartbeatBufferManager {
     now = Date.now(),
     project?: string
   ): Promise<void> {
-    if (!isFileDocument(document)) {
+    if (this.capturePaused || !isFileDocument(document)) {
       return;
     }
 
@@ -222,6 +320,7 @@ export class HeartbeatBufferManager {
     this.observeActivity(state, now);
     state.heartbeatId ||= randomUUID();
     state.pendingWrite = true;
+    this.checkpoint();
     this.onActivity?.();
     await this.flushFile(entity, "save", { now, write: true, force: true });
   }
@@ -253,6 +352,15 @@ export class HeartbeatBufferManager {
         .update("\0")
         .update(metadata.content_fingerprint ?? String(now))
         .digest("hex")}`;
+    if (this.capturePaused && !this.external.has(observationId)) return;
+    if (this.externalInFlight.has(observationId)) return;
+    if (this.journalScope) {
+      this.external.set(observationId, { entity: normalizedEntity, metadata: { ...metadata, event_id: observationId }, now, project, workspaceRoot });
+      this.checkpoint();
+    }
+    const finishObservation = () => { this.external.delete(observationId); this.checkpoint(); };
+    this.externalInFlight.add(observationId);
+    try {
 
     if (sendObservation && getObservationStatus && normalizedWorkspaceRoot) {
       const observation: EditorObservationPayload = {
@@ -272,12 +380,12 @@ export class HeartbeatBufferManager {
       };
       try {
         let status = await sendObservation.call(this.cli, observation);
-        if (status.status === "matched") return;
+        if (status.status === "matched") { finishObservation(); return; }
         const deadline = Date.now() + 15_000;
         while (status.status !== "expired" && Date.now() < deadline) {
           await wait(250);
           status = await getObservationStatus.call(this.cli, observationId);
-          if (status.status === "matched") return;
+          if (status.status === "matched") { finishObservation(); return; }
         }
         if (status.status !== "expired") {
           this.logger.debug("editor observation window elapsed", {
@@ -328,7 +436,7 @@ export class HeartbeatBufferManager {
         entity: normalizedEntity,
         aiEventId: matched.event_id,
       });
-      return;
+      finishObservation(); return;
     }
     const payload: ExtraHeartbeatPayload = {
       entity: normalizedEntity,
@@ -345,6 +453,14 @@ export class HeartbeatBufferManager {
       unattributed_lines_deleted: linesDeleted,
     };
 
+    if (this.journalScope) {
+      this.externalPayloads.set(observationId, payload);
+      this.external.delete(observationId);
+      this.checkpoint();
+      await this.flushExternalPayloads();
+      return;
+    }
+
     try {
       await this.cli.sendHeartbeat(normalizedEntity, true, "coding", [], payload);
       this.onHeartbeatSent?.();
@@ -358,6 +474,7 @@ export class HeartbeatBufferManager {
         error,
       });
     }
+    } finally { this.externalInFlight.delete(observationId); }
   }
 
   public async recordEditorSwitch(
@@ -366,6 +483,7 @@ export class HeartbeatBufferManager {
     now = Date.now(),
     project?: string,
   ): Promise<void> {
+    if (this.capturePaused) return;
     const currentEditor =
       typeof currentEditorOrNow === "number" ? undefined : currentEditorOrNow;
     if (typeof currentEditorOrNow === "number") {
@@ -398,7 +516,7 @@ export class HeartbeatBufferManager {
     project?: string,
     now = Date.now()
   ): void {
-    if (!isFileDocument(document)) {
+    if (this.capturePaused || !isFileDocument(document)) {
       return;
     }
     const entity = normalizeFsPath(document.uri.fsPath);
@@ -407,6 +525,7 @@ export class HeartbeatBufferManager {
     this.updateProjectState(state, project);
     this.updateSelectionState(state, selection);
     this.observeActivity(state, now);
+    this.checkpoint();
     this.onActivity?.();
   }
 
@@ -432,6 +551,7 @@ export class HeartbeatBufferManager {
   /** Flush every measured or retryable snapshot before the extension host exits. */
   public async flushAllBuffers(reason: FlushReason = "shutdown", now = Date.now()): Promise<void> {
     return this.enqueueFlush(async () => {
+      await this.flushRetainedExternal();
       for (const entity of this.states.keys()) {
         await this.flushFileInternal(entity, reason, { now, force: true });
       }
@@ -460,6 +580,7 @@ export class HeartbeatBufferManager {
   }
 
   private async flushDueBuffersInternal(reason: FlushReason, now: number): Promise<void> {
+    await this.flushRetainedExternal();
     // Keep each file's serialized snapshot independent. A failed request can then
     // retain its stable ID while another file continues accumulating activity; the
     // next pass may still use the CLI's bulk stdin path, but correctness no longer
@@ -470,6 +591,30 @@ export class HeartbeatBufferManager {
       }
       await this.flushFileInternal(entity, reason, { now });
     }
+  }
+
+  private async flushRetainedExternal(): Promise<void> {
+    for (const [id, observation] of this.external) {
+      if (this.externalInFlight.has(id)) continue;
+      // Replay the original observation, never today's file bytes or timestamp.
+      try { await this.recordExternalFileChange(observation.entity, observation.metadata, observation.now, observation.project, observation.workspaceRoot); }
+      catch { this.logger.warn("external observation remains in private journal"); }
+    }
+    await this.flushExternalPayloads();
+  }
+
+  private async flushExternalPayloads(): Promise<void> {
+    if (!this.journalScope || !this.externalPayloads.size || !this.cli.acceptJournalBatch) return;
+    const payloads = [...this.externalPayloads.values()].filter(p => !this.rejections.has(p.heartbeat_id ?? "")).slice(0, 100);
+    if (!payloads.length) return;
+    try {
+      const results = await this.cli.acceptJournalBatch(this.journalScope, payloads);
+      for (const result of results) {
+        if (result.status === "accepted" || result.status === "duplicate") this.externalPayloads.delete(result.heartbeat_id);
+        else if (result.status === "permanent_rejection") this.rejections.set(result.heartbeat_id, result.error_code ?? "invalid_metadata");
+      }
+      this.checkpoint();
+    } catch { this.logger.warn("external heartbeat handoff pending; stable ID retained"); }
   }
 
   public async flushFile(
@@ -532,19 +677,34 @@ export class HeartbeatBufferManager {
           containsReplay: false
         } : undefined);
         if (measurement) this.lastLineMeasurements.set(entity, measurement);
+        const detachedId = captured.heartbeatId ?? entity;
+        this.detached.set(detachedId, captured);
         this.clearMeasurements(state);
+        this.checkpoint();
         const matchedAiOperation = await this.classifyPendingAttribution(captured, now, measurement);
         if (this.hasPendingActivity(captured)) {
           snapshots.push(this.captureSnapshot(captured, category, write, measurement, matchedAiOperation));
         }
+        this.detached.delete(detachedId);
       }
       if (snapshots.length === 0) {
         return;
       }
-      this.retrySnapshots.delete(entity);
+      this.retrySnapshots.set(entity, snapshots);
+      this.checkpoint();
       const [primary, ...rest] = snapshots;
       try {
-        await this.cli.sendHeartbeat(
+        if (this.journalScope) {
+          if (!this.cli.acceptJournalBatch) throw new Error("cli_update_required");
+          const eligible = snapshots.filter(s => !this.rejections.has(s.payload.heartbeat_id ?? ""));
+          const results = eligible.length ? await this.cli.acceptJournalBatch(this.journalScope, eligible.map(s => s.payload)) : [];
+          for (const result of results) if (result.status === "permanent_rejection") this.rejections.set(result.heartbeat_id, result.error_code ?? "invalid_metadata");
+          const accepted = new Set(results.filter(r => r.status === "accepted" || r.status === "duplicate").map(r => r.heartbeat_id));
+          const remaining = snapshots.filter(s => !accepted.has(s.payload.heartbeat_id ?? ""));
+          this.retrySnapshots.set(entity, remaining);
+          this.checkpoint();
+          if (remaining.length) throw new Error(results.some(r => r.status === "permanent_rejection") ? "journal_dead_letter" : "journal_handoff_pending");
+        } else await this.cli.sendHeartbeat(
           entity,
           primary.write,
           primary.category,
@@ -552,10 +712,12 @@ export class HeartbeatBufferManager {
           primary.payload
         );
       } catch (error) {
-        this.retrySnapshots.set(entity, snapshots);
+        if (!this.journalScope) this.retrySnapshots.set(entity, snapshots);
         throw error;
       }
+      this.retrySnapshots.delete(entity);
       this.commitSnapshot(entity, now, snapshots[snapshots.length - 1]);
+      this.checkpoint();
       this.onHeartbeatSent?.();
       this.logger.debug("flushed heartbeat", {
         entity,
@@ -776,6 +938,7 @@ export class HeartbeatBufferManager {
   }
 
   private observeActivity(state: BufferedFileState, now: number): void {
+    state.heartbeatId ||= randomUUID();
     const previous = this.lastObservedActivityAt;
     if (previous !== undefined) {
       const elapsedMs = now - previous;

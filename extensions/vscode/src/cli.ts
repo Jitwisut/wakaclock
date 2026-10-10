@@ -106,6 +106,49 @@ export class WakaclockCliService {
         private readonly executionSurface?: string,
     ) {}
 
+    public async journalScope(): Promise<{ scope_id: string; owner_confirmed: boolean; capabilities: string[]; recoverable_scope_ids?: string[] }> {
+        const result = await this.runCli(["journal-scope"]);
+        const response = JSON.parse(result.stdout);
+        if (response.schema_version !== 1 || typeof response.scope_id !== "string" || !/^[a-f0-9]{64}$/.test(response.scope_id) || !response.capabilities?.includes("editor_durable_ack_v1") || (response.recoverable_scope_ids !== undefined && (!Array.isArray(response.recoverable_scope_ids) || response.recoverable_scope_ids.some((id: unknown) => typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id))))) throw new Error("cli_update_required");
+        return response;
+    }
+
+    public async runtime(action: "status" | "pause" | "resume", component = "all"): Promise<{ desired: { desired: Record<string, boolean> }; capture: unknown; delivery: unknown }> {
+        const args = ["runtime", action, "--json"];
+        if (action !== "status") args.push("--component", component);
+        return JSON.parse((await this.runCli(args)).stdout);
+    }
+    public async manageRuntime(action: "install" | "upgrade" | "rollback" | "uninstall", component: "capture" | "delivery"): Promise<unknown> {
+        return JSON.parse((await this.runCli(["runtime", action, "--component", component])).stdout);
+    }
+    public async setupNativeActivity(adapter: string, uninstall = false): Promise<{ status: string; hook_location?: string | null; next_step?: string | null }> {
+        const args = ["ai", "activity-setup", "--adapter", adapter, "--yes"];
+        if (uninstall) args.push("--uninstall");
+        return JSON.parse((await this.runCli(args)).stdout);
+    }
+    public async publishJournalHealth(scopeId: string, collectorId: string, health: { status: string; pending: number; deadLetter?: number }): Promise<void> {
+        await this.runCli(["journal-health"], JSON.stringify({ schema_version: 1, scope_id: scopeId, collector_id: collectorId,
+            health: { status: health.status, pending: health.pending, dead_letter: health.deadLetter ?? 0, last_observed_at: new Date().toISOString() } }));
+    }
+
+    public async acceptJournalBatch(scopeId: string, payloads: ExtraHeartbeatPayload[]): Promise<{ heartbeat_id: string; status: string; error_code?: string }[]> {
+        const requested = new Set(payloads.map(p => p.heartbeat_id));
+        if (requested.has(undefined) || requested.size !== payloads.length) throw new Error("durable_batch_identity_invalid");
+        const results: { heartbeat_id: string; status: string; error_code?: string }[] = [];
+        for (let start = 0; start < payloads.length; start += 100) {
+            const items = payloads.slice(start, start + 100);
+            const result = await this.runCli(["heartbeat-batch"], JSON.stringify({ schema_version: 1, scope_id: scopeId, items }));
+            const response = JSON.parse(result.stdout);
+            const expected = new Set(items.map(p => p.heartbeat_id));
+            if (response.schema_version !== 1 || response.scope_id !== scopeId || !Array.isArray(response.results) || response.results.length !== items.length) throw new Error("durable_ack_invalid");
+            for (const outcome of response.results) {
+                if (!expected.delete(outcome.heartbeat_id) || !["accepted", "duplicate", "recoverable_rejection", "permanent_rejection"].includes(outcome.status)) throw new Error("durable_ack_invalid");
+            }
+            results.push(...response.results);
+        }
+        return results;
+    }
+
     public async sendHeartbeat(
         primaryEntity: string,
         primaryWrite: boolean,

@@ -60,6 +60,30 @@ describe("WakaclockCliService", () => {
     spawnMock.mockReset();
   });
 
+  it("rejects missing, duplicate or foreign durable ACK identities", async () => {
+    for (const outcomes of [[], [{heartbeat_id:"foreign",status:"accepted"}], [{heartbeat_id:"keep",status:"unknown"}]]) {
+      spawnMock.mockImplementation(() => mockChild({stdout:JSON.stringify({schema_version:1,scope_id:"scope",results:outcomes})}));
+      const service=new WakaclockCliService(createConfig,new Logger(() => false));
+      await expect(service.acceptJournalBatch("scope",[{entity:"/project/a.ts",heartbeat_id:"keep",time:1}])).rejects.toThrow("durable_ack_invalid");
+    }
+  });
+  it("splits recovery into batches of 100 while preserving every identity", async () => {
+    const service=new WakaclockCliService(createConfig,new Logger(() => false));
+    const run=vi.spyOn(service as any,"runCli").mockImplementation(async (_args:any,stdin:any) => {
+      const request=JSON.parse(stdin);expect(request.items.length).toBeLessThanOrEqual(100);
+      return {stdout:JSON.stringify({schema_version:1,scope_id:request.scope_id,results:request.items.map((p:any)=>({heartbeat_id:p.heartbeat_id,status:"accepted"}))}),stderr:"",exitCode:0};
+    });
+    const payloads=Array.from({length:1191},(_,i)=>({entity:"/project/a.ts",heartbeat_id:`id-${i}`,time:i}));
+    const results=await service.acceptJournalBatch("scope",payloads);
+    expect(run).toHaveBeenCalledTimes(12);expect(results.map(r=>r.heartbeat_id)).toEqual(payloads.map(p=>p.heartbeat_id));
+  });
+  it("keeps the whole journal retryable when a later batch loses its response", async () => {
+    const service=new WakaclockCliService(createConfig,new Logger(() => false));
+    vi.spyOn(service as any,"runCli").mockImplementationOnce(async (_args:any,stdin:any)=> {
+      const request=JSON.parse(stdin);return {stdout:JSON.stringify({schema_version:1,scope_id:"scope",results:request.items.map((p:any)=>({heartbeat_id:p.heartbeat_id,status:"accepted"}))})};
+    }).mockRejectedValueOnce(new Error("response_lost"));
+    await expect(service.acceptJournalBatch("scope",Array.from({length:101},(_,i)=>({entity:"/project/a.ts",heartbeat_id:`id-${i}`,time:i})))).rejects.toThrow("response_lost");
+  });
   it("sends no stdin payload when there are no extras", async () => {
     spawnMock.mockImplementation(() => mockChild({ stdout: "ok\n", exitCode: 0 }));
     const service = new WakaclockCliService(createConfig, new Logger(() => false));

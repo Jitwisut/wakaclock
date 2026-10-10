@@ -3,7 +3,7 @@
 use crate::{
     ai::HandoffLedger,
     error::AppError,
-    heartbeat::{union_activity_seconds, ActivitySegment},
+    heartbeat::{union_activity_seconds, ActivitySegment, Heartbeat},
 };
 use chrono::{DateTime, TimeZone, Utc};
 use chrono_tz::Tz;
@@ -111,6 +111,8 @@ pub struct CaptureHealthSnapshot {
     pub last_scan_success_at: Option<DateTime<Utc>>,
     pub parser_errors: u32,
     pub pending: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_journal: Option<crate::editor_health::EditorJournalHealth>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +197,13 @@ impl Queue {
         conn.execute_batch(
             "
             PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = FULL;
+            CREATE TABLE IF NOT EXISTS editor_handoff_receipts (
+                destination TEXT NOT NULL, owner_scope TEXT NOT NULL,
+                heartbeat_id TEXT NOT NULL, input_hash TEXT NOT NULL,
+                accepted_at INTEGER NOT NULL,
+                PRIMARY KEY(destination, owner_scope, heartbeat_id)
+            );
             CREATE TABLE IF NOT EXISTS heartbeat_queue (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 heartbeat_id TEXT,
@@ -288,6 +297,14 @@ impl Queue {
                 last_attempt_at      INTEGER NOT NULL,
                 consecutive_failures INTEGER NOT NULL,
                 PRIMARY KEY (destination, owner_scope)
+            );
+
+            CREATE TABLE IF NOT EXISTS editor_handoff_last (
+                destination TEXT NOT NULL,
+                owner_scope TEXT NOT NULL,
+                entity TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (destination, owner_scope, entity)
             );
 
             -- Metadata-only record of every same-account queue rebind.
@@ -504,6 +521,73 @@ impl Queue {
         scope: &QueueScope,
     ) -> Result<(), AppError> {
         self.push_scoped_after(payload, scope, None)
+    }
+
+    /// ACK boundary for editor journals. Receipt and queue insertion commit together.
+    /// The receipt outlives delivery, so a lost stdout response cannot enqueue again.
+    pub fn accept_editor_handoff(
+        &self,
+        payload: &serde_json::Value,
+        scope: &QueueScope,
+        input_hash: &str,
+    ) -> Result<bool, AppError> {
+        let id = payload
+            .get("heartbeat_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| AppError::Validation("heartbeat_id_required".into()))?;
+        let tx = self.conn.unchecked_transaction().map_err(AppError::Queue)?;
+        let existing: Option<String> = self.conn.query_row(
+            "SELECT input_hash FROM editor_handoff_receipts WHERE destination=?1 AND owner_scope=?2 AND heartbeat_id=?3",
+            params![scope.destination, scope.owner, id], |r| r.get(0),
+        ).optional().map_err(AppError::Queue)?;
+        if let Some(existing) = existing {
+            if existing != input_hash {
+                return Err(AppError::Validation("heartbeat_id_conflict".into()));
+            }
+            tx.commit().map_err(AppError::Queue)?;
+            return Ok(false);
+        }
+        // Apply the existing heartbeat predicate at the durable ACK boundary.
+        // Measured work is never coalesced; the previous accepted marker and the
+        // receipt commit together, rather than relying on a volatile CLI cache.
+        let heartbeat = serde_json::from_value::<Heartbeat>(payload.clone()).ok();
+        let mut duplicate = false;
+        if let Some(heartbeat) = &heartbeat {
+            let previous: Option<String> = self.conn.query_row(
+                "SELECT payload FROM editor_handoff_last WHERE destination=?1 AND owner_scope=?2 AND entity=?3",
+                params![scope.destination, scope.owner, heartbeat.entity], |r| r.get(0),
+            ).optional().map_err(AppError::Queue)?;
+            duplicate = previous
+                .and_then(|s| serde_json::from_str::<Heartbeat>(&s).ok())
+                .is_some_and(|last| {
+                    heartbeat.time >= last.time && heartbeat.is_duplicate_of(&last)
+                });
+            if !duplicate {
+                self.conn
+                    .execute(
+                        "INSERT OR REPLACE INTO editor_handoff_last VALUES (?1,?2,?3,?4)",
+                        params![
+                            scope.destination,
+                            scope.owner,
+                            heartbeat.entity,
+                            payload.to_string()
+                        ],
+                    )
+                    .map_err(AppError::Queue)?;
+            }
+        }
+        if !duplicate {
+            self.push_scoped(payload, scope)?;
+        }
+        self.conn
+            .execute(
+                "INSERT INTO editor_handoff_receipts VALUES (?1,?2,?3,?4,strftime('%s','now'))",
+                params![scope.destination, scope.owner, id, input_hash],
+            )
+            .map_err(AppError::Queue)?;
+        tx.commit().map_err(AppError::Queue)?;
+        Ok(!duplicate)
     }
 
     /// Queue a payload that is not eligible for delivery yet.
@@ -1505,6 +1589,28 @@ impl Queue {
     /// Move rows queued under an older credential of the *same account* onto
     /// `current`, atomically.
     ///
+    /// Return prior scopes only with a same-account, same-origin server proof.
+    pub fn verified_editor_journal_scopes(
+        &self,
+        current: &QueueScope,
+    ) -> Result<Vec<QueueScope>, AppError> {
+        let mut statement=self.conn.prepare("SELECT old.credential_scope FROM credential_owner old JOIN credential_owner current ON old.destination=current.destination AND old.owner_id=current.owner_id WHERE current.destination=?1 AND current.credential_scope=?2 AND old.credential_scope!=?2").map_err(AppError::Queue)?;
+        let owners = statement
+            .query_map(params![current.destination, current.owner], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(AppError::Queue)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::Queue)?;
+        Ok(owners
+            .into_iter()
+            .map(|owner| QueueScope {
+                destination: current.destination.clone(),
+                owner,
+            })
+            .collect())
+    }
+
     /// Only credentials whose recorded server proof (`credential_owner`) names the
     /// same `owner_id` on the same origin qualify, and `current` itself must carry
     /// that proof. Heartbeat and retained line-measurement rows are moved together.
@@ -1553,6 +1659,37 @@ impl Queue {
 
         let mut report = RebindReport::default();
         for from_scope in from_scopes {
+            let conflicting_receipts: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM editor_handoff_receipts AS old JOIN editor_handoff_receipts AS kept
+                 ON old.destination=kept.destination AND old.heartbeat_id=kept.heartbeat_id
+                 WHERE old.destination=?1 AND old.owner_scope=?2 AND kept.owner_scope=?3 AND old.input_hash!=kept.input_hash",
+                params![current.destination, from_scope, current.owner], |row| row.get(0),
+            ).map_err(AppError::Queue)?;
+            if conflicting_receipts != 0 {
+                return Err(AppError::Validation(
+                    "journal_receipt_rebind_conflict".into(),
+                ));
+            }
+            transaction.execute(
+                "INSERT OR IGNORE INTO editor_handoff_receipts SELECT destination,?3,heartbeat_id,input_hash,accepted_at
+                 FROM editor_handoff_receipts WHERE destination=?1 AND owner_scope=?2",
+                params![current.destination, from_scope, current.owner],
+            ).map_err(AppError::Queue)?;
+            transaction
+                .execute(
+                    "DELETE FROM editor_handoff_receipts WHERE destination=?1 AND owner_scope=?2",
+                    params![current.destination, from_scope],
+                )
+                .map_err(AppError::Queue)?;
+            // Keep the new credential's latest marker where both scopes touched
+            // a file. Receipts, not this cadence cache, prove duplicate IDs.
+            transaction.execute("INSERT OR IGNORE INTO editor_handoff_last SELECT destination,?3,entity,payload FROM editor_handoff_last WHERE destination=?1 AND owner_scope=?2", params![current.destination, from_scope, current.owner]).map_err(AppError::Queue)?;
+            transaction
+                .execute(
+                    "DELETE FROM editor_handoff_last WHERE destination=?1 AND owner_scope=?2",
+                    params![current.destination, from_scope],
+                )
+                .map_err(AppError::Queue)?;
             let duplicates = transaction
                 .execute(
                     "DELETE FROM heartbeat_queue
@@ -1835,6 +1972,125 @@ mod tests {
     };
     use chrono::DateTime;
     use uuid::Uuid;
+
+    #[test]
+    fn journal_cadence_never_drops_measured_work_or_older_recovered_markers() {
+        let path = std::env::temp_dir().join(format!("editor-cadence-{}.db", Uuid::new_v4()));
+        let queue = Queue::open_at(&path).unwrap();
+        let scope = scope("https://server.test", "owner");
+        let mut heartbeat = Heartbeat::new(
+            Uuid::new_v4(),
+            "example.rs".into(),
+            crate::heartbeat::EntityType::File,
+            "fixture".into(),
+        );
+        heartbeat.time = 1000.0;
+        heartbeat.heartbeat_id = Some("first".into());
+        assert!(queue
+            .accept_editor_handoff(
+                &serde_json::to_value(&heartbeat).unwrap(),
+                &scope,
+                "first-input"
+            )
+            .unwrap());
+        heartbeat.time = 1010.0;
+        heartbeat.heartbeat_id = Some("cadence".into());
+        assert!(!queue
+            .accept_editor_handoff(
+                &serde_json::to_value(&heartbeat).unwrap(),
+                &scope,
+                "cadence-input"
+            )
+            .unwrap());
+        heartbeat.time = 1011.0;
+        heartbeat.active_seconds = Some(1.0);
+        heartbeat.heartbeat_id = Some("measured".into());
+        assert!(queue
+            .accept_editor_handoff(
+                &serde_json::to_value(&heartbeat).unwrap(),
+                &scope,
+                "measured-input"
+            )
+            .unwrap());
+        heartbeat.time = 900.0;
+        heartbeat.active_seconds = None;
+        heartbeat.heartbeat_id = Some("historical".into());
+        assert!(queue
+            .accept_editor_handoff(
+                &serde_json::to_value(&heartbeat).unwrap(),
+                &scope,
+                "historical-input"
+            )
+            .unwrap());
+        assert_eq!(queue.len_scoped(&scope).unwrap(), 3);
+    }
+    #[test]
+    fn journal_key_rotation_requires_the_same_recorded_owner_and_origin() {
+        let path = std::env::temp_dir().join(format!("editor-proof-{}.db", Uuid::new_v4()));
+        let queue = Queue::open_at(&path).unwrap();
+        let old = scope("https://server.test", "old");
+        let new = scope("https://server.test", "new");
+        let other = scope("https://server.test", "other");
+        let origin = scope("https://other.test", "old");
+        queue.record_credential_owner(&old, "account").unwrap();
+        queue
+            .record_credential_owner(&other, "someone-else")
+            .unwrap();
+        queue.record_credential_owner(&origin, "account").unwrap();
+        assert!(queue
+            .verified_editor_journal_scopes(&new)
+            .unwrap()
+            .is_empty());
+        queue.record_credential_owner(&new, "account").unwrap();
+        assert_eq!(
+            queue.verified_editor_journal_scopes(&new).unwrap(),
+            vec![old.clone()]
+        );
+        let payload =
+            serde_json::json!({"heartbeat_id":"original-id","entity":"file.rs","time":1000.0});
+        queue
+            .accept_editor_handoff(&payload, &old, "original-input")
+            .unwrap();
+        queue.rebind_same_owner(&new, "account").unwrap();
+        assert!(!queue
+            .accept_editor_handoff(&payload, &new, "original-input")
+            .unwrap());
+        assert_eq!(queue.len_scoped(&new).unwrap(), 1);
+    }
+
+    #[test]
+    fn journal_ack_survives_delivery_restart_and_rejects_identity_conflict() {
+        let path = std::env::temp_dir().join(format!("editor-ack-{}.db", Uuid::new_v4()));
+        let queue = Queue::open_at(&path).unwrap();
+        let scope = scope("https://server.test", "owner-a");
+        let payload =
+            serde_json::json!({"heartbeat_id":"original-id","entity":"example.rs","time":1000.0});
+        assert!(queue
+            .accept_editor_handoff(&payload, &scope, "input-hash")
+            .unwrap());
+        assert!(!queue
+            .accept_editor_handoff(&payload, &scope, "input-hash")
+            .unwrap());
+        assert_eq!(queue.len_scoped(&scope).unwrap(), 1);
+        let rows = queue.claim_batch_scoped(&scope, "fixture").unwrap();
+        queue.remove(rows[0].0).unwrap();
+        drop(queue);
+        let queue = Queue::open_at(&path).unwrap();
+        assert!(!queue
+            .accept_editor_handoff(&payload, &scope, "input-hash")
+            .unwrap());
+        assert_eq!(queue.len_scoped(&scope).unwrap(), 0);
+        assert!(queue
+            .accept_editor_handoff(&payload, &scope, "changed-hash")
+            .is_err());
+        assert!(queue
+            .accept_editor_handoff(
+                &payload,
+                &self::scope("https://other.test", "owner-a"),
+                "input-hash"
+            )
+            .unwrap());
+    }
 
     #[test]
     fn queue_uses_wal_and_waits_for_concurrent_writers() {
@@ -2741,7 +2997,7 @@ mod tests {
         let payload = row("durable-revision", 1_800_000_000.0, 3);
         let claimed = temp
             .queue
-            .persist_and_claim_scoped(&[payload.clone()], &mine, "producer")
+            .persist_and_claim_scoped(std::slice::from_ref(&payload), &mine, "producer")
             .unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].1, payload);
