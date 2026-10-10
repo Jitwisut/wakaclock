@@ -11,10 +11,14 @@ import {
   webPageSchema,
 } from '@/lib/seo/schema';
 import {
+  contentModified,
   createMarketingMetadata,
+  FOUNDER,
   localizedPath,
   ORGANIZATION,
+  PRODUCT_STATUS,
   PUBLIC_EVIDENCE_URL,
+  SITE_MODIFIED,
   SITE_NAME,
   type SiteLocale,
 } from '@/lib/seo/site';
@@ -32,6 +36,7 @@ import {
 } from './marketing-copy';
 import { PageIllustration } from './page-illustration';
 import { PricingSection } from './pricing-section';
+import { productTourSchema } from './product-tour';
 import {
   Breadcrumbs,
   Bullets,
@@ -137,9 +142,15 @@ function howToSteps(sections: readonly MarketingSectionCopy[]): HowToStep[] {
 
 function PageIndex({ copy, locale }: { copy: ReturnType<typeof getCopy>; locale: SiteLocale }) {
   return (
-    <aside className="mkt-page-index">
-      <nav aria-label={locale === 'th' ? 'หัวข้อในหน้านี้' : 'On this page'}>
-        <p className="mkt-index-label">{locale === 'th' ? 'หัวข้อในหน้านี้' : 'On this page'}</p>
+    // A plain block, not <aside>: crawlers drop asides as sidebar boilerplate, and this is
+    // the page's table of contents.
+    <div className="mkt-page-index">
+      <nav
+        aria-label={locale === 'th' ? 'สารบัญ' : 'Table of contents'}
+        className="toc"
+        id="table-of-contents"
+      >
+        <p className="mkt-index-label">{locale === 'th' ? 'สารบัญ' : 'Table of contents'}</p>
         <ol>
           {copy.sections.map((section, index) => (
             <li key={section.id}>
@@ -163,7 +174,25 @@ function PageIndex({ copy, locale }: { copy: ReturnType<typeof getCopy>; locale:
           ) : null}
         </ol>
       </nav>
-    </aside>
+    </div>
+  );
+}
+
+/** Who wrote the page and when it was last reviewed, as plain, linkable text. */
+function Byline({ locale, path }: { locale: SiteLocale; path: MarketingPageKey }) {
+  const reviewed = contentModified(path, locale) ?? SITE_MODIFIED;
+  const th = locale === 'th';
+  return (
+    <p className="mkt-byline">
+      <strong>{th ? 'ผู้เขียน:' : 'Author:'}</strong>{' '}
+      <a href={localizedPath(locale, '/about')} rel="author">
+        {FOUNDER.name}
+      </a>
+      , {th ? FOUNDER.thJobTitle : FOUNDER.jobTitle} {th ? 'ของ' : 'of'} {SITE_NAME}.{' '}
+      <strong>{th ? 'ตรวจทาน:' : 'Reviewed:'}</strong> <time dateTime={reviewed}>{reviewed}</time>.{' '}
+      <strong>{th ? 'สถานะ:' : 'Status:'}</strong>{' '}
+      {th ? PRODUCT_STATUS.th.label : PRODUCT_STATUS.en.label}.
+    </p>
   );
 }
 
@@ -194,6 +223,35 @@ function PlacedIllustration({
   return positions[path] === placement ? <PageIllustration locale={locale} path={path} /> : null;
 }
 
+/** Everything the page's single JSON-LD graph describes, built from the visible copy. */
+function pageSchemas(
+  path: MarketingPageKey,
+  locale: SiteLocale,
+  copy: ReturnType<typeof getCopy>,
+  breadcrumbs: { name: string; path: string }[]
+) {
+  const schemas = [
+    breadcrumbSchema(breadcrumbs),
+    webPageSchema({
+      path,
+      locale,
+      name: copy.title,
+      description: copy.lead,
+      sections: copy.sections.map(({ id, heading }) => ({ id, name: heading })),
+    }),
+  ];
+  if (copy.faq) schemas.push(faqSchema(copy.faq.entries));
+  if (hasAnswerGuide(path, locale)) schemas.push(productTourSchema(locale));
+  if (copy.schema === 'organization') schemas.push(organizationSchema());
+  const steps = copy.howTo ? howToSteps(copy.sections) : [];
+  if (copy.howTo && steps.length > 0) {
+    schemas.push(
+      howToSchema({ name: copy.howTo.name, description: copy.howTo.description, steps })
+    );
+  }
+  return schemas;
+}
+
 export function LocalizedMarketingPage({
   path,
   locale,
@@ -206,26 +264,7 @@ export function LocalizedMarketingPage({
     ...entry,
     path: localizedPath(locale, entry.path),
   }));
-  const schemas = [
-    breadcrumbSchema(breadcrumbs),
-    webPageSchema({
-      path,
-      locale,
-      name: copy.title,
-      description: copy.lead,
-      sections: copy.sections.map(({ id, heading }) => ({ id, name: heading })),
-    }),
-  ];
-  if (copy.faq) schemas.push(faqSchema(copy.faq.entries));
-  if (copy.schema === 'organization') schemas.push(organizationSchema());
-  if (copy.howTo) {
-    const steps = howToSteps(copy.sections);
-    if (steps.length > 0) {
-      schemas.push(
-        howToSchema({ name: copy.howTo.name, description: copy.howTo.description, steps })
-      );
-    }
-  }
+  const schemas = pageSchemas(path, locale, copy, breadcrumbs);
 
   const comparisonIndex =
     copy.component?.kind === 'comparison'
@@ -254,6 +293,7 @@ export function LocalizedMarketingPage({
             ) : null}
             <PageTitle>{copy.title}</PageTitle>
             <LeadAnswer>{copy.lead}</LeadAnswer>
+            <Byline locale={locale} path={path} />
           </header>
           <PlacedIllustration locale={locale} path={path} placement="intro" />
         </div>

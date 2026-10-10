@@ -96,12 +96,24 @@ export function absoluteUrl(path: string): string {
 }
 
 /** Who builds the product — AtoAxis is developed by team Atoaxis. */
+/**
+ * The founder writes and reviews the marketing and documentation pages. Profile links are
+ * only ones the owner has confirmed exist; add LinkedIn or Wikidata here once they do.
+ */
+export const FOUNDER = {
+  name: 'Jitwisut Thobut',
+  jobTitle: 'Founder & developer',
+  thJobTitle: 'ผู้ก่อตั้งและนักพัฒนา',
+  sameAs: ['https://github.com/Jitwisut'],
+} as const;
+
 export const ORGANIZATION = {
   email: 'hello@atoaxis.com',
   // The product name is also used as the publisher identity in structured data.
   legalName: SITE_NAME,
   logo: absoluteUrl('/atoaxis-symbol-v2.png'),
   name: SITE_NAME,
+  sameAs: FOUNDER.sameAs,
   url: SITE_URL,
 } as const;
 
@@ -310,6 +322,7 @@ export function createMarketingMetadata({
     // already name AtoAxis must be absolute or Next renders "AtoAxis … | AtoAxis".
     title: title.includes(SITE_NAME) ? { absolute: title } : title,
     description,
+    authors: [{ name: `${FOUNDER.name}, ${FOUNDER.jobTitle}`, url: absoluteUrl('/about') }],
     alternates: {
       canonical: canonicalPath,
       languages: {

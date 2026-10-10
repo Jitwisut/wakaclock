@@ -626,7 +626,7 @@ const teams = local(
   {
     metadataTitle: 'Coding Presence สำหรับทีมในช่วง Early Access',
     description:
-      'presence ของ AtoAxis เป็น prototype ในช่วง Early Access: ห้องสดและ co-working session ที่บันทึกจาก activity ใน editor ส่วน team และ organisation seat ยังตามมาทีหลัง',
+      'presence ของ AtoAxis เป็น prototype ช่วง Early Access: ห้องสดและ co-working session จาก activity ใน editor ส่วน team และ organisation seat ยังอยู่ระหว่างพัฒนา',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'Teams', path: '/teams' },
@@ -1713,7 +1713,7 @@ emptyPagePair(
   {
     metadataTitle: 'การเชื่อมต่อ Editor กับ AtoAxis',
     description:
-      'เชื่อม VS Code ผ่าน extension ของ AtoAxis หรือใช้ WakaTime-compatible plugin กับ editor อื่น ดูวิธีตั้งค่า API, ตรวจ heartbeat แรก และขอบเขตข้อมูลที่แต่ละ client ส่ง',
+      'เชื่อม VS Code ผ่าน extension ของ AtoAxis หรือใช้ plugin ที่รองรับ WakaTime กับ editor อื่น ดูวิธีตั้งค่า API ตรวจ heartbeat แรก และขอบเขตของแต่ละ integration',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'Integrations', path: '/integrations' },
@@ -2958,7 +2958,8 @@ generic(
   '/integrations/vscode',
   {
     title: 'VS Code time tracking extension',
-    description: 'Install and configure the AtoAxis VS Code extension.',
+    description:
+      'Install the AtoAxis VS Code extension, add your API key and confirm your first heartbeat. It tracks coding time by project, language and branch.',
     lead: 'The first-party extension buffers metadata-only editor activity and sends heartbeats through wakaclock-cli.',
     headings: [
       'What it tracks',
@@ -3003,7 +3004,8 @@ generic(
   },
   {
     title: 'ส่วนขยาย AtoAxis สำหรับติดตามเวลาใน VS Code',
-    description: 'ติดตั้งและตั้งค่า AtoAxis VS Code extension',
+    description:
+      'ติดตั้ง AtoAxis extension สำหรับ VS Code ใส่ API key แล้วตรวจ heartbeat แรก เพื่อเริ่มติดตามเวลาเขียนโค้ดแยกตามโปรเจกต์ ภาษา และ branch โดยไม่ส่ง source code',
     lead: 'extension ของเราจะ buffer editor activity แบบ metadata แล้วส่ง heartbeat ผ่าน wakaclock-cli',
     headings: [
       'ข้อมูลที่ติดตาม',
@@ -3086,7 +3088,7 @@ generic(
     ],
   },
   {
-    title: 'ราคา',
+    title: 'ราคา AtoAxis: แผน hosted เดียว ประวัติครบถ้วน',
     description: `ตรวจราคาเป้าหมายของ AtoAxis: $${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี พร้อมสิ่งที่รวมในแผนและสถานะ Early Access ซึ่งยังไม่เปิด checkout หรือเก็บเงิน`,
     lead: 'ช่วง Early Access ยังไม่เปิด checkout และยังไม่มีการเรียกเก็บเงิน',
     headings: ['สิ่งที่รวมในแผน', 'การเรียกเก็บเงินและสถานะ'],
@@ -3126,7 +3128,8 @@ generic(
   '/privacy',
   {
     title: 'Privacy and data collection',
-    description: 'See what an AtoAxis heartbeat stores and what never leaves your machine.',
+    description:
+      'See every field an AtoAxis heartbeat stores, what never leaves your machine, how long data is kept and how to delete your account history.',
     lead: 'Heartbeats carry metadata and counts, never source code, prompts, responses or transcript bodies.',
     headings: [
       'What is collected',
@@ -3175,7 +3178,8 @@ generic(
   },
   {
     title: 'Privacy และข้อมูลที่เก็บ',
-    description: 'ดูข้อมูลใน heartbeat และสิ่งที่ไม่ออกจากเครื่อง',
+    description:
+      'ดูทุก field ที่ heartbeat ของ AtoAxis เก็บ สิ่งที่ไม่เคยออกจากเครื่องของคุณ เช่น source code ระยะเวลาเก็บข้อมูล และวิธีลบประวัติบัญชีของคุณ',
     lead: 'Heartbeat มี metadata และ counts ไม่เก็บ source code, prompt, response หรือ transcript body',
     headings: [
       'ข้อมูลที่เก็บ',
@@ -3273,7 +3277,7 @@ generic(
     ],
   },
   {
-    title: 'เอกสาร AtoAxis',
+    title: 'เอกสาร AtoAxis: คู่มือติดตามเวลาเขียนโค้ด',
     description:
       'เริ่มใช้ AtoAxis จากคู่มือเชื่อม editor และตรวจ heartbeat แรก อ่านวิธีคำนวณเวลา AI attribution การตั้งค่า integration และข้อมูลที่ส่งเพื่อใช้งานอย่างเข้าใจ',
     lead: 'เชื่อม editor และทำความเข้าใจ hosted product ผ่านคู่มือนี้',
@@ -3324,8 +3328,9 @@ generic(
 generic(
   '/docs/getting-started',
   {
-    title: 'Getting started',
-    description: 'Create an API key, connect an editor and verify tracking.',
+    title: 'Getting started with AtoAxis time tracking',
+    description:
+      'Create an AtoAxis API key, connect VS Code or a WakaTime-compatible plugin, and confirm your first heartbeat appears in the dashboard.',
     lead: 'Create an account, generate an API key and connect your editor when Early Access opens.',
     headings: [
       'Requirements',
@@ -3368,8 +3373,9 @@ generic(
     ],
   },
   {
-    title: 'เริ่มต้นใช้งาน',
-    description: 'สร้าง API key เชื่อม editor และตรวจสอบ tracking',
+    title: 'เริ่มต้นใช้งาน AtoAxis: ติดตามเวลาเขียนโค้ด',
+    description:
+      'สร้าง API key ของ AtoAxis เชื่อม VS Code หรือ plugin ที่รองรับ WakaTime แล้วตรวจว่า heartbeat แรกขึ้นใน dashboard ก่อนเริ่มใช้งานจริง',
     lead: 'สร้างบัญชี API key และเชื่อม editor เมื่อ Early Access เปิด',
     headings: [
       'สิ่งที่ต้องเตรียม',
@@ -3512,8 +3518,9 @@ generic(
 generic(
   '/about',
   {
-    title: `About ${SITE_NAME}`,
-    description: `Learn why ${SITE_NAME} exists and who builds it.`,
+    title: 'About AtoAxis and the developer behind it',
+    description:
+      'AtoAxis is a WakaTime-compatible developer time tracker built by founder and developer Jitwisut Thobut. See why it exists and what works today.',
     lead: `${SITE_NAME} (spelled A-t-o-A-x-i-s) is a developer time-tracking product developed by team Atoaxis. It is not affiliated with similarly named products such as ATOSS, Atto or Axis ERP.`,
     headings: ['Why we are building it', 'Current status', 'Who builds it'],
     faqEntries: [
@@ -3538,8 +3545,9 @@ generic(
     ],
   },
   {
-    title: `เกี่ยวกับ ${SITE_NAME}`,
-    description: `รู้จักเหตุผลและผู้พัฒนา ${SITE_NAME}`,
+    title: 'เกี่ยวกับ AtoAxis และผู้พัฒนาเครื่องมือนี้',
+    description:
+      'AtoAxis คือเครื่องมือติดตามเวลาเขียนโค้ดที่รองรับ WakaTime API พัฒนาโดย Jitwisut Thobut ผู้ก่อตั้งและนักพัฒนา ดูเหตุผลที่สร้างและสิ่งที่ใช้งานได้แล้ววันนี้',
     lead: `${SITE_NAME} (สะกด A-t-o-A-x-i-s) เป็นผลิตภัณฑ์ติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา พัฒนาขึ้น โดย team Atoaxis ไม่มีความเกี่ยวข้องกับผลิตภัณฑ์ชื่อคล้ายกันอย่าง ATOSS, Atto หรือ Axis ERP`,
     headings: ['เหตุผลที่สร้าง', 'สถานะปัจจุบัน', 'ผู้พัฒนา'],
     faqEntries: [
@@ -3567,8 +3575,9 @@ generic(
 generic(
   '/contact',
   {
-    title: 'Contact AtoAxis',
-    description: 'Contact AtoAxis about Early Access, integrations and privacy.',
+    title: 'Contact AtoAxis about Early Access',
+    description:
+      'Ask AtoAxis about Early Access, editor compatibility, WakaTime migration, AI attribution or privacy. A real person on the team reads every message.',
     lead: 'Ask about Early Access, hosted analytics, integrations or privacy.',
     headings: ['Topics we can help with'],
     form: 'contact',
@@ -3595,8 +3604,9 @@ generic(
     ],
   },
   {
-    title: 'ติดต่อ AtoAxis',
-    description: 'ติดต่อ AtoAxis เรื่อง Early Access integrations และ privacy',
+    title: 'ติดต่อ AtoAxis เรื่อง Early Access และการตั้งค่า',
+    description:
+      'สอบถาม AtoAxis เรื่อง Early Access การใช้กับ editor ของคุณ การย้ายจาก WakaTime, AI attribution หรือ privacy คนในทีมพัฒนาอ่านทุกข้อความด้วยตัวเอง',
     lead: 'สอบถามเรื่อง Early Access, hosted analytics, integrations หรือ privacy',
     headings: ['หัวข้อที่สอบถามได้'],
     form: 'contact',
@@ -3626,8 +3636,9 @@ generic(
 generic(
   '/terms',
   {
-    title: `${SITE_NAME} terms`,
-    description: 'Early Access, hosted service and acceptable-use terms.',
+    title: 'AtoAxis terms for Early Access and hosted use',
+    description:
+      'Read the preliminary AtoAxis terms: what joining Early Access means, who owns the activity data you send, acceptable use and how to ask questions.',
     lead: `These preliminary terms describe the ${SITE_NAME} Early Access website.`,
     headings: ['Early Access', 'Hosted service and data', 'Acceptable use', 'Questions'],
     faqEntries: [
@@ -3652,8 +3663,9 @@ generic(
     ],
   },
   {
-    title: `ข้อกำหนด ${SITE_NAME}`,
-    description: 'ข้อกำหนด Early Access hosted service และ acceptable use',
+    title: 'ข้อกำหนดการใช้งาน AtoAxis ช่วง Early Access',
+    description:
+      'อ่านข้อกำหนดเบื้องต้นของ AtoAxis: การเข้าร่วม Early Access หมายถึงอะไร ใครเป็นเจ้าของข้อมูลกิจกรรมที่คุณส่ง การใช้งานที่ยอมรับได้ และช่องทางสอบถาม',
     lead: `ข้อกำหนดเบื้องต้นนี้อธิบายเว็บไซต์ ${SITE_NAME} ในช่วง Early Access`,
     headings: ['Early Access', 'Hosted service และข้อมูล', 'การใช้งานที่ยอมรับได้', 'คำถาม'],
     faqEntries: [
@@ -3680,8 +3692,9 @@ generic(
 generic(
   '/early-access',
   {
-    title: 'Join AtoAxis Early Access',
-    description: 'Join the AtoAxis Early Access list.',
+    title: 'Join AtoAxis Early Access for time tracking',
+    description:
+      'Join the AtoAxis Early Access list for WakaTime-compatible developer time tracking. Joining records interest only; no account or payment is created.',
     lead: 'Register interest in hosted developer time tracking and launch updates.',
     headings: [],
     form: 'early-access',
@@ -3702,8 +3715,9 @@ generic(
     ],
   },
   {
-    title: 'เข้าร่วม AtoAxis Early Access',
-    description: 'ลงทะเบียน AtoAxis Early Access',
+    title: 'เข้าร่วม AtoAxis Early Access ติดตามเวลาเขียนโค้ด',
+    description:
+      'ลงชื่อเข้าร่วม Early Access ของ AtoAxis เครื่องมือติดตามเวลาเขียนโค้ดที่รองรับ WakaTime API การลงชื่อคือการแสดงความสนใจ ไม่สร้างบัญชีและไม่เรียกเก็บเงิน',
     lead: 'ลงทะเบียนความสนใจใน hosted developer time tracking และข่าวการเปิดตัว',
     headings: [],
     form: 'early-access',
@@ -3729,7 +3743,7 @@ dualPage(
   {
     metadataTitle: 'AI Coding Cost and Token Usage Tracking',
     description:
-      'Track Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI token usage and estimated cost per project. Prices are versioned and effective-dated, and an unknown price stays unknown instead of being reported as zero.',
+      'Track token usage and estimated AI cost per project for Claude Code, Codex CLI and other agents. Unknown prices stay unknown instead of zero.',
     breadcrumbs: [
       { name: 'Home', path: '/' },
       { name: 'AI cost tracking', path: '/ai-cost-tracking' },
@@ -3739,7 +3753,7 @@ dualPage(
     sections: [
       section('What AI cost tracking measures', 'what-is', [
         p(
-          'A coding agent bills on tokens, not on the time you spent watching it work. Duration answers "how long was this session"; token usage answers "what did this session consume". Both are recorded here, on the same timeline, so a project can be read as time spent and as spend incurred.'
+          'A coding agent bills on tokens, not on the time you spent watching it work. Duration answers “how long was this session”; token usage answers “what did this session consume”. Both are recorded here, on the same timeline, so a project can be read as time spent and as spend incurred.'
         ),
         sub('The four token classes'),
         bullets([
@@ -3811,7 +3825,7 @@ dualPage(
           'GET /api/v1/dashboard/analytics'
         ),
         p(
-          'A dashboard that renders an unknown as 0 is telling you something it does not know. Reading "74% priced" tells you how far to trust the total, and a subscription plan that never exposes per-call pricing is visibly out of scope rather than quietly counted as free.'
+          'A dashboard that renders an unknown as 0 is telling you something it does not know. Reading “74% priced” tells you how far to trust the total, and a subscription plan that never exposes per-call pricing is visibly out of scope rather than quietly counted as free.'
         ),
       ]),
       section('What is never collected', 'privacy', [
@@ -3888,7 +3902,7 @@ dualPage(
   {
     metadataTitle: 'ติดตาม Token และค่าใช้จ่าย AI Coding',
     description:
-      'ติดตาม token และค่าใช้จ่ายโดยประมาณของ Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI แยกตามโปรเจกต์ ราคามีเวอร์ชันและช่วงเวลาที่มีผล สิ่งที่คำนวณไม่ได้จะแสดงว่าไม่ทราบ ไม่ใช่ศูนย์',
+      'ติดตาม token และค่าใช้จ่าย AI โดยประมาณแยกตามโปรเจกต์ สำหรับ Claude Code, Codex CLI และ agent อื่น ราคาที่ไม่รู้จะแสดงเป็น unknown ไม่ใช่ศูนย์',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'ติดตามค่าใช้จ่าย AI', path: '/ai-cost-tracking' },
@@ -3942,7 +3956,7 @@ dualPage(
           'เลือกราคาจาก provider คู่กับ model เสมอ ไม่เคยใช้ชื่อ model อย่างเดียว เพราะสอง provider อาจตั้งชื่อซ้ำกันแต่คิดราคาต่างกัน',
           'แต่ละแถวราคามีวันเริ่มมีผลและเวอร์ชัน การปรับราคาจึงไม่ไปเขียนทับเดือนที่แล้ว',
           'เก็บมูลค่าเป็น micro-USD เพื่อไม่ให้เกิด rounding drift เมื่อมี event หลายล้านรายการ',
-          'provider หรือ model ที่ไม่รู้จัก จะได้ต้นทุนว่า "ไม่ทราบ" ไม่ใช่ ศูนย์',
+          'provider หรือ model ที่ไม่รู้จัก จะได้ต้นทุนว่า “ไม่ทราบ” ไม่ใช่ ศูนย์',
         ]),
         p(
           'ชุดราคาที่ให้มาครอบราคา list price ของ Anthropic การใช้งานจาก provider ที่ยังไม่มีแถวราคายังรายงาน token ตามปกติ ขาดไปเฉพาะตัวเลขค่าใช้จ่าย'
@@ -3970,7 +3984,7 @@ dualPage(
           'GET /api/v1/dashboard/analytics'
         ),
         p(
-          'dashboard ที่แสดงค่าที่ไม่รู้เป็น 0 คือการบอกสิ่งที่มันไม่รู้ การเห็นว่า "คิดราคาได้ 74%" บอกได้ว่าควรเชื่อตัวเลขรวมแค่ไหน และแพ็กเกจ subscription ที่ไม่เปิดราคาต่อครั้งจะอยู่นอกขอบเขตอย่างชัดเจน ไม่ถูกนับเงียบ ๆ ว่าฟรี'
+          'dashboard ที่แสดงค่าที่ไม่รู้เป็น 0 คือการบอกสิ่งที่มันไม่รู้ การเห็นว่า “คิดราคาได้ 74%” บอกได้ว่าควรเชื่อตัวเลขรวมแค่ไหน และแพ็กเกจ subscription ที่ไม่เปิดราคาต่อครั้งจะอยู่นอกขอบเขตอย่างชัดเจน ไม่ถูกนับเงียบ ๆ ว่าฟรี'
         ),
       ]),
       section('สิ่งที่ไม่เก็บ', 'privacy', [
@@ -4386,7 +4400,7 @@ dualPage(
   {
     metadataTitle: 'AtoAxis แยก AI attribution และ coverage อย่างไร',
     description:
-      'ทำความเข้าใจการแยกการเปลี่ยนแปลงเป็น AI, human และ Unattributed พร้อม coverage ของหลักฐานที่อยู่เบื้องหลังยอดรวม',
+      'ดูว่า AtoAxis แยกการเปลี่ยนแปลงโค้ดเป็น AI, human และ Unattributed อย่างไร พร้อม coverage ของหลักฐานเบื้องหลังทุกยอด เพื่อไม่ให้งานที่ไม่มีหลักฐานถูกนับผิด',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'เอกสาร', path: '/docs' },
@@ -4490,7 +4504,7 @@ dualPage(
 dualPage(
   '/docs/ai-cost-methodology',
   {
-    metadataTitle: 'AtoAxis AI cost methodology',
+    metadataTitle: 'AtoAxis AI cost methodology for coding agents',
     description:
       'See how AtoAxis estimates AI cost from reported token classes, provider and model price windows, and why unknown prices stay unknown.',
     breadcrumbs: [

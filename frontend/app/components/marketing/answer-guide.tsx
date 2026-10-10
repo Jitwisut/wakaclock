@@ -6,6 +6,7 @@ import Link from 'next/link';
 
 import {
   contentModified,
+  FOUNDER,
   localizedPath,
   PRICING,
   PUBLIC_EVIDENCE_URL,
@@ -13,30 +14,20 @@ import {
   type SiteLocale,
 } from '@/lib/seo/site';
 
+import {
+  EN_MORE_GUIDES,
+  evidenceFor,
+  externalReferences,
+  FOUNDER_QUOTE,
+  type Guide,
+  type GuideSource,
+  type GuideTable,
+  TH_MORE_GUIDES,
+  tradeoffFor,
+} from './answer-guide-more';
+import { ProductTour } from './product-tour';
+
 const WAKATIME_DEVELOPER_URL = 'https://wakatime.com/developers';
-
-type GuideSource = {
-  href: string;
-  label: string;
-  note: string;
-};
-
-type GuideTable = {
-  caption: string;
-  columns: readonly [string, string, string];
-  rows: readonly (readonly [string, string, string])[];
-};
-
-type Guide = {
-  answer: string;
-  example: string;
-  facts: readonly (readonly [string, string])[];
-  heading: string;
-  question: string;
-  recommendation: string;
-  sources?: readonly GuideSource[];
-  table?: GuideTable;
-};
 
 const DEFAULT_TABLE: GuideTable = {
   caption: 'How to read coding activity metrics',
@@ -927,7 +918,20 @@ const TH_GUIDES: Record<string, Guide> = {
 };
 
 function guideFor(path: string, locale: SiteLocale): Guide | undefined {
-  return locale === 'th' ? TH_GUIDES[path] : EN_GUIDES[path];
+  return locale === 'th'
+    ? (TH_GUIDES[path] ?? TH_MORE_GUIDES[path])
+    : (EN_GUIDES[path] ?? EN_MORE_GUIDES[path]);
+}
+
+/** The page's own sources first, then its primary external references, without repeats. */
+function sourcesFor(guide: Guide, path: string, locale: SiteLocale): GuideSource[] {
+  const own = guide.sources ?? (locale === 'th' ? THAI_DEFAULT_SOURCES : DEFAULT_SOURCES);
+  const seen = new Set<string>();
+  return [...own, ...externalReferences(path, locale)].filter((source) => {
+    if (seen.has(source.href)) return false;
+    seen.add(source.href);
+    return true;
+  });
 }
 
 export function hasAnswerGuide(path: string, locale: SiteLocale): boolean {
@@ -937,7 +941,9 @@ export function hasAnswerGuide(path: string, locale: SiteLocale): boolean {
 export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path: string }) {
   const guide = guideFor(path, locale);
   if (!guide) return null;
-  const sources = guide.sources ?? (locale === 'th' ? THAI_DEFAULT_SOURCES : DEFAULT_SOURCES);
+  const sources = sourcesFor(guide, path, locale);
+  const tradeoff = tradeoffFor(path, locale);
+  const evidence = evidenceFor(path, locale);
   const table = guide.table ?? (locale === 'th' ? THAI_DEFAULT_TABLE : DEFAULT_TABLE);
   const reviewDate = contentModified(path, locale) ?? SITE_MODIFIED;
   return (
@@ -950,13 +956,16 @@ export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path
         {guide.heading}
       </h2>
       <p className="mt-4 text-lg">{guide.answer}</p>
+      <ProductTour locale={locale} />
       <h3 className="mt-8 text-lg font-semibold">
         {locale === 'th' ? 'สรุปสาระสำคัญ (Key takeaways)' : 'Key takeaways'}
       </h3>
       <dl className="mt-4 divide-y divide-current/15">
         {guide.facts.map(([term, definition]) => (
           <div className="grid gap-2 py-4 sm:grid-cols-[10rem_1fr]" key={term}>
-            <dt className="font-semibold">{term}:</dt>
+            <dt>
+              <strong>{term}:</strong>
+            </dt>
             <dd>{definition}</dd>
           </div>
         ))}
@@ -1000,31 +1009,63 @@ export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path
         {locale === 'th' ? 'คำแนะนำ' : 'Recommendation'}
       </h3>
       <p className="mt-3 leading-relaxed">{guide.recommendation}</p>
+      {tradeoff ? (
+        <>
+          <h3 className="mt-8 text-lg font-semibold">
+            {locale === 'th' ? 'ข้อจำกัดที่ควรพิจารณา' : 'Trade-offs to weigh'}
+          </h3>
+          <p className="mt-3 leading-relaxed">{tradeoff}</p>
+        </>
+      ) : null}
+      <figure className="mt-8 border-l-2 pl-4">
+        <blockquote cite={localizedPath(locale, '/about')}>
+          <p className="text-lg leading-relaxed">“{FOUNDER_QUOTE[locale]}”</p>
+        </blockquote>
+        <figcaption className="mt-2 text-sm opacity-75">
+          — {FOUNDER.name}, {locale === 'th' ? FOUNDER.thJobTitle : FOUNDER.jobTitle}, AtoAxis
+        </figcaption>
+      </figure>
       <h3 className="mt-8 text-lg font-semibold">
         {locale === 'th' ? 'แหล่งอ้างอิงและการตรวจทาน' : 'Sources and review'}
       </h3>
       <p className="mt-3">
-        {locale === 'th' ? 'จัดทำโดย' : 'Prepared by the'}{' '}
-        <Link className="underline" href={localizedPath(locale, '/about')}>
-          {locale === 'th' ? 'ทีมพัฒนา AtoAxis' : 'AtoAxis development team'}
+        {locale === 'th' ? 'เขียนและตรวจทานโดย' : 'Written and reviewed by'}{' '}
+        <Link className="underline" href={localizedPath(locale, '/about')} rel="author">
+          {FOUNDER.name}
         </Link>
-        . {locale === 'th' ? 'ตรวจทานเมื่อ ' : 'Reviewed '}
+        , {locale === 'th' ? FOUNDER.thJobTitle : FOUNDER.jobTitle} {locale === 'th' ? 'ของ' : 'of'}{' '}
+        AtoAxis. {locale === 'th' ? 'ตรวจทานเมื่อ ' : 'Reviewed '}
         <time dateTime={reviewDate}>{reviewDate}</time>.{' '}
         {locale === 'th'
           ? 'ข้อความเกี่ยวกับผลิตภัณฑ์อ้างอิงจากระบบที่พัฒนาอยู่ ตัวอย่างเป็นข้อมูลสมมติ ไม่ใช่งานวิจัยหรือข้อมูลลูกค้า'
           : 'Product claims describe our implementation; examples are illustrative, not customer research.'}
       </p>
+      {evidence ? (
+        <p className="mt-3">
+          {evidence.text}{' '}
+          <cite>
+            <a className="underline" href={evidence.href} rel="noopener noreferrer">
+              {locale === 'th' ? 'ที่มา' : 'Source'}
+            </a>
+          </cite>
+          .
+        </p>
+      ) : null}
       <ul className="mt-4 space-y-3">
         {sources.map((source) => (
           <li key={source.href}>
             {source.href.startsWith('/') ? (
-              <Link className="underline" href={localizedPath(locale, source.href)}>
-                {source.label}
-              </Link>
+              <cite>
+                <Link className="underline" href={localizedPath(locale, source.href)}>
+                  {source.label}
+                </Link>
+              </cite>
             ) : (
-              <a className="underline" href={source.href} rel="noopener noreferrer">
-                {source.label}
-              </a>
+              <cite>
+                <a className="underline" href={source.href} rel="noopener noreferrer">
+                  {source.label}
+                </a>
+              </cite>
             )}
             : {source.note}.
           </li>

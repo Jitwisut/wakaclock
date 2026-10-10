@@ -3,6 +3,7 @@ import localFont from 'next/font/local';
 import { JsonLd } from '@/components/seo/json-ld';
 import GoogleAnalyticsInit from '@/lib/ga';
 import {
+  founderSchema,
   graph,
   organizationSchema,
   softwareApplicationSchema,
@@ -37,7 +38,12 @@ const thaiSans = localFont({
   display: 'swap',
 });
 
-const SITE_GRAPH = graph(organizationSchema(), websiteSchema(), softwareApplicationSchema());
+const SITE_GRAPH = graph(
+  organizationSchema(),
+  founderSchema(),
+  websiteSchema(),
+  softwareApplicationSchema()
+);
 
 export function MarketingLayoutFrame({
   children,

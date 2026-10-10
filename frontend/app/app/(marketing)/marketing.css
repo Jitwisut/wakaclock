@@ -1124,6 +1124,20 @@
     max-width: 65ch;
     margin: 28px auto 0;
   }
+  & .mkt-byline {
+    margin: 20px auto 0;
+    max-width: 65ch;
+    font-size: 12px;
+    color: var(--mkt-fg-muted);
+  }
+  & .mkt-byline a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  & .mkt-page-editorial .mkt-byline {
+    margin-left: 0;
+  }
   & .mkt-page-intro > p:first-child:not(.axis-page-lead) {
     border: 0;
     color: var(--mkt-accent) !important;
