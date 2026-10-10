@@ -58,8 +58,9 @@ export function ProductTour({ locale }: { locale: SiteLocale }) {
         width={1280}
       >
         <source src={VIDEO_PATH} type="video/mp4" />
-        {/* The video is silent; this track repeats the on-screen captions for assistive tech. */}
-        <track default kind="captions" label="English" src={CAPTIONS_PATH} srcLang="en" />
+        {/* The video is silent and its captions are burned in; this track repeats them as
+            text for assistive tech, off by default so the picture is not captioned twice. */}
+        <track kind="captions" label="English" src={CAPTIONS_PATH} srcLang="en" />
       </video>
       <figcaption className="mt-3 text-sm opacity-75">{copy.caption}</figcaption>
     </figure>

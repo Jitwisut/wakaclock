@@ -63,7 +63,7 @@ const REFERENCES = {
     ],
   },
   dora: {
-    href: 'https://dora.dev/guides/dora-metrics-four-keys/',
+    href: 'https://dora.dev/guides/dora-metrics/',
     en: [
       'DORA software delivery metrics',
       'delivery outcomes, a different view from editor activity',
