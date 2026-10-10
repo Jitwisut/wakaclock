@@ -2454,7 +2454,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     serde_json::json!({"status":"unavailable","durable":false})
                 };
                 if hook_output {
-                    println!("{{}}");
+                    if adapter == "cline" {
+                        println!("{{\"cancel\":false}}");
+                    } else {
+                        println!("{{}}");
+                    }
                 } else {
                     println!(
                         "{}",

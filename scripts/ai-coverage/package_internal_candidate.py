@@ -62,7 +62,12 @@ def inspect_members(package: Path, commit: str) -> tuple[dict, dict[str, bytes]]
             # Never include a matching secret, its prefix or contents in output.
             raise ArtifactError("candidate_sensitive_material_detected")
     compiled = members.get("extension/out/src/extension.js", b"")
-    if b"enableJournal" not in compiled or b"runtimePause" not in compiled:
+    compiled_cli = members.get("extension/out/src/cli.js", b"")
+    package_metadata = json.loads(members["extension/package.json"])
+    commands = {command.get("command") for command in package_metadata.get("contributes", {}).get("commands", [])}
+    if (b"enableJournal" not in compiled or b".runtime(" not in compiled
+            or b"acceptJournalBatch" not in compiled_cli or b"heartbeat-batch" not in compiled_cli
+            or not {"wakaclock.runtimePause", "wakaclock.runtimeResume"}.issubset(commands)):
         raise ArtifactError("candidate_compiled_extension_incompatible")
     if not re.fullmatch(r"[a-f0-9]{64}", manifest.get("sourceTreeDigest", "")):
         raise ArtifactError("candidate_source_inventory_missing")

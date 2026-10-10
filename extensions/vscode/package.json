@@ -108,6 +108,10 @@
         "title": "AtoAxis: Upgrade Managed CLI"
       },
       {
+        "command": "wakaclock.retryJournalRejection",
+        "title": "AtoAxis: Retry Retained Editor Record"
+      },
+      {
         "command": "wakaclock.manageRuntime",
         "title": "AtoAxis: Manage Background Runtime"
       },

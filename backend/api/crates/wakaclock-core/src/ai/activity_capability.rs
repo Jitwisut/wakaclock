@@ -9,6 +9,9 @@ pub struct ActivityCapability {
     pub channel: String,
     pub live_certification: String,
     pub provider_version: Option<String>,
+    /// Code installation surfaces; native/live certification remains separate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installation_platforms: Option<Vec<String>>,
 }
 pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
     let surfaces: &[&str] = match id {
@@ -32,7 +35,13 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
         ] {
             let native_markers = matches!(
                 id,
-                "codex" | "claude-code" | "gemini-cli" | "cursor" | "copilot" | "kilo-code"
+                "codex"
+                    | "claude-code"
+                    | "gemini-cli"
+                    | "cursor"
+                    | "copilot"
+                    | "kilo-code"
+                    | "cline"
             ) && *surface != "inline"
                 && (id != "codex" || *surface == "cli");
             let implemented = match metric {
@@ -63,7 +72,11 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
             {
                 "explicit_activity_surface_configuration_required"
             } else if implemented {
-                "requires_metric_and_version_live_evidence"
+                if id == "cline" {
+                    "macos_hook_setup_windows_contract_evidence_pending"
+                } else {
+                    "requires_metric_and_version_live_evidence"
+                }
             } else if metric == "measured_tool_intervals" && native_markers {
                 "markers_do_not_prove_permission_free_execution_interval"
             } else if id == "copilot" && matches!(metric, "usage_tokens" | "cost") {
@@ -91,6 +104,8 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                 .into(),
                 live_certification: "pending".into(),
                 provider_version: None,
+                installation_platforms: (id == "cline" && implemented)
+                    .then(|| vec!["macos".into()]),
             });
         }
     }

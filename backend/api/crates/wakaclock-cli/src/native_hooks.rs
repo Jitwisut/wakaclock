@@ -113,9 +113,9 @@ fn load(path: &Path) -> Result<Value, Box<dyn Error>> {
 fn persist(path: &Path, value: &Value) -> Result<(), Box<dyn Error>> {
     use std::io::Write;
     fs::create_dir_all(path.parent().ok_or("activity_hook_path_invalid")?)?;
-    let staged = path.with_extension("atoaxis-new");
+    let staged = path.with_extension(format!("atoaxis-{}", uuid::Uuid::new_v4()));
     let mut options = fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
+    options.create_new(true).write(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -135,6 +135,9 @@ pub fn configure(
     executable: &Path,
     uninstall: bool,
 ) -> Result<Value, Box<dyn Error>> {
+    if adapter == "cline" {
+        return configure_cline(home, executable, uninstall);
+    }
     use fs2::FileExt;
     let (relative, surface, _) = specification(adapter)?;
     let directory = home.join(".wakaclock/native-activity-hooks");
@@ -186,6 +189,176 @@ pub fn configure(
         json!({"adapter":adapter,"surface":surface,"status":if uninstall{"uninstalled"}else{"configured"},"capture_contract":"native_activity_hook_v1","live_certification":"pending","user_hooks_preserved":true,"hook_location":if adapter=="copilot"{Some(path)}else{None},"next_step":if adapter=="copilot"{Some("enable this hook file in VS Code chat.hookFilesLocations after workspace trust and chat.useHooks verification")}else{None}}),
     )
 }
+
+/// Cline's documented macOS contract discovers one executable per event. Never
+/// wrap or replace somebody else's hook: there is no additive JSON hook list.
+/// Windows discovery differs across provider versions and remains pending.
+fn configure_cline(
+    home: &Path,
+    executable: &Path,
+    uninstall: bool,
+) -> Result<Value, Box<dyn Error>> {
+    use fs2::FileExt;
+    if cfg!(windows) {
+        return Err("cline_windows_hook_contract_evidence_pending".into());
+    }
+    let directory = home.join(".wakaclock/native-activity-hooks");
+    fs::create_dir_all(&directory)?;
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(directory.join("setup.lock"))?;
+    lock.lock_exclusive()?;
+    let ledger = directory.join("cline-files.json");
+    let previous = load(&ledger)?;
+    let events = [
+        "TaskStart",
+        "TaskResume",
+        "TaskCancel",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+    ];
+    let mut next = serde_json::Map::new();
+    if !uninstall {
+        let command = command(executable, "cline", "ide")?;
+        for event in events {
+            next.insert(
+                event.into(),
+                json!(format!(
+                    "#!/bin/sh\n# AtoAxis owned native activity hook; cancel is provider control, never a durable ACK.\n{command} >/dev/null 2>/dev/null\nif [ \"$?\" -ne 0 ]; then printf '%s\\n' 'atoaxis_activity_capture_not_confirmed' >&2; fi\nprintf '%s\\n' '{{\"cancel\":false}}'\n"
+                )),
+            );
+        }
+    }
+    let next = Value::Object(next);
+    let recovery_path = directory.join("cline-files-recovery.json");
+    let recovery = load(&recovery_path)?;
+    let mut generations = match recovery.get("generations") {
+        Some(Value::Array(generations)) => generations.clone(),
+        None if recovery == json!({}) => Vec::new(),
+        _ => return Err("activity_hook_ownership_invalid".into()),
+    };
+    for generation in [&previous, &next] {
+        if !generations.contains(generation) {
+            generations.push(generation.clone());
+        }
+    }
+    if generations.len() > 8 {
+        return Err("activity_hook_recovery_requires_review".into());
+    }
+    for generation in &generations {
+        let files = generation
+            .as_object()
+            .ok_or("activity_hook_ownership_invalid")?;
+        if files
+            .iter()
+            .any(|(event, contents)| !events.contains(&event.as_str()) || !contents.is_string())
+        {
+            return Err("activity_hook_ownership_invalid".into());
+        }
+    }
+    let hooks = home.join("Documents/Cline/Hooks");
+    check_cline_directories(home)?;
+    // Preflight every file before changing any. Symlinks and unknown contents
+    // are foreign even if the filename resembles one of our hooks.
+    for event in events {
+        let path = hooks.join(event);
+        check_cline_file(&path, event, &generations)?;
+    }
+    persist(&recovery_path, &json!({"generations":generations}))?;
+    if !uninstall {
+        fs::create_dir_all(&hooks)?;
+    }
+    for event in events {
+        let path = hooks.join(event);
+        // Recheck after durable registration, before each mutation. An external
+        // editor may have replaced a file since the all-file preflight.
+        check_cline_directories(home)?;
+        check_cline_file(&path, event, &generations)?;
+        if let Some(contents) = next[event].as_str() {
+            persist_hook(&path, contents)?;
+        } else if path.exists() {
+            fs::remove_file(&path)?;
+            #[cfg(unix)]
+            fs::File::open(&hooks)?.sync_all()?;
+        }
+    }
+    persist(&ledger, &next)?;
+    fs::remove_file(recovery_path)?;
+    Ok(
+        json!({"adapter":"cline","surface":"ide","status":if uninstall{"uninstalled"}else{"configured"},
+        "capture_contract":"native_activity_hook_v1","installation_platforms":["macos"],
+        "live_certification":"pending","user_hooks_preserved":true,
+        "next_step":"Enable Hooks in Cline settings. Existing foreign event hooks require manual additive setup; Windows provider-version evidence is pending."}),
+    )
+}
+
+fn check_cline_file(path: &Path, event: &str, generations: &[Value]) -> Result<(), Box<dyn Error>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err("activity_hook_foreign_file".into());
+            }
+            let contents =
+                fs::read_to_string(path).map_err(|_| "activity_hook_config_unreadable")?;
+            if !generations
+                .iter()
+                .any(|generation| generation[event].as_str() == Some(&contents))
+            {
+                return Err("activity_hook_foreign_file".into());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("activity_hook_config_unreadable".into()),
+    }
+    Ok(())
+}
+
+fn check_cline_directories(home: &Path) -> Result<(), Box<dyn Error>> {
+    for directory in [
+        home.join("Documents"),
+        home.join("Documents/Cline"),
+        home.join("Documents/Cline/Hooks"),
+    ] {
+        match fs::symlink_metadata(directory) {
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                return Err("activity_hook_foreign_directory".into())
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("activity_hook_config_unreadable".into()),
+        }
+    }
+    Ok(())
+}
+
+fn persist_hook(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
+    use std::io::Write;
+    let staged = path.with_extension(format!("atoaxis-{}", uuid::Uuid::new_v4()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o700);
+    }
+    let mut file = options.open(&staged)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o700))?;
+    }
+    file.write_all(contents.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(staged, path)?;
+    #[cfg(unix)]
+    fs::File::open(path.parent().ok_or("activity_hook_path_invalid")?)?.sync_all()?;
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,5 +385,97 @@ mod tests {
         assert!(project(json!({"hooks":[]}), &json!({}), &entry, true).is_err());
         assert!(entries("deep-code", Path::new("x")).is_err());
         assert!(entries("cursor", Path::new("/bad/$name")).is_err());
+    }
+    #[test]
+    #[cfg(unix)]
+    fn cline_owned_files_upgrade_remove_and_preserve_foreign_hooks() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!("cline-hooks-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&home).unwrap();
+        configure(&home, "cline", Path::new("/old CLI/wakaclock"), false).unwrap();
+        let hook = home.join("Documents/Cline/Hooks/PreToolUse");
+        assert_eq!(
+            fs::metadata(&hook).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        configure(&home, "cline", Path::new("/new CLI/wakaclock"), false).unwrap();
+        assert!(fs::read_to_string(&hook).unwrap().contains("/new CLI/"));
+        let other = home.join("Documents/Cline/Hooks/PostToolUse");
+        fs::write(&other, "#!/bin/sh\nuser-hook\n").unwrap();
+        assert!(configure(&home, "cline", Path::new("/another CLI/wakaclock"), false).is_err());
+        assert!(fs::read_to_string(&hook).unwrap().contains("/new CLI/"));
+        assert!(configure(&home, "cline", Path::new("/new CLI/wakaclock"), true).is_err());
+        assert_eq!(
+            fs::read_to_string(&other).unwrap(),
+            "#!/bin/sh\nuser-hook\n"
+        );
+        fs::remove_file(other).unwrap();
+        configure(&home, "cline", Path::new("/new CLI/wakaclock"), true).unwrap();
+        assert!(!hook.exists());
+        fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
+    #[cfg(unix)]
+    fn cline_resumes_an_interrupted_generation_and_refuses_symlinks() {
+        use std::os::unix::fs::symlink;
+        let home = std::env::temp_dir().join(format!("cline-interrupted-{}", uuid::Uuid::new_v4()));
+        configure(&home, "cline", Path::new("/original/wakaclock"), false).unwrap();
+        let ledger = home.join(".wakaclock/native-activity-hooks/cline-files.json");
+        let original = load(&ledger).unwrap();
+        persist(
+            &home.join(".wakaclock/native-activity-hooks/cline-files-recovery.json"),
+            &json!({"generations":[original]}),
+        )
+        .unwrap();
+        persist(&ledger, &json!({})).unwrap();
+        configure(&home, "cline", Path::new("/next/wakaclock"), false).unwrap();
+        let hook = home.join("Documents/Cline/Hooks/TaskStart");
+        fs::remove_file(&hook).unwrap();
+        let foreign = home.join("foreign");
+        fs::write(&foreign, "kept").unwrap();
+        symlink(&foreign, &hook).unwrap();
+        assert!(configure(&home, "cline", Path::new("/next/wakaclock"), true).is_err());
+        assert_eq!(fs::read_to_string(foreign).unwrap(), "kept");
+        fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
+    #[cfg(unix)]
+    fn cline_rejects_redirected_hook_directories_and_keeps_unowned_staging_files() {
+        use std::os::unix::fs::symlink;
+        let home = std::env::temp_dir().join(format!("cline-directory-{}", uuid::Uuid::new_v4()));
+        let foreign = home.join("foreign");
+        fs::create_dir_all(&foreign).unwrap();
+        fs::create_dir_all(home.join("Documents/Cline")).unwrap();
+        symlink(&foreign, home.join("Documents/Cline/Hooks")).unwrap();
+        assert!(configure(&home, "cline", Path::new("/fixture/wakaclock"), false).is_err());
+        assert_eq!(fs::read_dir(&foreign).unwrap().count(), 0);
+        fs::remove_file(home.join("Documents/Cline/Hooks")).unwrap();
+        fs::create_dir_all(home.join("Documents/Cline/Hooks")).unwrap();
+        let staging = home.join("Documents/Cline/Hooks/PreToolUse.atoaxis-new");
+        fs::write(&staging, "user staging data").unwrap();
+        configure(&home, "cline", Path::new("/fixture/wakaclock"), false).unwrap();
+        assert_eq!(fs::read_to_string(staging).unwrap(), "user staging data");
+        fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
+    #[cfg(unix)]
+    fn cline_capture_failure_never_blocks_the_host_or_reports_durable_acceptance() {
+        let home = std::env::temp_dir().join(format!("cline-neutral-{}", uuid::Uuid::new_v4()));
+        configure(&home, "cline", &home.join("missing-cli"), false).unwrap();
+        let output = std::process::Command::new(home.join("Documents/Cline/Hooks/PreToolUse"))
+            .env_clear()
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+            json!({"cancel":false})
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).trim(),
+            "atoaxis_activity_capture_not_confirmed"
+        );
+        assert!(!home.join(".wakaclock/capture.db").exists());
+        fs::remove_dir_all(home).unwrap();
     }
 }

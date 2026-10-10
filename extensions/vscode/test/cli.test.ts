@@ -61,7 +61,7 @@ describe("WakaclockCliService", () => {
   });
 
   it("rejects missing, duplicate or foreign durable ACK identities", async () => {
-    for (const outcomes of [[], [{heartbeat_id:"foreign",status:"accepted"}], [{heartbeat_id:"keep",status:"unknown"}]]) {
+    for (const outcomes of [[], [{heartbeat_id:"foreign",status:"accepted"}], [{heartbeat_id:"keep",status:"unknown"}], [{heartbeat_id:"keep",status:"permanent_rejection",error_code:"credential or file contents: SENSITIVE"}]]) {
       spawnMock.mockImplementation(() => mockChild({stdout:JSON.stringify({schema_version:1,scope_id:"scope",results:outcomes})}));
       const service=new WakaclockCliService(createConfig,new Logger(() => false));
       await expect(service.acceptJournalBatch("scope",[{entity:"/project/a.ts",heartbeat_id:"keep",time:1}])).rejects.toThrow("durable_ack_invalid");

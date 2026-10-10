@@ -191,6 +191,44 @@ export class HeartbeatBufferManager {
 
   public closeJournal(): void { this.journal?.close(); }
 
+  public rejectedJournalItems(): Array<{ id: string; errorCode: string; time?: number }> {
+    return [...this.rejections].map(([id, errorCode]) => {
+      const payload = this.externalPayloads.get(id) ?? [...this.retrySnapshots.values()].flat().find(snapshot => snapshot.payload.heartbeat_id === id)?.payload;
+      return { id, errorCode, time: payload?.time };
+    });
+  }
+
+  /** Explicit one-item redrive after the owner upgrades/fixes a validation issue.
+   * No snapshot is generated from today's file state or the current clock.
+   */
+  public retryRejectedJournalItem(id: string): Promise<boolean> {
+    return this.enqueueJournalRedrive(id);
+  }
+
+  private async enqueueJournalRedrive(id: string): Promise<boolean> {
+    let accepted = false;
+    await this.enqueueFlush(async () => {
+      if (!this.rejections.has(id) || !this.journalScope || !this.cli.acceptJournalBatch || this.getJournalHealth()?.status !== "ready") throw new Error("journal_redrive_not_ready");
+      const payload = this.externalPayloads.get(id) ?? [...this.retrySnapshots.values()].flat().find(snapshot => snapshot.payload.heartbeat_id === id)?.payload;
+      if (!payload) throw new Error("journal_rejection_payload_missing");
+      const result = (await this.cli.acceptJournalBatch(this.journalScope, [structuredClone(payload)])).find(result => result.heartbeat_id === id);
+      if (!result) throw new Error("journal_redrive_ack_missing");
+      accepted = result.status === "accepted" || result.status === "duplicate";
+      if (accepted) {
+        this.rejections.delete(id);
+        this.externalPayloads.delete(id);
+        for (const [entity, snapshots] of this.retrySnapshots) this.retrySnapshots.set(entity, snapshots.filter(snapshot => snapshot.payload.heartbeat_id !== id));
+      } else if (result.status === "permanent_rejection") {
+        this.rejections.set(id, result.error_code ?? "invalid_metadata");
+      } else {
+        // Recoverable rejection becomes ordinary retained pending work again.
+        this.rejections.delete(id);
+      }
+      this.checkpoint();
+    });
+    return accepted;
+  }
+
   private checkpoint(): void {
     if (this.journalError) throw new Error(this.journalError);
     if (!this.journal) return; // Legacy callers/tests opt in explicitly.

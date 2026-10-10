@@ -864,14 +864,19 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 command_names: vec![],
                 version_arg: None,
             },
-            // A pure VS Code extension — no separate process, no CLI. Only a
-            // transcript/log scan could ever apply.
-            install: InstallStrategy::TranscriptOnly,
-            native_hooks: no_hooks(),
+            install: InstallStrategy::Manual {
+                instruction: "macOS: wakaclock ai activity-setup --adapter cline --yes, then enable Cline Hooks. Foreign hook files are preserved; Windows provider-version contract evidence is pending".to_string(),
+            },
+            native_hooks: NativeHookCapabilities {
+                pre_tool_use: true,
+                post_tool_use: true,
+                session_lifecycle: true,
+                ..Default::default()
+            },
             transcript_roots: vec![],
             payload_schema_versions: vec![],
             supported_change_kinds: file_kinds.clone(),
-            verification: Verification::unverified(),
+            verification: Verification::scaffold("documented metadata-only native file hooks are wired on macOS; native version and Windows certification remain pending"),
             health_probe: HealthProbe::None,
         },
         AdapterManifest {

@@ -180,8 +180,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage(`AtoAxis: ${component} ${action} completed. Queue and journal IDs are retained.`);
     } catch { void vscode.window.showErrorMessage("AtoAxis: service change could not be confirmed. Check runtime metadata; pending data is retained."); }
   }));
+  context.subscriptions.push(vscode.commands.registerCommand("wakaclock.retryJournalRejection", async () => {
+    if (identityChanged) { void vscode.window.showWarningMessage("AtoAxis: reload and verify the current identity before journal recovery."); return; }
+    const entries = bufferManager.rejectedJournalItems();
+    if (!entries.length) { void vscode.window.showInformationMessage("AtoAxis: no rejected editor journal records are available."); return; }
+    const selected = await vscode.window.showQuickPick(entries.map(item => ({ label: item.id, description: item.errorCode, item })), { title: "AtoAxis: Retry one retained rejection with its original ID and timestamp" });
+    if (!selected) return;
+    try {
+      const accepted = await bufferManager.retryRejectedJournalItem(selected.item.id);
+      void vscode.window.showInformationMessage(accepted ? "AtoAxis: record accepted into the durable CLI queue. Server delivery is checked separately." : "AtoAxis: record remains retained and needs further recovery.");
+    } catch { void vscode.window.showErrorMessage("AtoAxis: journal retry was not confirmed; the original ID and record remain retained."); }
+  }));
   context.subscriptions.push(vscode.commands.registerCommand("wakaclock.setupNativeActivity", async () => {
-    const adapter = await vscode.window.showQuickPick(["claude-code", "gemini-cli", "cursor", "copilot"], { title: "AtoAxis: Enable native metadata activity hooks (live certification pending)" });
+    const adapter = await vscode.window.showQuickPick(["claude-code", "gemini-cli", "cursor", "copilot", "cline"], { title: "AtoAxis: Enable native metadata activity hooks (live certification pending)" });
     if (!adapter) return;
     try {
       const result = await cliService.setupNativeActivity(adapter);

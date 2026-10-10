@@ -1804,8 +1804,11 @@ pub(crate) fn native_activity_setup(
     yes: bool,
     uninstall: bool,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
-    if !["claude-code", "gemini-cli", "cursor", "copilot"].contains(&adapter) {
+    if !["claude-code", "gemini-cli", "cursor", "copilot", "cline"].contains(&adapter) {
         return Err("activity_native_hook_contract_evidence_pending".into());
+    }
+    if adapter == "cline" && cfg!(windows) {
+        return Err("cline_windows_hook_contract_evidence_pending".into());
     }
     let home = dirs::home_dir().ok_or("service_home_unavailable")?;
     let _lock = acquire_setup_lock(&home)?;

@@ -1,7 +1,10 @@
 # Heartbeat → Capture AI → Client Release: implementation ledger
 
 Updated: 2026-10-10, Asia/Bangkok. Branch: `codex/heartbeat-capture-release`.
-Base: `90774c9`. The working changes are not yet a frozen candidate build.
+Base: `90774c9`. Foundation commits: `98c81d7`, `4a9d194`. The macOS arm64
+candidate from `4a9d194` passed native execution and package integrity checks;
+it does not contain subsequent editor redrive or Cline setup changes. A new
+candidate must be built from the next clean commit before exercising those paths.
 Development remains **in progress**. No native/live certification or production
 release is implied by unit, fixture, or artifact-verifier tests.
 
@@ -11,6 +14,7 @@ release is implied by unit, fixture, or artifact-verifier tests.
 |---|---|
 | Editor acceptance | Private append-only checkpoints retain IDs, event timestamps, snapshots, segments and pending external observations. A checkpoint is acknowledged only after file sync. Corrupt/torn records preserve the verified prefix and block further acceptance. |
 | CLI handoff | `heartbeat-batch` reads metadata from stdin and returns a result for each original ID after the durable SQLite transaction. Receipts survive server delivery and process restart. Bad siblings do not erase good records. Old CLI responses cannot release the journal. |
+| Editor dead letter | **Retry Retained Editor Record** explicitly redrives one quarantined payload with its original ID/time. A durable duplicate ACK also completes handoff. Transient rejections return to retained pending delivery; lost responses and checkpoint write failures do not report success. Diagnostic error codes are validated before storage. |
 | Recovery scope | Prior editor journals and capture inbox/cursors are adopted only with recorded same-account, same-origin ownership proof. Conflicting inbox revisions, contracts or cursors fail closed. |
 | Runtime intent | `runtime pause/resume/status --component capture\|delivery\|backend-local\|all --json`; user intent survives restart. Capture excludes pause intervals; delivery refuses new POSTs while paused. Resume validates owned binaries/configuration before releasing pause. |
 | Owned workers | Per-user LaunchAgent / Task Scheduler definitions, immutable hash directories, active/previous pointers, worker locks and startup build-hash observations. Install/upgrade/rollback/uninstall/resume are serialized. Queue and journal data survive removal. Windows registration receipts detect changes to the actual exported task definition. |
@@ -41,7 +45,7 @@ remain pending. A missing installation/login is not proof of unsupported metrics
 | Kilo Code | Explicit `activitySurface` plugin option enables all tool start/end/failure markers, including read/search. Matching local durable ACK required. Shared legacy file producer retained. Durable producer-side retention before CLI availability remains work. |
 | Kimi Code CLI | Existing edit/snapshot hooks retained; generic native task/tool/message activity wiring remains work. |
 | Generic MCP | Strict v3 ingress and shared durable pipeline available only for explicit producer events. No claim to observe every MCP interaction or infer usage/cost. |
-| Cline | Metadata-only native hook normalizer exists; native file-hook setup, version negotiation and actual Windows hook contract remain work. |
+| Cline | Metadata-only native markers and owned executable file-hook setup on macOS. Preflight checks all managed event files, rejects foreign/symlink files/directories, and retains generations across interruption. Neutral `cancel:false` never means a durable ACK; capture failure emits only a safe diagnostic and never blocks the host. No measured interval or file attribution is inferred. Actual provider version and Windows hook contract remain pending. |
 | OpenCode | Metadata-only tool marker normalizer exists; native plugin installation and v1/v2 contract negotiation remain work. |
 | Roo Code | Verify the extension API and implement metadata-only bridge with proven task/project identity. |
 | Windsurf | Resolve version-specific Cascade hook contract and product/documentation redirects before wiring. |
@@ -53,6 +57,8 @@ Contract references: [Claude hooks](https://code.claude.com/docs/en/hooks),
 [Cursor hooks](https://prod.cursor.com/docs/hooks),
 [VS Code local agent hooks](https://code.visualstudio.com/docs/agents/reference/hooks-reference),
 [Kilo plugins](https://kilo.ai/docs/automate/extending/plugins).
+The Cline macOS file-hook contract comes from the provider's
+[hook documentation](https://github.com/cline/cline/blob/main/.clinerules/hooks/README.md).
 References establish documented contracts, not live certification of this build.
 
 ## Development still to complete
@@ -60,7 +66,7 @@ References establish documented contracts, not live certification of this build.
 1. Finish the per-adapter paths above, including Cursor/Copilot inline and explicit
    provenance for Codex IDE/Desktop. Keep unsupported, unresolved and evidence
    pending distinct; do not reduce the approved scope without the owner's decision.
-2. Add recoverable editor dead-letter inspection/redrive and journal repair tooling.
+2. Finish journal repair tooling (editor dead-letter inspection/redrive is implemented).
    Guard-owner ambiguity, checksum failure and unknown baseline need explicit
    recovery dispositions; never trim a pending journal to make it look healthy.
 3. Finish producer health and capture-surface health projection in CLI/VS Code/UI.
@@ -80,18 +86,18 @@ Local evidence already obtained in this working revision:
 
 - Core library: **384 passed**, including ownership/ID/cursor/contract and duration
   invariants. Strict Clippy core + CLI all-targets passed with warnings denied.
-- VS Code: **191 passed**; type check passed. Includes journal crash,
+- VS Code: **194 passed**; type check passed. Includes journal crash,
   sync/compaction failure, replay, response
   loss, original timestamps, scope isolation, external shutdown handoff, sidecar
   checkpoint errors and persistent managed rollback.
-- Native CLI editor-handoff subprocess fixtures: **3 passed** using isolated homes
+- Native CLI editor-handoff subprocess fixtures: **4 passed** using isolated homes
   and an unavailable loopback origin; no real transcript/account or Docker.
-- Full CLI regression: **78 unit + 6 broker + 3 editor handoff + 44 offline
+- CLI regression: **82 unit + 6 broker + 4 editor handoff + 44 offline
   lifecycle passed**, including 1,191 queued records across three days, idle
   recovery, response loss, auth/rate-limit handling and preserved scoped IDs.
 - Kilo plugin: **13 passed**, including read/search/failure metadata boundaries.
 - Python local-runtime: **7 passed**, including no Docker calls during Pause and
-  refusal to resume an unproven supervisor. Artifact/coverage tooling: **50 passed**.
+  refusal to resume an unproven supervisor. Artifact/coverage tooling: **51 passed**.
 - Server activity timeline: **41 passed**, **1 ignored** because it requires an
   isolated ClickHouse instance. The ignored test is not a passed restore/lifecycle
   gate. Earlier Team trust unit checks passed; isolated DB drills remain pending.
@@ -137,8 +143,11 @@ No age/size-based backlog deletion is permitted.
 For an editor journal failure, park capture and preserve the entire journal,
 lock/guard metadata and SQLite backup including WAL before repair. A corrupt
 tail is not an ACK. A permanent item rejection stays in recoverable dead letter;
-it does not prevent valid siblings from being accepted. Automatic destructive
-repair/redrive is not implemented yet.
+it does not prevent valid siblings from being accepted. After correcting the
+receiver/validation problem, use **Retry Retained Editor Record** to retry one
+item. No historical snapshot is regenerated from current files. Success means
+local durable CLI acceptance; inspect server delivery separately. Corrupt journal
+repair remains manual; never trim or delete the original evidence.
 
 For worker upgrade, use **Manage Background Runtime** explicitly. Active and
 previous executables are immutable hash directories. A custom `wakaclock.cliPath`

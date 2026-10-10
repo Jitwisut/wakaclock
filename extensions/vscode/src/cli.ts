@@ -143,6 +143,7 @@ export class WakaclockCliService {
             if (response.schema_version !== 1 || response.scope_id !== scopeId || !Array.isArray(response.results) || response.results.length !== items.length) throw new Error("durable_ack_invalid");
             for (const outcome of response.results) {
                 if (!expected.delete(outcome.heartbeat_id) || !["accepted", "duplicate", "recoverable_rejection", "permanent_rejection"].includes(outcome.status)) throw new Error("durable_ack_invalid");
+                if (outcome.error_code !== undefined && (typeof outcome.error_code !== "string" || !/^[a-z0-9_]{1,80}$/.test(outcome.error_code))) throw new Error("durable_ack_invalid");
             }
             results.push(...response.results);
         }

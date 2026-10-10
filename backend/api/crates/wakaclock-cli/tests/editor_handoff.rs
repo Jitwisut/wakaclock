@@ -131,6 +131,40 @@ fn native_hook_ack_is_local_private_idempotent_and_pause_survives_a_new_process(
 }
 
 #[test]
+fn cline_native_response_is_neutral_and_only_metadata_is_durable() {
+    let home = Home::new();
+    let input = json!({"hookName":"PostToolUse","taskId":"cline-fixture-session", "workspaceRoots":[home.0],
+        "timestamp":"2026-10-10T08:00:00Z", "postToolUse":{"success":false,"parameters":{"source":"SENSITIVE"},"result":"SENSITIVE"}});
+    let output = home.command(
+        &[
+            "ai",
+            "activity-hook",
+            "--adapter",
+            "cline",
+            "--surface",
+            "ide",
+            "--hook-output",
+        ],
+        Some(&input),
+    );
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        json!({"cancel":false})
+    );
+    let db = rusqlite::Connection::open(home.0.join(".wakaclock/capture.db")).unwrap();
+    let stored: String = db
+        .query_row("SELECT payload FROM activity_inbox_v2", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert!(!stored.contains("SENSITIVE"));
+    let event: Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(event["status"], "failed");
+    assert_eq!(event["occurred_at"], "2026-10-10T08:00:00Z");
+}
+
+#[test]
 fn failed_resume_preflight_keeps_persistent_pause() {
     let home = Home::new();
     assert!(home
