@@ -605,3 +605,13 @@ export function evidenceFor(
   if (!AI_EVIDENCE_PAGES.has(path)) return undefined;
   return { href: REFERENCES.soSurveyAi.href, text: AI_EVIDENCE[locale] };
 }
+
+/**
+ * The founder's stated principle, approved by the founder for attribution. It restates the
+ * about page ("a metric that cannot be established should say so instead of rendering as
+ * zero"); it is not a testimonial.
+ */
+export const FOUNDER_QUOTE = {
+  en: 'A metric that cannot be established should say so instead of rendering as zero.',
+  th: 'ตัวเลขที่ยืนยันไม่ได้ ควรบอกว่าไม่ทราบ แทนที่จะแสดงเป็นศูนย์',
+} as const;

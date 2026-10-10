@@ -18,6 +18,7 @@ import {
   EN_MORE_GUIDES,
   evidenceFor,
   externalReferences,
+  FOUNDER_QUOTE,
   type Guide,
   type GuideSource,
   type GuideTable,
@@ -1014,6 +1015,14 @@ export function AnswerGuide({ locale = 'en', path }: { locale?: SiteLocale; path
           <p className="mt-3 leading-relaxed">{tradeoff}</p>
         </>
       ) : null}
+      <figure className="mt-8 border-l-2 pl-4">
+        <blockquote cite={localizedPath(locale, '/about')}>
+          <p className="text-lg leading-relaxed">“{FOUNDER_QUOTE[locale]}”</p>
+        </blockquote>
+        <figcaption className="mt-2 text-sm opacity-75">
+          — {FOUNDER.name}, {locale === 'th' ? FOUNDER.thJobTitle : FOUNDER.jobTitle}, AtoAxis
+        </figcaption>
+      </figure>
       <h3 className="mt-8 text-lg font-semibold">
         {locale === 'th' ? 'แหล่งอ้างอิงและการตรวจทาน' : 'Sources and review'}
       </h3>
