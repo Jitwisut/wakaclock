@@ -91,7 +91,7 @@ export function MarketingFooter({ locale = 'en' }: { locale?: SiteLocale }) {
           {FOOTER_SECTIONS.map((section) => (
             <nav aria-label={section.heading[locale]} key={section.heading.en}>
               <h2 className="text-xs font-semibold">{section.heading[locale]}</h2>
-              <ul className="mt-3 space-y-2">
+              <ul className="mt-2">
                 {section.links.map((link) => (
                   <li key={link.href}>
                     <Link
@@ -109,26 +109,24 @@ export function MarketingFooter({ locale = 'en' }: { locale?: SiteLocale }) {
         </div>
 
         <div
-          className="mt-8 flex flex-wrap gap-x-2 gap-y-1 text-xs"
-          style={{ color: MKT_FG_MUTED }}
-        >
-          {LEGAL_LINKS.map((entry) => (
-            <Link
-              className="inline-flex min-h-11 items-center px-2 transition-colors duration-150 hover:text-[var(--mkt-accent)] hover:underline hover:underline-offset-4"
-              href={localizedPath(locale, entry.href)}
-              key={entry.href}
-            >
-              {FOOTER_COPY[locale][entry.key]}
-            </Link>
-          ))}
-        </div>
-
-        <p
-          className="mt-10 border-t pt-6 text-xs"
+          className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 border-t pt-3 text-xs"
           style={{ borderColor: 'var(--mkt-border)', color: MKT_FG_MUTED }}
         >
-          © {new Date().getFullYear()} {SITE_NAME}. {FOOTER_COPY[locale].copyright}
-        </p>
+          <p>
+            © {new Date().getFullYear()} {SITE_NAME}. {FOOTER_COPY[locale].copyright}
+          </p>
+          <div className="axis-footer-legal -mx-2 flex flex-wrap gap-x-1">
+            {LEGAL_LINKS.map((entry) => (
+              <Link
+                className="inline-flex min-h-8 items-center px-2 transition-colors duration-150 hover:text-[var(--mkt-accent)] hover:underline hover:underline-offset-4"
+                href={localizedPath(locale, entry.href)}
+                key={entry.href}
+              >
+                {FOOTER_COPY[locale][entry.key]}
+              </Link>
+            ))}
+          </div>
+        </div>
       </div>
     </footer>
   );

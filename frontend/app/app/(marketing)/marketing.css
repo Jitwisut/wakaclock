@@ -1352,12 +1352,12 @@
   & .axis-footer {
     background: #eef1ed;
     border-top: 1px solid var(--mkt-border);
-    padding-bottom: 90px;
+    padding-bottom: 56px;
   }
   & .axis-footer-inner {
     max-width: 1240px;
     margin: auto;
-    padding: 56px var(--axis-gutter) 0;
+    padding: 32px var(--axis-gutter) 0;
   }
   & .axis-footer-grid {
     display: grid;
@@ -1377,7 +1377,7 @@
     letter-spacing: 0;
   }
   & .axis-footer-grid nav a {
-    min-height: 36px;
+    min-height: 24px;
     font-size: 11px;
   }
   & .axis-scroll-index {
@@ -1972,8 +1972,13 @@
     & .axis-footer-grid > div {
       grid-column: 1/-1;
     }
-    & .axis-footer-grid nav a {
+    & .axis-footer-grid nav a,
+    & .axis-footer-legal a {
       min-height: 44px;
+    }
+    /* Clear the fixed scroll index so it never sits on the last footer row. */
+    & .axis-footer {
+      padding-bottom: 88px;
     }
   }
 }
