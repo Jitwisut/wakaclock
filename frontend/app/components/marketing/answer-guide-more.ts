@@ -5,7 +5,7 @@
  * Every statement here restates something the page itself already says, or a primary
  * source linked beside it. Nothing is a customer result, a benchmark or an invented quote.
  */
-import { PRICING, PUBLIC_EVIDENCE_URL, type SiteLocale } from '@/lib/seo/site';
+import { PRICING, PRODUCT_STATUS, PUBLIC_EVIDENCE_URL, type SiteLocale } from '@/lib/seo/site';
 
 export type GuideSource = {
   href: string;
@@ -151,6 +151,7 @@ const PAGE_REFERENCES: Record<string, readonly ReferenceKey[]> = {
   '/terms': ['gdprPersonalData', 'timeTracking', 'json'],
   '/privacy': ['gdprPersonalData', 'json', 'wakatimeApi'],
   '/early-access': ['wakatimeApi', 'vscodeMarketplace', 'timeTracking'],
+  '/join': ['wakatimeApi', 'vscodeMarketplace', 'timeTracking'],
 };
 
 /** External primary sources for a page, in the page's language. */
@@ -202,6 +203,8 @@ const TRADEOFFS: Record<SiteLocale, Record<string, string>> = {
       'On the other hand, these are preliminary terms for the Early Access website. They will be replaced before paid accounts open, so read the final terms then instead of relying on this version.',
     '/privacy':
       'On the other hand, metadata can still be personal. Project names, branch names and file paths can reveal what you work on, so review what your clients send before you connect a sensitive repository.',
+    '/join':
+      'On the other hand, Early Access is a waiting list and the hosted plan will be paid. If you need a tracker running today, keep your current one and join the list to be told when keys are issued.',
     '/early-access':
       'On the other hand, joining the list does not give you an account straight away. Keys are issued to people on the list over time, so you may wait before you can connect an editor.',
   },
@@ -243,6 +246,8 @@ const TRADEOFFS: Record<SiteLocale, Record<string, string>> = {
       'ในทางกลับกัน นี่คือข้อกำหนดเบื้องต้นของเว็บไซต์ช่วง Early Access และจะถูกแทนที่ก่อนเปิดบัญชีแบบชำระเงิน ควรอ่านข้อกำหนดฉบับจริงเมื่อถึงเวลานั้น แทนการยึดฉบับนี้',
     '/privacy':
       'ในทางกลับกัน metadata ก็ยังอาจเป็นข้อมูลส่วนตัวได้ ชื่อโปรเจกต์ ชื่อ branch และ path ของไฟล์บอกได้ว่าคุณทำงานอะไร ควรตรวจสิ่งที่ client ส่งก่อนเชื่อม repository ที่อ่อนไหว',
+    '/join':
+      'ในทางกลับกัน Early Access คือรายชื่อรอ และจะไม่มี free tier ตอนเปิดตัว ถ้าคุณต้องการเครื่องมือที่ใช้งานได้วันนี้ ให้ใช้ตัวเดิมต่อไป แล้วลงชื่อไว้เพื่อรับแจ้งเมื่อมีการส่ง key',
     '/early-access':
       'ในทางกลับกัน การลงชื่อไม่ได้ให้บัญชีทันที key จะทยอยส่งให้คนในรายชื่อ คุณจึงอาจต้องรอก่อนเชื่อม editor ได้',
   },
@@ -254,6 +259,39 @@ export function tradeoffFor(path: string, locale: SiteLocale): string | undefine
 
 /** Full guides for English pages that had none. */
 export const EN_MORE_GUIDES: Record<string, Guide> = {
+  '/join': {
+    heading: 'What do you get by joining AtoAxis Early Access?',
+    answer:
+      'A place on the Early Access list for WakaTime-compatible developer time tracking with your complete history and separate AI attribution. Joining records interest only.',
+    facts: [
+      ['Status', `${PRODUCT_STATUS.en.label}: a waiting list, not a checkout.`],
+      ['Planned price', `$${PRICING.monthlyUsd}/month or $${PRICING.annualUsd}/year, one plan.`],
+      ['Protocol', 'WakaTime API, so an existing compatible plugin keeps working.'],
+      ['History', 'Complete coding history included, with no rolling window.'],
+    ],
+    question: 'How do you get ready before your key arrives?',
+    example:
+      'For example, note which editors you use and whether each already has a WakaTime plugin. When your key arrives, the setup is one changed line for those editors, or the VS Code extension for VS Code, and you can confirm the first heartbeat with wakaclock-cli status.',
+    recommendation:
+      'Join the list if you want complete history and AI attribution in one tracker, then read the five-minute setup so you are ready when your key arrives. Check the pricing page before relying on the planned figures.',
+    sources: [
+      {
+        href: '/pricing',
+        label: 'AtoAxis pricing page',
+        note: 'the planned monthly and annual figures',
+      },
+      {
+        href: '/wakatime-alternative',
+        label: 'AtoAxis WakaTime alternative guide',
+        note: 'a fuller migration comparison',
+      },
+      {
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'AtoAxis public documentation',
+        note: 'documented evidence for the claims on this page',
+      },
+    ],
+  },
   '/ai-cost-tracking': {
     heading: 'What does AI cost tracking tell you, and what can it not?',
     answer:
@@ -338,6 +376,35 @@ export const EN_MORE_GUIDES: Record<string, Guide> = {
 
 /** Full guides for Thai pages that had none, written to match the Thai page copy. */
 export const TH_MORE_GUIDES: Record<string, Guide> = {
+  '/join': {
+    heading: 'เข้าร่วม Early Access ของ AtoAxis แล้วได้อะไร?',
+    answer:
+      'คุณจะอยู่ในรายชื่อ Early Access ของเครื่องมือติดตามเวลาเขียนโค้ดที่รองรับ WakaTime พร้อมประวัติครบถ้วนและการแยก AI attribution การลงชื่อเป็นการแสดงความสนใจเท่านั้น',
+    facts: [
+      ['สถานะ', `${PRODUCT_STATUS.th.label} คือรายชื่อรอ ไม่ใช่หน้าชำระเงิน`],
+      ['ราคาที่วางแผนไว้', `$${PRICING.monthlyUsd}/เดือน หรือ $${PRICING.annualUsd}/ปี แผนเดียว`],
+      ['โปรโตคอล', 'WakaTime API ทำให้ plugin ที่รองรับซึ่งใช้อยู่แล้วทำงานต่อได้'],
+      ['ประวัติ', 'เก็บประวัติการเขียนโค้ดครบ ไม่มีการตัดเหลือช่วงล่าสุด'],
+    ],
+    question: 'ควรเตรียมอะไรก่อนได้รับ key?',
+    example:
+      'ตัวอย่างเช่น จดไว้ว่าคุณใช้ editor อะไรบ้าง และแต่ละตัวมี WakaTime plugin อยู่แล้วหรือไม่ เมื่อได้ key การตั้งค่าจะเป็นการแก้หนึ่งบรรทัดสำหรับ editor เหล่านั้น หรือใช้ extension สำหรับ VS Code แล้วตรวจ heartbeat แรกด้วย wakaclock-cli status',
+    recommendation:
+      'ลงชื่อถ้าคุณต้องการประวัติครบและ AI attribution ในเครื่องมือเดียว แล้วอ่านวิธีติดตั้ง 5 นาทีไว้ก่อน จะได้พร้อมเมื่อได้รับ key ตรวจหน้าราคาก่อนอ้างอิงตัวเลขที่วางแผนไว้',
+    sources: [
+      { href: '/pricing', label: 'หน้าราคาของ AtoAxis', note: 'ราคารายเดือนและรายปีที่วางแผนไว้' },
+      {
+        href: '/wakatime-alternative',
+        label: 'คู่มือทางเลือก WakaTime ของ AtoAxis',
+        note: 'การเปรียบเทียบสำหรับการย้ายระบบ',
+      },
+      {
+        href: PUBLIC_EVIDENCE_URL,
+        label: 'เอกสารสาธารณะของ AtoAxis',
+        note: 'หลักฐานสำหรับข้อความในหน้านี้',
+      },
+    ],
+  },
   '/about': {
     heading: 'ใครพัฒนา AtoAxis และตรวจสอบได้อย่างไร?',
     answer:
