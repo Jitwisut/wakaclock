@@ -30,3 +30,6 @@ fs2 = { workspace = true }
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }
 rusqlite = { workspace = true }
+
+[build-dependencies]
+chrono = { workspace = true }
