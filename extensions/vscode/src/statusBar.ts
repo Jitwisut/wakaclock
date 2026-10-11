@@ -1,3 +1,4 @@
+import { assessPipeline, healthRank, pipelineTransitionKey, type HealthState } from "./pipelineHealth";
 import * as vscode from "vscode";
 import type { WakaclockCliService } from "./cli";
 import { Logger } from "./logging";
@@ -120,6 +121,7 @@ export class StatusBarController implements vscode.Disposable {
   private deliveryFailureReported = false;
   private legacyCliReported = false;
   private deliveryHealthState?: string;
+  private deliveryHealthTransition?: string;
   private journalHealthProvider?: () => import("./heartbeatJournal").JournalHealth | undefined;
   public setJournalHealthProvider(provider: () => import("./heartbeatJournal").JournalHealth | undefined): void { this.journalHealthProvider = provider; }
   private lastSnapshot?: Awaited<ReturnType<Pick<WakaclockCliService, "getToday">["getToday"]>>;
@@ -168,6 +170,7 @@ export class StatusBarController implements vscode.Disposable {
   public invalidateScope(): void {
     this.inFlight.invalidate();
     this.deliveryHealthState = undefined;
+    this.deliveryHealthTransition = undefined;
   }
 
   public handleHeartbeatSent(): void {
@@ -259,20 +262,26 @@ export class StatusBarController implements vscode.Disposable {
       const age = snapshot.oldestPendingAt ? (Date.now() - Date.parse(snapshot.oldestPendingAt)) / 1000 : 0;
       const capture = snapshot.capture;
       const captureAge = capture?.checked_at ? (Date.now() - Date.parse(capture.checked_at)) / 1000 : Infinity;
-      const captureState = !capture ? "unknown" : captureAge > 300 ? "stale" : capture.parser_errors || capture.status === "parser_failure" ? "critical" : capture.status !== "fresh" || capture.pending ? "warning" : "complete";
-      const deliveryHealth = !details ? "unknown" : snapshot.deadLetter || ["auth_401", "payment_402"].includes(details.backlog_error?.kind ?? "") || (backlog > 0 && age > 1800)
+      let captureState: HealthState = !capture ? "unknown" : captureAge > 300 ? "stale" : capture.parser_errors || capture.status === "parser_failure" ? "critical" : capture.status !== "fresh" || capture.pending || capture.incomplete ? "warning" : "complete";
+      const pipeline = assessPipeline(capture?.pipeline);
+      if (healthRank[pipeline.state] > healthRank[captureState]) captureState = pipeline.state;
+      const deliveryHealth: HealthState = !details ? "unknown" : snapshot.deadLetter || ["auth_401", "payment_402"].includes(details.backlog_error?.kind ?? "") || (backlog > 0 && age > 1800)
         ? "critical" : backlog > 0 && age > 300 ? "warning" : backlog > 0 ? "pending" : "complete";
-      const health = journal && (journal.status !== "ready" || journal.deadLetter || (journal.unacknowledgedIncidents ?? (journal.historicalIncomplete ? 1 : 0)) > 0) ? "critical" : journal?.pending ? "pending" : deliveryHealth === "complete" ? captureState : deliveryHealth;
-      if (this.deliveryHealthState !== health) {
+      const journalState: HealthState = journal && (journal.status !== "ready" || journal.deadLetter || (journal.unacknowledgedIncidents ?? (journal.historicalIncomplete ? 1 : 0)) > 0) ? "critical" : journal?.pending ? "pending" : "complete";
+      const health = [journalState, captureState, deliveryHealth].reduce((worst, candidate) => healthRank[candidate] > healthRank[worst] ? candidate : worst);
+      const transition = `${health}:${details?.backlog_error?.kind ?? ""}:${pipelineTransitionKey(capture?.pipeline)}`;
+      if (this.deliveryHealthTransition !== transition) {
+        this.deliveryHealthTransition = transition;
         const previous = this.deliveryHealthState;
         this.deliveryHealthState = health;
-        if (health === "warning" || health === "critical" || health === "stale") {
+        if (health === "warning" || health === "critical" || health === "stale" || health === "unavailable") {
           void vscode.window.showWarningMessage(`AtoAxis data is incomplete: ${backlog} pending heartbeat(s), ${snapshot.deadLetter ?? 0} recoverable dead letter(s). Capture: ${capture?.status ?? "unknown"}. Check capture and delivery status.`);
-        } else if (health === "complete" && previous && previous !== "unknown") {
+        } else if (health === "complete" && previous && previous !== "unknown" && previous !== "complete") {
           void vscode.window.showInformationMessage("AtoAxis capture and delivery recovered.");
         }
       }
       this.render(snapshot);
+      if (capture?.pipeline) this.item.tooltip = `${this.item.tooltip ?? ""}\n${capture.pipeline.map(stage => `${stage.adapter_id}/${stage.execution_surface} ${stage.stage}: ${stage.status}; pending ${stage.pending ?? "unknown"}${stage.error_code ? ` (${stage.error_code})` : ""}`).join("\n")}`;
       if (journal) this.item.tooltip = `${this.item.tooltip ?? ""}\nEditor journal: ${journal.status}; history ${journal.historicalIncomplete ? "incomplete" : "unconfirmed"}; pending ${journal.pending}; dead letter ${journal.deadLetter ?? 0}${journal.errorCode ? ` (${journal.errorCode})` : ""}`;
       if (snapshot.legacyCli && !this.legacyCliReported) {
         this.legacyCliReported = true;

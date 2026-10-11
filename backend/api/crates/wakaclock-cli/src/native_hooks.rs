@@ -95,6 +95,10 @@ pub(crate) fn install_producer(
         "activity-producer.py",
         include_str!("../../../../../extensions/ai-agents/common/activity-producer.py"),
     )];
+    scripts.push((
+        "context-producer.py",
+        include_str!("../../../../../extensions/ai-agents/common/context-producer.py"),
+    ));
     if adapter == "cursor" {
         scripts.extend([
             (

@@ -119,7 +119,21 @@ fn frozen_tool_spool_survives_missing_cli_idle_restart_and_lost_ack() {
         .unwrap()
         .map(|entry| serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap())
         .collect();
-    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|r| r["kind"] == "tool_boundary")
+            .count(),
+        2
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|r| r["kind"] == "session_context")
+            .count(),
+        2
+    );
+    assert_eq!(records.len(), 4);
     // Neither source nor the future worktree may affect deferred materialization.
     fs::remove_file(&file).unwrap();
     let batch = json!({"schema_version":2,"records":records});
@@ -381,6 +395,14 @@ fn idle_collector_reconciles_retained_producer_spool_without_new_activity() {
     );
     let state: Value = serde_json::from_slice(&first.stdout).unwrap();
     assert_eq!(state["producer_spool"]["accepted"], 1);
+    assert!(state["pipeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|stage| stage["adapter_id"] == "kimi-code-cli"
+            && stage["execution_surface"] == "cli"
+            && stage["stage"] == "spool"
+            && stage["status"] == "observed"));
     assert!(!file.exists());
     // Lost ACK/producer crash: replay exact original observation after inbox commit.
     fs::write(&file, record.to_string()).unwrap();
@@ -403,4 +425,58 @@ fn idle_collector_reconciles_retained_producer_spool_without_new_activity() {
     assert!(bad.exists());
     assert!(foreign.join("retained.json").exists());
     assert!(!String::from_utf8_lossy(&third.stdout).contains("SENSITIVE"));
+}
+
+#[test]
+fn frozen_context_handoff_is_scoped_durable_and_idle_without_git_replay() {
+    use sha2::{Digest, Sha256};
+    let home = Home::new();
+    let scope: Value =
+        serde_json::from_slice(&home.command(&["journal-scope"], None).stdout).unwrap();
+    let metadata = json!({"context_version":1,"binding":null,"native_session":"native-session","repository":"owner/repo","branch":"original-offline","commit_sha":null,"reason":null});
+    let id = Uuid::new_v4();
+    let record = json!({"schema_version":2,"scope_id":scope["scope_id"],"adapter_id":"codex","execution_surface":"unknown","observation_id":id,"observed_at":chrono::Utc::now(),"kind":"session_context","payload_hash":format!("{:x}",Sha256::digest(serde_json::to_vec(&metadata).unwrap())),"metadata":metadata});
+    let batch = json!({"schema_version":2,"records":[record]});
+    let first = home.command(&["ai", "producer-batch", "--json"], Some(&batch));
+    assert!(first.status.success());
+    let ack: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(ack["results"][0]["durable"], true);
+    let replay: Value = serde_json::from_slice(
+        &home
+            .command(&["ai", "producer-batch", "--json"], Some(&batch))
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(replay["results"][0]["status"], "duplicate");
+    let worker = home.command(&["capture", "run", "--once"], None);
+    assert!(worker.status.success());
+    let state: Value = serde_json::from_slice(&worker.stdout).unwrap();
+    assert_eq!(state["context"]["pending"], 1);
+    assert_ne!(state["context"]["status"], "observed");
+    let db = rusqlite::Connection::open(home.0.join(".wakaclock/broker.db")).unwrap();
+    let retained: String = db
+        .query_row(
+            "SELECT evidence FROM broker_context_observations WHERE id=?1",
+            [id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&retained).unwrap()["branch"],
+        "original-offline"
+    );
+    assert_eq!(
+        home.queue().len().unwrap(),
+        0,
+        "context cannot create heartbeat/usage"
+    );
+    let mut foreign = batch.clone();
+    foreign["records"][0]["scope_id"] = json!("b".repeat(64));
+    let rejected: Value = serde_json::from_slice(
+        &home
+            .command(&["ai", "producer-batch", "--json"], Some(&foreign))
+            .stdout,
+    )
+    .unwrap();
+    assert_ne!(rejected["results"][0]["durable"], true);
 }

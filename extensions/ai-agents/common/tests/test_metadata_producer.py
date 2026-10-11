@@ -9,6 +9,14 @@ import unittest
 from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('metadata',Path(__file__).parents[1]/'metadata-producer.py')
 producer=importlib.util.module_from_spec(spec);spec.loader.exec_module(producer)
+def primary_files(files):
+    files = list(files)
+    contexts = [p for p in files if json.loads(p.read_text()).get('kind') == 'session_context']
+    for file in contexts:
+        record = json.loads(file.read_text())
+        assert set(record['metadata']) == {'context_version', 'native_session', 'repository', 'branch', 'commit_sha', 'reason', 'binding'}
+    return [p for p in files if json.loads(p.read_text()).get('kind') != 'session_context']
+
 class MetadataTests(unittest.TestCase):
     def input(self): return {'session_id':'fixture','agent':'claude-code','cwd':'/fixture','occurred_at':'2026-10-07T01:18:09Z'}
     def setup_scope(self,home):
@@ -18,7 +26,7 @@ class MetadataTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             home=Path(temp);self.setup_scope(home)
             self.assertEqual(producer.run('session_end',self.input(),'/missing/cli','cli',home),'handoff_pending')
-            record=json.loads(next((home/'.wakaclock/native-producer-spool').rglob('*.json')).read_text())
+            record=json.loads(next(iter(primary_files((home/'.wakaclock/native-producer-spool').rglob('*.json')))).read_text())
             self.assertEqual(record['metadata']['occurred_at'],self.input()['occurred_at'])
             self.assertEqual(record['payload_hash'],hashlib.sha256(json.dumps(record['metadata'],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest())
     def test_fixed_owner_is_not_rebound_by_a_foreign_cli(self):
@@ -36,7 +44,7 @@ class MetadataTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             home=Path(temp)
             self.assertEqual(producer.run('session_start',self.input(),'/missing/cli','cli',home),'producer_owner_unconfirmed')
-            self.assertEqual(len(list((home/'.wakaclock/native-producer-spool/unconfirmed').glob('*.json'))),1)
+            self.assertEqual(len(primary_files((home/'.wakaclock/native-producer-spool/unconfirmed').glob('*.json'))),1)
     def test_disk_failure_never_invokes_handoff(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(producer.common,'durable_file',side_effect=OSError('full')):
             with self.assertRaises(OSError): producer.run('session_start',self.input(),'/missing/cli','cli',Path(temp))
@@ -55,7 +63,7 @@ class MetadataTests(unittest.TestCase):
                 env={**os.environ,'ATOAXIS_PRODUCER_HOME':str(home),'WAKACLOCK_CLI_PATH':str(home/'missing-cli')}
                 result=subprocess.run(['bash',str(root/script)],input=json.dumps(payload).encode(),stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,cwd=fixture,timeout=20)
                 self.assertEqual(result.returncode,0,result.stderr.decode())
-                rows=list((home/'.wakaclock/native-producer-spool/unconfirmed').glob('*.json'))
+                rows=primary_files((home/'.wakaclock/native-producer-spool/unconfirmed').glob('*.json'))
                 self.assertEqual(len(rows),1)
                 stored=rows[0].read_text()
                 self.assertNotIn('PRIVATE_SOURCE_SENTINEL',stored);self.assertNotIn('PRIVATE_PROMPT_SENTINEL',stored)

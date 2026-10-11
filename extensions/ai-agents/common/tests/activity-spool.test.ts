@@ -19,7 +19,7 @@ test("unknown ownership is durable but remains parked without claiming acceptanc
  const home = mkdtempSync(join(tmpdir(), "producer-unconfirmed-"));
  try {
   await assert.rejects(retainToolMarker(join(home, "missing-cli"), input, home), /scope_unconfirmed_retained/);
-  const root = join(home, ".wakaclock/native-producer-spool/unconfirmed"); assert.equal(readdirSync(root).length, 1);
+  const root = join(home, ".wakaclock/native-producer-spool/unconfirmed"); assert.equal(readdirSync(root).length, 2);
  } finally { rmSync(home, { recursive: true, force: true }); }
 });
 test("persisted pause prevents spooling even when CLI is unavailable", async () => {
@@ -44,7 +44,7 @@ test("legacy metadata is spooled with immutable hash/time; contents cannot cross
   assert.equal(record.observed_at, input.observedAt); assert.equal(record.metadata.occurred_at,input.observedAt);
   assert.equal(record.payload_hash,createHash("sha256").update(canonicalMetadata(record.metadata)).digest("hex"));
   await assert.rejects(retainMetadata(join(home,"missing-cli"), {...input, metadata:{...input.metadata,prompt:"SECRET"}}, home), /metadata_invalid/);
-  assert.equal(readdirSync(join(home,".wakaclock/native-producer-spool", "a".repeat(64))).length,1);
+  assert.equal(readdirSync(join(home,".wakaclock/native-producer-spool", "a".repeat(64))).length,2);
  } finally {rmSync(home,{recursive:true,force:true});}
 });
 
@@ -67,6 +67,22 @@ test("fixed owner binding cannot be overwritten by the currently configured fore
   assert.equal(metadata?.record.scope_id,"a".repeat(64));
   assert.equal(JSON.parse(readFileSync(binding,"utf8")).scope_id,"a".repeat(64));
   assert.ok(!readFileSync(calls,"utf8").includes("journal-scope"));
-  assert.equal(readdirSync(join(home,".wakaclock/native-producer-spool","a".repeat(64))).length,2);
+  assert.equal(readdirSync(join(home,".wakaclock/native-producer-spool","a".repeat(64))).length,4);
+ } finally {rmSync(home,{recursive:true,force:true});}
+});
+
+test("context freezes before a CLI handshake can change the active branch", async () => {
+ const {execFileSync}=await import("node:child_process");
+ const home=mkdtempSync(join(tmpdir(),"producer-context-boundary-"));
+ try {
+  const root=join(home,"repo");mkdirSync(root);
+  execFileSync("git",["-C",root,"init","-q","--initial-branch=original"]);
+  execFileSync("git",["-C",root,"remote","add","origin","https://github.com/o/r.git"]);
+  const cli=join(home,"fixture-cli");
+  writeFileSync(cli,`#!/usr/bin/env node\nconst {execFileSync}=require('node:child_process');\nif(process.argv[2]==='journal-scope') execFileSync('git',['-C',${JSON.stringify(root)},'symbolic-ref','HEAD','refs/heads/changed-by-handshake']);\nconsole.log(JSON.stringify({schema_version:1,owner_confirmed:true,scope_id:'${"a".repeat(64)}',capabilities:['activity_envelope_v3']}));\n`);chmodSync(cli,0o700);
+  await retainToolMarker(cli,{...input,directory:root},home);
+  const records=readdirSync(join(home,".wakaclock/native-producer-spool","a".repeat(64))).map(file=>JSON.parse(readFileSync(join(home,".wakaclock/native-producer-spool","a".repeat(64),file),"utf8")));
+  const context=records.find(record=>record.kind==='session_context');assert.equal(context.metadata.branch,"original");
+  assert.equal(context.metadata.repository,"o/r");
  } finally {rmSync(home,{recursive:true,force:true});}
 });

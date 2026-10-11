@@ -189,6 +189,32 @@ async fn weekly_registry_revocation_cleanup_and_restore() {
     }
     let new_version:i64=pg.query_one("SELECT consent_version FROM organization_analytics_consents WHERE organization_id=$1 AND user_id=$2",&[&org,&owner]).await.unwrap().get(0);
     assert_eq!(new_version, old_version + 1);
+    // Manual confirmations require latest authorization after an old restore.
+    let binding_repo = Uuid::now_v7();
+    let binding_project = Uuid::now_v7();
+    let request = Uuid::now_v7();
+    pg.execute("INSERT INTO team_repository_scopes(organization_id,repository_id,github_repository_id,github_installation_id,project_id,enabled) VALUES($1,$2,901033,901031,$3,TRUE)",&[&org,&binding_repo,&binding_project]).await.unwrap();
+    pg.execute("INSERT INTO team_session_repository_bindings(organization_id,user_id,session_id,repository_id,revision,request_id) VALUES($1,$2,repeat('b',64),$3,1,$4)",&[&org,&owner,&binding_repo,&request]).await.unwrap();
+    pg.execute("INSERT INTO team_session_repository_binding_history(organization_id,user_id,session_id,repository_id,revision,request_id,effective_at) SELECT organization_id,user_id,session_id,repository_id,revision,request_id,effective_at FROM team_session_repository_bindings WHERE organization_id=$1 AND user_id=$2",&[&org,&owner]).await.unwrap();
+    // More than 100 request tombstones must be retained before parent cascade.
+    pg.execute("INSERT INTO team_session_repository_binding_history(organization_id,user_id,session_id,repository_id,revision,request_id,effective_at) SELECT b.organization_id,b.user_id,b.session_id,b.repository_id,n,gen_random_uuid(),b.effective_at FROM team_session_repository_bindings b CROSS JOIN generate_series(2,205) n WHERE b.organization_id=$1 AND b.user_id=$2",&[&org,&owner]).await.unwrap();
+    let restore_ledger = Registry {
+        schema_version: 1,
+        checked_at: Utc::now(),
+        organizations: [(org, repo.registry_entry(org).await.unwrap())]
+            .into_iter()
+            .collect(),
+        dispositions: vec![],
+    };
+    repo.reconcile_restore(&restore_ledger).await.unwrap();
+    assert!(pg.query_one("SELECT blocked FROM team_session_repository_bindings WHERE organization_id=$1 AND user_id=$2",&[&org,&owner]).await.unwrap().get::<_,bool>(0));
+    pg.execute("UPDATE team_cleanup_jobs SET completed_at=NULL,phase=7,retry_at=now() WHERE organization_id=$1",&[&org]).await.unwrap();
+    for _ in 0..100 {
+        repo.cleanup_tick(Utc::now()).await.unwrap();
+    }
+    assert_eq!(pg.query_one("SELECT count(*) FROM team_session_repository_bindings WHERE organization_id=$1 AND user_id=$2",&[&org,&owner]).await.unwrap().get::<_,i64>(0),0);
+    assert!(pg.query_opt("SELECT 1 FROM team_webhook_dispositions WHERE provider='session_repository_binding' AND delivery_id=$1",&[&format!("{owner}:{request}")]).await.unwrap().is_some());
+    assert_eq!(pg.query_one("SELECT count(*) FROM team_webhook_dispositions WHERE provider='session_repository_binding' AND delivery_id LIKE $1",&[&format!("{owner}:%")]).await.unwrap().get::<_,i64>(0),205);
     // More than one allocation batch must drain before the checkpoint advances.
     let repository = Uuid::now_v7();
     let project = Uuid::now_v7();

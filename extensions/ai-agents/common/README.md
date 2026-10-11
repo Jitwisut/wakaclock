@@ -47,3 +47,25 @@ working directory, session ID, call ID and tool name. The helper produces a
 deterministic, path-safe ID so a failed tool can clear the same pending snapshot
 created before execution. It is deliberately metadata-only and has no effect
 when executed directly.
+
+## Frozen repository context
+
+`context-producer.py` and `activity-spool.ts` freeze context at the actual producer
+boundary before any CLI identity handshake. They persist a metadata-only
+`session_context` side observation through the existing spool before acknowledging
+the primary observation. Native session identity and an explicit single workspace
+root are required to observe Git; ambiguous roots, historical timestamps and
+missing identity remain unresolved. Replay never reads current Git.
+
+Retained context contains repository coordinates, branch/commit when observed,
+native session identity, original observation time, scope and safe reason codes.
+It excludes workspace paths, remote credentials, source/diff and message bodies.
+An optional private `ATOAXIS_TEAM_CONTEXT_CONFIG` freezes a verified
+account/origin/organization/collector/project/repository binding at the same
+boundary. Adding configuration later does not establish historical binding.
+The config must exist before the event and must match the verified queue scope.
+
+The existing collector drains retained context during idle and preserves IDs and
+hashes on retry. CLI durable inbox acceptance, server durable ingress and
+canonical readback are separate observations. Empty queues do not certify
+provider capture; provider/OS live certification remains a separate gate.

@@ -140,11 +140,146 @@ impl ProducerSpoolHealth {
                     "producer_cursor_symlink",
                     "producer_spool_unreadable",
                     "producer_scope_proof_unavailable",
+                    "producer_cursor_write_failed",
+                    "producer_owner_unconfirmed",
                 ]
                 .contains(&code)
             })
     }
 }
+/// Metadata-only stage contract; absent fields remain unconfirmed for old clients.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineStageHealth {
+    pub adapter_id: String,
+    pub execution_surface: String,
+    pub stage: String,
+    pub status: String,
+    pub pending: Option<u32>,
+    pub failure_count: u32,
+    pub last_observed_at: Option<DateTime<Utc>>,
+    pub oldest_pending_at: Option<DateTime<Utc>>,
+    pub error_code: Option<String>,
+    pub version: String,
+}
+impl PipelineStageHealth {
+    pub fn assessment(&self, now: DateTime<Utc>) -> &'static str {
+        let age = self
+            .oldest_pending_at
+            .map_or(0, |at| now.signed_duration_since(at).num_seconds());
+        if self.failure_count > 0
+            || matches!(
+                self.status.as_str(),
+                "auth_required" | "dead_letter" | "capture_failure"
+            )
+            || self.pending.is_some_and(|p| p > 0) && age > 1800
+        {
+            "critical"
+        } else if self.pending.is_some_and(|p| p > 0) && age > 300 {
+            "warning"
+        } else if matches!(self.status.as_str(), "unavailable" | "paused_by_user") {
+            "unavailable"
+        } else if self.status == "stale"
+            || self
+                .last_observed_at
+                .is_some_and(|at| now.signed_duration_since(at).num_seconds() > 300)
+        {
+            "stale"
+        } else if self
+            .last_observed_at
+            .is_none_or(|at| at > now + chrono::Duration::minutes(5))
+            || self.pending.is_none()
+            || matches!(self.status.as_str(), "unresolved" | "unconfirmed")
+        {
+            "unknown"
+        } else if self.pending.is_some_and(|p| p > 0) || self.status == "pending" {
+            "pending"
+        } else if self.status == "observed" {
+            "complete"
+        } else {
+            "unknown"
+        }
+    }
+    pub fn validate(&self, now: DateTime<Utc>) -> bool {
+        (self.adapter_id == "all"
+            || crate::ai::AdapterRegistry::builtin()
+                .get(&self.adapter_id)
+                .is_some())
+            && ["cli", "ide", "desktop", "inline", "mcp", "unknown"]
+                .contains(&self.execution_surface.as_str())
+            && [
+                "producer",
+                "spool",
+                "parser",
+                "inbox",
+                "journal",
+                "cli_handoff",
+                "context",
+                "context_delivery",
+                "tool_boundaries",
+                "server_delivery",
+            ]
+            .contains(&self.stage.as_str())
+            && [
+                "observed",
+                "pending",
+                "unresolved",
+                "unconfirmed",
+                "unavailable",
+                "paused_by_user",
+                "stale",
+                "auth_required",
+                "dead_letter",
+                "capture_failure",
+            ]
+            .contains(&self.status.as_str())
+            && self.pending.is_none_or(|n| n <= 10_000_000)
+            && self.failure_count <= 10_000_000
+            && [self.last_observed_at, self.oldest_pending_at]
+                .iter()
+                .all(|at| at.is_none_or(|at| at <= now + chrono::Duration::minutes(5)))
+            && self.error_code.as_deref().is_none_or(|code| {
+                matches!(
+                    code,
+                    "context_binding_unresolved"
+                        | "context_binding_changed"
+                        | "repository_mapping_unresolved"
+                        | "native_session_unavailable"
+                        | "repository_context_ambiguous"
+                        | "workspace_evidence_unavailable"
+                        | "historical_context_unavailable"
+                        | "repository_evidence_unavailable"
+                        | "context_scope_unconfirmed"
+                        | "context_configuration_missing"
+                        | "context_identity_unconfirmed"
+                        | "context_inbox_unavailable"
+                        | "context_queue_unavailable"
+                        | "context_queue_write_failure"
+                        | "context_auth_required"
+                        | "context_rate_limited"
+                        | "context_backend_unavailable"
+                        | "context_validation"
+                        | "context_receipt_write_failure"
+                        | "context_retry_write_failure"
+                        | "producer_measurement_unavailable"
+                        | "broker_handoff_failed"
+                        | "producer_spool_symlink"
+                        | "producer_cursor_symlink"
+                        | "producer_spool_unreadable"
+                        | "producer_scope_proof_unavailable"
+                        | "producer_cursor_write_failed"
+                        | "producer_owner_unconfirmed"
+                )
+            })
+            && !self.version.is_empty()
+            && self.version.len() <= 64
+            && self
+                .version
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureHealthSnapshot {
@@ -159,6 +294,8 @@ pub struct CaptureHealthSnapshot {
     pub editor_journal: Option<crate::editor_health::EditorJournalHealth>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub producer_spool: Option<ProducerSpoolHealth>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<Vec<PipelineStageHealth>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2192,6 +2329,44 @@ impl Queue {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pipeline_health_rejects_contents_and_separates_freshness_from_backlog() {
+        let now = chrono::Utc::now();
+        let mut stage = super::PipelineStageHealth {
+            adapter_id: "codex".into(),
+            execution_surface: "unknown".into(),
+            stage: "context".into(),
+            status: "observed".into(),
+            pending: Some(0),
+            failure_count: 0,
+            last_observed_at: Some(now),
+            oldest_pending_at: None,
+            error_code: None,
+            version: "0.2.0-fixture".into(),
+        };
+        assert!(stage.validate(now));
+        assert_eq!(stage.assessment(now), "complete");
+        let mut json = serde_json::to_value(&stage).unwrap();
+        json["prompt"] = serde_json::json!("SENSITIVE_PROMPT");
+        assert!(serde_json::from_value::<super::PipelineStageHealth>(json).is_err());
+        stage.error_code = Some("SENSITIVE_CREDENTIAL".into());
+        assert!(!stage.validate(now));
+        stage.error_code = None;
+        stage.pending = Some(1);
+        stage.oldest_pending_at = Some(now - chrono::Duration::minutes(6));
+        assert_eq!(stage.assessment(now), "warning");
+        stage.oldest_pending_at = Some(now - chrono::Duration::minutes(31));
+        assert_eq!(stage.assessment(now), "critical");
+        stage.pending = Some(0);
+        stage.last_observed_at = Some(now - chrono::Duration::minutes(6));
+        assert_eq!(stage.assessment(now), "stale");
+        stage.status = "auth_required".into();
+        assert_eq!(stage.assessment(now), "critical");
+        stage.status = "unconfirmed".into();
+        stage.last_observed_at = Some(now);
+        assert_eq!(stage.assessment(now), "unknown");
+    }
+
     use super::*;
     use crate::ai::{
         CollectorCapabilities, CollectorRegistration, CollectorTransport, EditorSurface,

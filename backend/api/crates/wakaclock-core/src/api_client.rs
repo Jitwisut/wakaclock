@@ -1546,6 +1546,182 @@ impl ApiClient {
         }
     }
 
+    /// Bounded metadata delivery on the existing authenticated client. No task
+    /// inference; HTTP ingress acknowledgement is distinct from canonical readback.
+    pub async fn drain_session_context(
+        &self,
+        queue: &mut crate::session_context::ContextQueue,
+        origin: &str,
+        owner: uuid::Uuid,
+        organization: uuid::Uuid,
+        began: Instant,
+        limit: usize,
+    ) -> Value {
+        if crate::runtime::paused("delivery") {
+            let mut health = queue
+                .status(origin, owner, organization, chrono::Utc::now().timestamp())
+                .unwrap_or_else(|_| serde_json::json!({"pending":null}));
+            health["status"] = Value::from("paused_by_user");
+            health["verification"] = Value::from("canonical_readback_unconfirmed");
+            return health;
+        }
+        self.drain_session_context_unpaused(queue, origin, owner, organization, began, limit)
+            .await
+    }
+    async fn drain_session_context_unpaused(
+        &self,
+        queue: &mut crate::session_context::ContextQueue,
+        origin: &str,
+        owner: uuid::Uuid,
+        organization: uuid::Uuid,
+        began: Instant,
+        limit: usize,
+    ) -> Value {
+        if origin != self.config.server_url.trim_end_matches('/') || owner != self.config.user_id {
+            return serde_json::json!({"status":"unavailable","error_code":"context_identity_unconfirmed","pending":null});
+        }
+        let capability = self
+            .client
+            .get(format!(
+                "{}/api/v2/me/session-context/capability",
+                self.config.server_url
+            ))
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await;
+        let mut capability_auth = false;
+        let supported = match capability {
+            Ok(r) if r.status().is_success() => r
+                .json::<Value>()
+                .await
+                .ok()
+                .is_some_and(|v| v["data"]["version"] == 1 && v["data"]["enabled"] == true),
+            Ok(r) => {
+                capability_auth = matches!(r.status().as_u16(), 401 | 403);
+                false
+            }
+            Err(_) => false,
+        };
+        let mut state = if capability_auth {
+            "auth_required"
+        } else {
+            "unconfirmed"
+        };
+        let mut code = capability_auth.then_some("context_auth_required");
+        if supported {
+            state = "observed";
+            for _ in 0..limit.min(100) {
+                if began.elapsed() >= Duration::from_secs(10) {
+                    break;
+                }
+                let now = chrono::Utc::now().timestamp();
+                let pending = match queue.claim(origin, owner, organization, now) {
+                    Ok(Some(pending)) => pending,
+                    Ok(None) => break,
+                    Err(_) => {
+                        state = "unavailable";
+                        code = Some("context_queue_unavailable");
+                        break;
+                    }
+                };
+                let result = self
+                    .client
+                    .post(format!(
+                        "{}/api/v2/organizations/{organization}/me/github/session-context",
+                        self.config.server_url
+                    ))
+                    .timeout(Duration::from_secs(5))
+                    .json(&pending.event)
+                    .send()
+                    .await;
+                match result {
+                    Ok(response) if response.status() == reqwest::StatusCode::ACCEPTED => {
+                        if !matches!(queue.acknowledge(&pending), Ok(true)) {
+                            state = "unavailable";
+                            code = Some("context_receipt_write_failure");
+                            break;
+                        }
+                    }
+                    response => {
+                        let backoff =
+                            (15i64.saturating_mul(1i64 << pending.attempts.min(8))).min(3600);
+                        let (wait, dead, error, status) = match response {
+                            Ok(r) => {
+                                let wait = r
+                                    .headers()
+                                    .get("retry-after")
+                                    .and_then(|h| h.to_str().ok())
+                                    .and_then(|h| {
+                                        h.parse::<i64>().ok().or_else(|| {
+                                            chrono::DateTime::parse_from_rfc2822(h)
+                                                .ok()
+                                                .map(|t| (t.timestamp() - now).max(0))
+                                        })
+                                    })
+                                    .unwrap_or(backoff)
+                                    .max(backoff);
+                                let status = r.status().as_u16();
+                                (
+                                    wait,
+                                    matches!(status, 400 | 422).then_some("validation"),
+                                    match status {
+                                        401 | 403 => "context_auth_required",
+                                        429 => "context_rate_limited",
+                                        400 | 422 => "context_validation",
+                                        _ => "context_backend_unavailable",
+                                    },
+                                    Some(status),
+                                )
+                            }
+                            Err(_) => (backoff, None, "context_backend_unavailable", None),
+                        };
+                        if queue
+                            .retry_with_error(
+                                &pending,
+                                now.saturating_add(wait),
+                                dead,
+                                error,
+                                status,
+                                now,
+                            )
+                            .is_err()
+                        {
+                            state = "unavailable";
+                            code = Some("context_retry_write_failure");
+                            break;
+                        }
+                        state = if error == "context_auth_required" {
+                            "auth_required"
+                        } else {
+                            "unavailable"
+                        };
+                        code = Some(error);
+                        break;
+                    }
+                }
+            }
+        }
+        let mut health = queue
+            .status(origin, owner, organization, chrono::Utc::now().timestamp())
+            .unwrap_or_else(|_| serde_json::json!({"status":"unavailable"}));
+        if let Some(error) = health["backlog_error"]["error_code"].as_str() {
+            if error == "context_auth_required" {
+                state = "auth_required";
+                code = Some("context_auth_required");
+            }
+        }
+        if health["dead_letter"].as_u64().is_some_and(|n| n > 0) {
+            state = "dead_letter";
+        }
+        if state == "observed" && health["pending"].as_u64().is_some_and(|n| n > 0) {
+            state = "pending";
+        }
+        health["status"] = Value::String(state.into());
+        health["error_code"] = code.map(Value::from).unwrap_or(Value::Null);
+        health["verification"] = Value::from("canonical_readback_unconfirmed");
+        health
+    }
+
     pub async fn publish_delivery_status(&self) -> AppResult<()> {
         let queue = Queue::open()?;
         if let Some(mut snapshot) =
@@ -2134,13 +2310,27 @@ fn attach_capture_health(
                         let filtered = serde_json::json!({"schema_version":1,"captured_at":value["checked_at"],"enabled":value["enabled"],"status":value["status"],"last_scan_success_at":value["last_scan_success_at"],"parser_errors":value["parser_errors"],"pending":value["pending"]});
                         snapshot.capture = serde_json::from_value(filtered).ok();
                         if capabilities
+                            .pointer("/data/pipeline_health_supported")
+                            .and_then(Value::as_bool)
+                            == Some(true)
+                        {
+                            if let Some(capture) = snapshot.capture.as_mut() {
+                                capture.pipeline =
+                                    serde_json::from_value(value["pipeline"].clone()).ok();
+                            }
+                        }
+                        if capabilities
                             .pointer("/data/producer_spool_status_supported")
                             .and_then(Value::as_bool)
                             == Some(true)
                         {
                             if let Some(capture) = snapshot.capture.as_mut() {
-                                capture.producer_spool =
-                                    serde_json::from_value(value["producer_spool"].clone()).ok();
+                                // Local worker diagnostics are richer than the v1
+                                // receiver contract. Forward only its allowlist;
+                                // per-adapter stages belong to the negotiated pipeline.
+                                let spool = &value["producer_spool"];
+                                let filtered = serde_json::json!({"status":spool["status"],"pending":spool["pending"],"accepted":spool["accepted"].as_u64().unwrap_or(0),"failure_count":spool["failure_count"].as_u64().unwrap_or(0),"paused_excluded":spool["paused_excluded"].as_u64().unwrap_or(0),"last_scan_success_at":spool["last_scan_success_at"],"error_code":spool["error_code"]});
+                                capture.producer_spool = serde_json::from_value(filtered).ok();
                             }
                         }
                     }
@@ -2181,6 +2371,7 @@ fn attach_capture_health(
                 pending: 0,
                 editor_journal: None,
                 producer_spool: None,
+                pipeline: None,
             });
         capture.editor_journal = Some(health);
     }
@@ -2229,6 +2420,139 @@ mod tests {
     use super::*;
     use crate::heartbeat::EntityType;
     use uuid::Uuid;
+
+    #[tokio::test]
+    #[ignore = "requires isolated loopback sockets"]
+    async fn context_delivery_retries_lost_response_and_respects_ingress_and_retry_after() {
+        use crate::session_context::{ContextQueue, GitMetadata, SessionContext};
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let worker = tokio::spawn(async move {
+            let mut received = Vec::new();
+            // A lost response, then rate limiting, finally durable ingress.
+            for status in [200, 0, 200, 429, 200, 202] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let n = stream.read(&mut buffer).await.unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]);
+                        let length = headers
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if bytes.len() >= end + 4 + length {
+                            if length > 0 {
+                                received.push(
+                                    serde_json::from_slice::<Value>(
+                                        &bytes[end + 4..end + 4 + length],
+                                    )
+                                    .unwrap(),
+                                );
+                            }
+                            break;
+                        }
+                    }
+                    assert!(bytes.len() < 16384);
+                }
+                if status == 0 {
+                    drop(stream);
+                    continue;
+                }
+                let body = if status == 200 {
+                    r#"{"data":{"version":1,"enabled":true}}"#
+                } else {
+                    "{}"
+                };
+                let retry = if status == 429 {
+                    "Retry-After: 3600\r\n"
+                } else {
+                    ""
+                };
+                stream.write_all(format!("HTTP/1.1 {status} Test\r\n{retry}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+            received
+        });
+        let owner = Uuid::new_v4();
+        let org = Uuid::new_v4();
+        let api = ApiClient::new(Config {
+            user_id: owner,
+            server_url: origin.clone(),
+            api_key: Some("fixture-only".into()),
+        })
+        .unwrap();
+        let path = std::env::temp_dir().join(format!("context-http-{}.sqlite", Uuid::new_v4()));
+        let mut queue = ContextQueue::open(&path).unwrap();
+        let event = SessionContext::observed(
+            owner,
+            "codex",
+            Uuid::new_v4(),
+            "fixture",
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            chrono::Utc::now(),
+            GitMetadata {
+                repository: "o/r".into(),
+                branch: Some("original".into()),
+                commit_sha: None,
+            },
+        );
+        queue.enqueue(&origin, owner, org, &event).unwrap();
+        let lost = api
+            .drain_session_context_unpaused(&mut queue, &origin, owner, org, Instant::now(), 1)
+            .await;
+        assert_eq!(lost["pending"], 1);
+        assert_eq!(lost["error_code"], "context_backend_unavailable");
+        let leased = queue
+            .claim(&origin, owner, org, chrono::Utc::now().timestamp() + 4000)
+            .unwrap()
+            .unwrap();
+        queue
+            .retry(&leased, chrono::Utc::now().timestamp(), None)
+            .unwrap();
+        let limited = api
+            .drain_session_context_unpaused(&mut queue, &origin, owner, org, Instant::now(), 1)
+            .await;
+        assert_eq!(limited["backlog_error"]["http_status"], 429);
+        assert!(queue
+            .claim(&origin, owner, org, chrono::Utc::now().timestamp() + 3500)
+            .unwrap()
+            .is_none());
+        let leased = queue
+            .claim(&origin, owner, org, chrono::Utc::now().timestamp() + 4000)
+            .unwrap()
+            .unwrap();
+        queue
+            .retry(&leased, chrono::Utc::now().timestamp(), None)
+            .unwrap();
+        drop(queue);
+        let mut queue = ContextQueue::open(&path).unwrap();
+        let accepted = api
+            .drain_session_context_unpaused(&mut queue, &origin, owner, org, Instant::now(), 1)
+            .await;
+        assert_eq!(accepted["pending"], 0);
+        assert_eq!(accepted["status"], "observed");
+        assert_eq!(accepted["verification"], "canonical_readback_unconfirmed");
+        let requests = worker.await.unwrap();
+        assert_eq!(requests.len(), 3);
+        for request in requests {
+            assert_eq!(request["event_id"], event.event_id);
+            assert_eq!(request["branch"], "original");
+        }
+        drop(queue);
+        std::fs::remove_file(path).unwrap();
+    }
 
     fn heartbeat(entity: &str, time: f64) -> Heartbeat {
         let mut hb = Heartbeat::new(

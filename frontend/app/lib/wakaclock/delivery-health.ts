@@ -1,3 +1,4 @@
+import { assessPipeline, healthRank } from '@/lib/wakaclock/pipeline-health';
 import type { DeliveryStatusResponse } from '@/lib/wakaclock/measurement-types';
 
 export interface DeliveryHealth {
@@ -63,6 +64,17 @@ export function deliveryHealth(
     state = 'pending';
     message =
       'Heartbeats are pending. A new successful send does not confirm the backlog is complete.';
+  }
+  // Upstream critical failures stay visible even while server delivery is pending.
+  if (
+    devices.some(
+      (device) =>
+        device.capture &&
+        (device.capture.parser_errors > 0 || device.capture.status === 'parser_failure')
+    )
+  ) {
+    state = 'critical';
+    message = 'Capture failed to parse activity. Retained events still need processing.';
   }
   if (state === 'complete') {
     const capture = devices.map((device) => device.capture);
@@ -154,6 +166,15 @@ export function deliveryHealth(
       state = 'pending';
       message =
         'Producer metadata awaits durable handoff. Keep retained data and check the local collector.';
+    }
+  }
+  for (const device of devices) {
+    const pipeline = assessPipeline(device.capture?.pipeline, now);
+    if (healthRank[pipeline.state] > healthRank[state]) {
+      state = pipeline.state;
+      message = pipeline.stage
+        ? `${pipeline.stage.adapter_id}/${pipeline.stage.execution_surface} ${pipeline.stage.stage}: ${pipeline.stage.status}. Data completeness remains unconfirmed.`
+        : 'Context and pipeline details are unavailable. Update/check the local client.';
     }
   }
   return { incomplete: state !== 'complete', state, pending, deadLetter, message };

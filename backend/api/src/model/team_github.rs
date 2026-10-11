@@ -81,3 +81,18 @@ pub struct SessionPageQuery {
 pub struct RelationshipQuery {
     pub after: Option<String>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRepositoryBindingInput {
+    pub session_id: String,
+    pub repository_id: Option<Uuid>,
+    pub expected_revision: i64,
+    pub request_id: Uuid,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRepositoryBindingQuery {
+    pub session_id: String,
+    pub before_revision: Option<i64>,
+}

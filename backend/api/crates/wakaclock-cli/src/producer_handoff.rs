@@ -27,7 +27,7 @@ pub(crate) struct Observation {
     pub metadata: Value,
 }
 impl Observation {
-    fn validate(&self) -> Result<(), &'static str> {
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
         if self.schema_version != 2
             || uuid::Uuid::parse_str(&self.observation_id).is_err()
             || self.scope_id.len() != 64
@@ -79,6 +79,9 @@ async fn accept_inner(
     }
     if !wakaclock_core::runtime::capture_allowed_at(o.observed_at.timestamp()) {
         return Err(("paused_by_user", true));
+    }
+    if o.kind == "session_context" {
+        return crate::team_context_capture::accept(o);
     }
     if o.kind == "tool_boundary" {
         return crate::producer_tool_boundary::accept(o);

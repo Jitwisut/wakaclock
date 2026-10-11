@@ -449,9 +449,10 @@ async fn run_inner(
     }
     let mut interval = tokio::time::interval(Duration::from_secs(15));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // Alternate reserved producer/parser slots. Both classes get work even if
-    // one has a permanent backlog; the shared deadline includes handoff work.
-    let mut producer_slots = 2usize;
+    // Reserve at least one spool and parser batch on every tick, including a
+    // fresh --once process. Context/boundary slots must never consume all spool
+    // capacity. Alternating 3/4 leaves 2/1 parser batches under the same total 5.
+    let mut producer_slots = 3usize;
     loop {
         interval.tick().await;
         if !dry_run && wakaclock_core::runtime::paused("capture") {
@@ -508,7 +509,7 @@ async fn run_inner(
         let mut scanned = 0;
         let mut parsed = 0;
         let producer_batch_slots = producer_slots;
-        producer_slots = 5 - producer_slots;
+        producer_slots = 7 - producer_slots;
         let mut parser_batch_slots = 5 - producer_batch_slots;
         let record_limit = if dry_run || date.is_some() { 2000 } else { 100 };
         let mut tool_boundaries = if dry_run {
@@ -516,6 +517,12 @@ async fn run_inner(
         } else {
             crate::producer_tool_boundary::health(&api)
                 .unwrap_or_else(|_| json!({"status":"unavailable"}))
+        };
+        let context_slot = !dry_run && date.is_none() && began.elapsed() < Duration::from_secs(10);
+        let context = if context_slot {
+            crate::team_context_capture::tick(&config, &api, began).await
+        } else {
+            json!({"status":"unconfirmed"})
         };
         let boundary_slot = !dry_run && tool_boundaries["ready"].as_u64().is_some_and(|n| n > 0);
         if boundary_slot {
@@ -533,7 +540,7 @@ async fn run_inner(
                 &dir,
                 &config,
                 &api,
-                producer_batch_slots - usize::from(boundary_slot),
+                producer_batch_slots - usize::from(boundary_slot) - usize::from(context_slot),
                 began,
             )
             .await
@@ -758,6 +765,16 @@ async fn run_inner(
                                 },
                             )?;
                         }
+                        if blocked.is_some() {
+                            if let Some(store) = &store {
+                                store.parser_failed(
+                                    &scope,
+                                    &source,
+                                    &input.adapter,
+                                    &input.surface,
+                                )?;
+                            }
+                        }
                         if blocked.is_none() && (dry_run || date.is_some()) && batch.records == 2000
                         {
                             continue;
@@ -766,6 +783,9 @@ async fn run_inner(
                     Err(code) => {
                         errors += 1;
                         parser_failure_codes.insert(code);
+                        if let Some(store) = &store {
+                            store.parser_failed(&scope, &source, &input.adapter, &input.surface)?;
+                        }
                     }
                 }
                 break;
@@ -796,7 +816,78 @@ async fn run_inner(
             .transpose()?
             .unwrap_or(0)
             .saturating_add(unread_sources);
-        let state = json!({"schema_version":2,"checked_at":now,"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),"binary_sha256":binary_hash,"scope":scope,"enabled":true,"status":if errors>0{"parser_failure"}else if scanned==0{"unavailable"}else{"fresh"},"last_scan_success_at":if errors==0&&scanned>0{json!(now)}else{status()["last_scan_success_at"].clone()},"parser_errors":errors,"parser_failure_codes":parser_failure_codes,"pending":pending,"unread_sources":unread_sources,"scanned_sources":scanned,"parsed_records":parsed,"queued":queued,"receiver_capable":capability,"producer_spool":producer_spool,"tool_boundaries":tool_boundaries,"broker_handoff":broker_handoff,"last_event_at":last_event,"tick_elapsed_ms":began.elapsed().as_millis(),"incomplete":errors>0||pending>0||scanned==0||tool_boundaries["status"]=="unavailable"||["pending","unavailable","clock_unconfirmed"].iter().any(|field|tool_boundaries[*field].as_u64().is_some_and(|n|n>0))||producer_spool["pending"].as_u64().is_some_and(|n|n>0)||producer_spool["status"]=="unavailable"||producer_spool["status"]=="capture_failure"||producer_spool["pending"].is_null()||broker_handoff["status"]=="unavailable"||broker_handoff["pending"].as_u64().is_some_and(|n|n>0)||broker_handoff["retained_dead_letters"].as_u64().is_some_and(|n|n>0)||broker_handoff["owner_unconfirmed"].as_u64().is_some_and(|n|n>0)||broker_handoff["dead_lettered"].as_u64().is_some_and(|n|n>0),"dry_run":dry_run,"candidates":if dry_run{Some(candidates)}else{None}});
+        let build_version = format!(
+            "{}-{}",
+            env!("CARGO_PKG_VERSION"),
+            env!("WAKACLOCK_GIT_SHA")
+        );
+        let stage = |name: &str, value: &Value, status: &str| json!({"adapter_id":"all","execution_surface":"unknown","stage":name,"status":status,"pending":value["pending"],"failure_count":value["failure_count"].as_u64().unwrap_or(0),"last_observed_at":value["last_observed_at"],"oldest_pending_at":value["oldest_pending_at"],"error_code":value["error_code"],"version":build_version});
+        let mut pipeline = vec![
+            stage(
+                "context",
+                &context,
+                context["status"].as_str().unwrap_or("unconfirmed"),
+            ),
+            stage(
+                "context_delivery",
+                &json!({"last_observed_at":context["last_observed_at"],"pending":context["delivery"]["pending"],"oldest_pending_at":context["delivery"]["oldest_pending_at"],"error_code":context["delivery"]["error_code"]}),
+                context["delivery"]["status"]
+                    .as_str()
+                    .unwrap_or("unconfirmed"),
+            ),
+            stage(
+                "tool_boundaries",
+                &tool_boundaries,
+                if tool_boundaries["unavailable"].as_u64().unwrap_or(0) > 0 {
+                    "capture_failure"
+                } else if tool_boundaries["pending"].as_u64().unwrap_or(0) > 0 {
+                    "pending"
+                } else {
+                    "unconfirmed"
+                },
+            ),
+        ];
+        pipeline.push(stage("spool", &json!({"pending":producer_spool["pending"],"failure_count":producer_spool["failure_count"],"last_observed_at":producer_spool["last_scan_success_at"],"error_code":producer_spool["error_code"]}), producer_spool["status"].as_str().unwrap_or("unconfirmed")));
+        pipeline.push(stage("parser", &json!({"pending":pending,"failure_count":errors,"last_observed_at":if errors==0&&scanned>0{json!(now)}else{Value::Null}}), if errors>0{"capture_failure"}else if scanned>0{"observed"}else{"unconfirmed"}));
+        pipeline.push(stage(
+            "inbox",
+            &json!({"pending":broker_handoff["pending"],"last_observed_at":now}),
+            if broker_handoff["status"] == "unavailable" {
+                "unavailable"
+            } else if broker_handoff["retained_dead_letters"]
+                .as_u64()
+                .is_some_and(|n| n > 0)
+                || broker_handoff["dead_lettered"]
+                    .as_u64()
+                    .is_some_and(|n| n > 0)
+            {
+                "dead_letter"
+            } else if broker_handoff["owner_unconfirmed"]
+                .as_u64()
+                .is_some_and(|n| n > 0)
+            {
+                "unresolved"
+            } else if broker_handoff["pending"].as_u64().is_some_and(|n| n > 0) {
+                "pending"
+            } else {
+                "observed"
+            },
+        ));
+        if let Some(store) = &store {
+            pipeline.extend(
+                store
+                    .pipeline_health(&scope, &build_version)?
+                    .iter()
+                    .map(|stage| serde_json::to_value(stage).expect("stage metadata serializes")),
+            );
+        }
+        if let Some(stages) = producer_spool["stages"].as_array() {
+            pipeline.extend(stages.iter().cloned());
+        }
+        if let Some(stages) = context["stages"].as_array() {
+            pipeline.extend(stages.iter().cloned());
+        }
+        let state = json!({"schema_version":2,"checked_at":now,"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),"binary_sha256":binary_hash,"scope":scope,"enabled":true,"status":if errors>0{"parser_failure"}else if scanned==0{"unavailable"}else{"fresh"},"last_scan_success_at":if errors==0&&scanned>0{json!(now)}else{status()["last_scan_success_at"].clone()},"parser_errors":errors,"parser_failure_codes":parser_failure_codes,"pending":pending,"unread_sources":unread_sources,"scanned_sources":scanned,"parsed_records":parsed,"queued":queued,"receiver_capable":capability,"producer_spool":producer_spool,"tool_boundaries":tool_boundaries,"context":context,"pipeline":pipeline,"broker_handoff":broker_handoff,"last_event_at":last_event,"tick_elapsed_ms":began.elapsed().as_millis(),"incomplete":context["status"]!="observed"||context["delivery"]["status"]!="observed"||context["delivery"]["pending"].as_u64().is_some_and(|n|n>0)||errors>0||pending>0||scanned==0||tool_boundaries["status"]=="unavailable"||["pending","unavailable","clock_unconfirmed"].iter().any(|field|tool_boundaries[*field].as_u64().is_some_and(|n|n>0))||producer_spool["pending"].as_u64().is_some_and(|n|n>0)||producer_spool["status"]=="unavailable"||producer_spool["status"]=="capture_failure"||producer_spool["pending"].is_null()||broker_handoff["status"]=="unavailable"||broker_handoff["pending"].as_u64().is_some_and(|n|n>0)||broker_handoff["retained_dead_letters"].as_u64().is_some_and(|n|n>0)||broker_handoff["owner_unconfirmed"].as_u64().is_some_and(|n|n>0)||broker_handoff["dead_lettered"].as_u64().is_some_and(|n|n>0),"dry_run":dry_run,"candidates":if dry_run{Some(candidates)}else{None}});
         if !dry_run {
             save(&dir.join("capture-state.json"), &state)?;
         }

@@ -313,6 +313,10 @@ impl PostgresClient {
                 "Team cross-week publication membership",
                 include_str!("../../migrations/postgres/034_team_publication_membership.sql"),
             ),
+            (
+                "Team session repository confirmations",
+                include_str!("../../migrations/postgres/035_team_session_repository_bindings.sql"),
+            ),
         ] {
             client
                 .batch_execute(sql)

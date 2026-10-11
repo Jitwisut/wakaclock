@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import uuid
+sys.dont_write_bytecode = True
 from datetime import datetime, timezone
 
 # Installed helpers are immutable, installer-owned artifacts. Runtime bytecode
@@ -249,6 +250,9 @@ def retain(phase, input, surface, home):
     file = directory / (record["observation_id"] + ".json")
     # Atomic visibility: the worker never sees the file until its bytes have
     # reached disk. A failed rename/fsync is capture failure, not acceptance.
+    context_spec = importlib.util.spec_from_file_location('context_producer', Path(__file__).with_name('context-producer.py'))
+    context = importlib.util.module_from_spec(context_spec); context_spec.loader.exec_module(context)
+    context.retain(record, input, home, common)
     stage = directory / (record["observation_id"] + ".boundary-stage")
     common.durable_file(stage, json.dumps(record, separators=(",", ":"), ensure_ascii=False).encode())
     os.replace(stage, file)

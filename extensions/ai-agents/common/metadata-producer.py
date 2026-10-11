@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import uuid
+sys.dont_write_bytecode = True
 from datetime import datetime, timezone
 
 spec = importlib.util.spec_from_file_location("activity_producer", Path(__file__).with_name("activity-producer.py"))
@@ -35,6 +36,9 @@ def retain(kind, metadata, cli, surface, home, scope_hint=None):
         state = json.loads(runtime_path.read_text())
         if state.get("schema_version") != 1 or not isinstance(state.get("desired"), dict): raise ValueError("producer_runtime_unconfirmed")
         if state["desired"].get("capture") is False: return None
+    context_spec = importlib.util.spec_from_file_location('context_producer', Path(__file__).with_name('context-producer.py'))
+    context = importlib.util.module_from_spec(context_spec); context_spec.loader.exec_module(context)
+    frozen_context = context.freeze(adapter,metadata,metadata.get('occurred_at') or observed)
     bindings = common.safe_path(base / "native-producer-bindings")
     bindings.mkdir(parents=True, exist_ok=True, mode=0o700)
     binding = common.safe_path(bindings / (adapter + "-" + surface + ".json"))
@@ -69,6 +73,7 @@ def retain(kind, metadata, cli, surface, home, scope_hint=None):
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     for parent in (root.parent, base, home): common.sync_dir(parent)
     file = root / (record["observation_id"] + ".json")
+    context.retain(record, metadata, home, common, frozen_context)
     common.durable_file(file, json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode())
     return file, record
 
