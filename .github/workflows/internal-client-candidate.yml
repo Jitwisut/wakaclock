@@ -1,0 +1,76 @@
+name: Internal client candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-x64
+            runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+          - target: darwin-arm64
+            runner: macos-15
+            rust_target: aarch64-apple-darwin
+          - target: win32-x64
+            runner: windows-2022
+            rust_target: x86_64-pc-windows-msvc
+          - target: win32-arm64
+            runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: extensions/vscode/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - name: Verify source and build CLI before generating outputs
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          INTERNAL_CANDIDATE: '1'
+        shell: bash
+        run: |
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          cargo build --manifest-path backend/api/Cargo.toml -p wakaclock-cli --release --locked --target ${{ matrix.rust_target }}
+      - name: Check and compile extension
+        working-directory: extensions/vscode
+        run: |
+          npm ci
+          npm run lint
+          npm test
+          npm run compile
+      - name: Package internal VSIX
+        working-directory: extensions/vscode
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          INTERNAL_CANDIDATE: '1'
+        run: |
+          binary="../../backend/api/target/${{ matrix.rust_target }}/release/wakaclock"
+          if [[ "${{ runner.os }}" == 'Windows' ]]; then binary="${binary}.exe"; fi
+          node scripts/package-target.js "${{ matrix.target }}" "$binary"
+      - name: Verify and package identical standalone runtime
+        shell: bash
+        run: |
+          python scripts/ai-coverage/package_internal_candidate.py --vsix extensions/vscode/atoaxis-vscode-${{ matrix.target }}.vsix --commit "$GITHUB_SHA" --output candidate
+          python scripts/ai-coverage/verify_release_artifacts.py --vsix candidate/atoaxis-vscode-${{ matrix.target }}.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: internal-client-${{ matrix.target }}-${{ github.sha }}
+          path: candidate/*
+          retention-days: 14

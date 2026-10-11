@@ -56,6 +56,14 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ## Approval gate — ต้องถามก่อนแก้
 
+การอนุมัติ 2026-10-10 (Heartbeat → Capture AI → Client Release): ผู้ใช้สั่ง
+“PLEASE IMPLEMENT THIS PLAN” ให้ทำ H1–H5, C1–C4 และ R1–R3 บน
+`codex/heartbeat-capture-release` จาก `90774c9`: editor metadata journal,
+durable stdin ACK, persistent runtime controls, additive activity contract,
+adapter capabilities และ internal packaging. รักษา baseline ทุกแถวและ ID/revision
+เดิม; live certification, native OS tests และ canary เป็นหลักฐานแยก ไม่ใช่ผล
+จำลอง. ไม่อนุญาต push/merge main หรือ publish stable/Marketplace.
+
 การอนุมัติ 2026-10-10 (GitHub closure): ผู้ใช้สั่ง “PLEASE IMPLEMENT THIS PLAN” ให้ปิด session-context adapters/durable verification, paginated sessions, atomic revisioned links, relationship history, merged-PR cost ถึงเวลา merge, privacy/retention/restore และ certification tests บน staging แยก ต่อจาก 579967b. รักษา canonical heartbeat/usage, duration/timeout และ baseline ทุกแถว; GitHub จริง/Windows/บัญชีที่สองยัง pending เมื่อหลักฐานไม่พร้อม. ไม่ครอบคลุม push/merge main หรืออ้าง production readiness.
 
 การอนุมัติเผยแพร่ 2026-10-09 (GitHub integration): ผู้ใช้สั่ง “commit แล้ว push ให้หน่อย” อนุญาต commit/push source, additive migration, tests, staging scripts และเอกสารของงานนี้ไปยัง `codex/atoaxis-team` ไม่รวม credential, รายงานส่วนตัว, backup, runtime/build artifacts หรือการแก้จากงานอื่น; ไม่อนุญาต push/merge เข้า main และไม่ใช่การรับรอง integration หรือ production release.

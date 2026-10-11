@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import * as os from "node:os";
+import * as path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import {
   detectAiAgents,
   setupDetectedAiAgents,
@@ -26,7 +28,7 @@ import { SingleFlight } from "./singleFlight";
 
 let activeBufferManager: HeartbeatBufferManager | undefined;
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   console.log("[wakaclock] extension activated");
   const configService = new WakaclockConfigService();
   const logger = new Logger(() => configService.getSnapshot().debugLogging);
@@ -50,6 +52,18 @@ export function activate(context: vscode.ExtensionContext): void {
     `wakaclock-vscode/${extensionVersion}`,
     vscode.env.remoteName ? "remote_extension" : undefined
   );
+  context.subscriptions.push(vscode.commands.registerCommand("wakaclock.rollbackManagedCli", async () => {
+    try { const binary = await managedCli.rollback(); void vscode.window.showInformationMessage(`AtoAxis: previous managed CLI selected (${binary}). Queue and journal IDs are retained.`); }
+    catch { void vscode.window.showErrorMessage("AtoAxis: rollback failed. Check the previous binary, custom CLI path and runtime diagnostics."); }
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand("wakaclock.upgradeManagedCli", async () => {
+    try {
+      await managedCli.upgrade();
+      void vscode.window.showInformationMessage("AtoAxis: managed CLI selection updated. Check runtime status before upgrading background workers.");
+    } catch {
+      void vscode.window.showErrorMessage("AtoAxis: managed CLI upgrade failed. The existing selection and queues are retained.");
+    }
+  }));
   const statusBar = new StatusBarController(
     () => configService.getSnapshot(),
     cliService,
@@ -74,7 +88,124 @@ export function activate(context: vscode.ExtensionContext): void {
     () => statusBar.handleActivity()
   );
   activeBufferManager = bufferManager;
+  const journalKey = (await getStoredApiKey(context.secrets)) ?? (await getPendingApiKey(context.secrets));
+  let journalScope: string;
+  let verifiedJournalScopes: string[] = [];
+  try {
+    const scope = await cliService.journalScope();
+    journalScope = scope.scope_id;
+    verifiedJournalScopes = scope.recoverable_scope_ids ?? [];
+  } catch {
+    const server = (configService.getSnapshot().serverUrl ?? "").replace(/\/$/, "");
+    const owner = journalKey ? `key:${createHash("sha256").update(journalKey).digest("hex")}` : "unconfirmed";
+    journalScope = createHash("sha256").update(`${server}\0${owner}`).digest("hex");
+    void vscode.window.showWarningMessage("AtoAxis: CLI durable ACK is unavailable. Activity stays in the private journal until the CLI is updated and identity verified.");
+  }
+  const workspaceId = createHash("sha256").update(context.storageUri?.fsPath ?? "no-workspace").digest("hex");
+  bufferManager.enableJournal(path.join(context.globalStorageUri.fsPath, "editor-journals", journalScope, workspaceId), journalScope, verifiedJournalScopes.filter(scope => scope !== journalScope).map(scope => path.join(context.globalStorageUri.fsPath, "editor-journals", scope, workspaceId)));
+  const journalCollectorId = randomUUID();
+  let journalPublication: Promise<void> | undefined;
+  let journalFault: string | undefined;
+  let healthHandoffFailed = false;
+  const publishJournal = () => {
+    if (journalPublication) return;
+    const health = bufferManager.getJournalHealth();
+    if (health) {
+      const fault = health.status !== "ready" ? `${health.status}:${health.errorCode ?? ""}` : health.deadLetter ? "journal_dead_letter" : undefined;
+      if (fault !== journalFault) {
+        if (fault) void vscode.window.showWarningMessage("AtoAxis: activity journal needs attention. Capture cannot confirm complete data; open runtime diagnostics. Retained records are preserved.");
+        else if (journalFault) void vscode.window.showInformationMessage("AtoAxis: activity journal recovered. Delivery completeness is checked separately.");
+        journalFault = fault;
+      }
+      journalPublication = cliService.publishJournalHealth(journalScope, journalCollectorId, health)
+        .then(() => { healthHandoffFailed = false; })
+        .catch(() => { if (!healthHandoffFailed) logger.warn("Editor journal health handoff unavailable; private activity remains retained."); healthHandoffFailed = true; })
+        .finally(() => { journalPublication = undefined; });
+    }
+  };
+  const journalHealthTimer = setInterval(publishJournal, 15_000);
+  context.subscriptions.push({ dispose: () => clearInterval(journalHealthTimer) });
+  finalJournalPublication = async () => {
+    clearInterval(journalHealthTimer);
+    await journalPublication;
+    const health = bufferManager.getJournalHealth();
+    if (health) await cliService.publishJournalHealth(journalScope, journalCollectorId,
+      { ...health, status: health.status === "ready" && health.pending === 0 ? "stopped" : health.status });
+  };
+  publishJournal();
+  try {
+    const runtime = await cliService.runtime("status");
+    bufferManager.setCapturePaused(runtime.desired.desired.capture === false);
+  } catch {
+    bufferManager.setCapturePaused(true);
+    logger.warn("Runtime desired state is unavailable; capture is parked until intent can be verified.");
+  }
+  let identityChanged = false;
+  const parkChangedIdentity = () => {
+    if (identityChanged) return;
+    identityChanged = true;
+    bufferManager.setCapturePaused(true);
+    void vscode.window.showWarningMessage("AtoAxis: account or server changed. Capture is parked and the previous journal is retained in its original scope. Reload the window to verify the new identity.");
+  };
+  const originalServer = configService.getSnapshot().serverUrl;
+  context.subscriptions.push(context.secrets.onDidChange(event => {
+    if (event.key !== "wakaclock.apiKey" && event.key !== "wakaclock.pendingApiKey") return;
+    void (async () => {
+      const current = (await getStoredApiKey(context.secrets)) ?? (await getPendingApiKey(context.secrets));
+      if (current !== journalKey) parkChangedIdentity();
+    })();
+  }));
+  context.subscriptions.push(configService.onDidChange(snapshot => {
+    if (snapshot.serverUrl !== originalServer) parkChangedIdentity();
+  }));
+  for (const action of ["pause", "resume"] as const) {
+    context.subscriptions.push(vscode.commands.registerCommand(`wakaclock.runtime${action === "pause" ? "Pause" : "Resume"}`, async () => {
+      const component = await vscode.window.showQuickPick(["capture", "delivery", "backend-local", "all"], { title: `AtoAxis: ${action} runtime` });
+      if (!component) return;
+      try {
+        const runtime = await cliService.runtime(action, component);
+        bufferManager.setCapturePaused(identityChanged || runtime.desired.desired.capture === false);
+        void vscode.window.showInformationMessage(`AtoAxis: ${component} ${action === "pause" ? "paused by you" : "resumed"}. Pending data is retained.`);
+      } catch { void vscode.window.showErrorMessage("AtoAxis: runtime change failed; use metadata diagnostics to check configuration and identity."); }
+    }));
+  }
+  context.subscriptions.push(vscode.commands.registerCommand("wakaclock.manageRuntime", async () => {
+    const action = await vscode.window.showQuickPick(["status", "install", "upgrade", "rollback", "uninstall"] as const, { title: "AtoAxis: Manage background runtime (queues are retained)" });
+    if (!action) return;
+    try {
+      if (action === "status") { const state = await cliService.runtime("status"); const panel = vscode.window.createOutputChannel("AtoAxis Runtime Metadata"); context.subscriptions.push(panel); panel.appendLine(JSON.stringify(state, null, 2)); panel.show(true); void vscode.window.showInformationMessage("AtoAxis: runtime metadata is available in the AtoAxis output panel."); return; }
+      const component = await vscode.window.showQuickPick(["capture", "delivery"] as const, { title: `AtoAxis: ${action} per-user service` });
+      if (!component) return;
+      await cliService.manageRuntime(action as "install" | "upgrade" | "rollback" | "uninstall", component as "capture" | "delivery");
+      void vscode.window.showInformationMessage(`AtoAxis: ${component} ${action} completed. Queue and journal IDs are retained.`);
+    } catch { void vscode.window.showErrorMessage("AtoAxis: service change could not be confirmed. Check runtime metadata; pending data is retained."); }
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand("wakaclock.retryJournalRejection", async () => {
+    if (identityChanged) { void vscode.window.showWarningMessage("AtoAxis: reload and verify the current identity before journal recovery."); return; }
+    const entries = bufferManager.rejectedJournalItems();
+    if (!entries.length) { void vscode.window.showInformationMessage("AtoAxis: no rejected editor journal records are available."); return; }
+    const selected = await vscode.window.showQuickPick(entries.map(item => ({ label: item.id, description: item.errorCode, item })), { title: "AtoAxis: Retry one retained rejection with its original ID and timestamp" });
+    if (!selected) return;
+    try {
+      const accepted = await bufferManager.retryRejectedJournalItem(selected.item.id);
+      void vscode.window.showInformationMessage(accepted ? "AtoAxis: record accepted into the durable CLI queue. Server delivery is checked separately." : "AtoAxis: record remains retained and needs further recovery.");
+    } catch { void vscode.window.showErrorMessage("AtoAxis: journal retry was not confirmed; the original ID and record remain retained."); }
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand("wakaclock.setupNativeActivity", async () => {
+    const adapter = await vscode.window.showQuickPick(["claude-code", "gemini-cli", "cursor", "copilot", "cline"], { title: "AtoAxis: Enable native metadata activity hooks (live certification pending)" });
+    if (!adapter) return;
+    try {
+      const result = await cliService.setupNativeActivity(adapter);
+      if (result.status !== "configured") throw new Error("Native hook setup was not confirmed.");
+      if (adapter === "copilot" && result.hook_location) {
+        const hooks = vscode.workspace.getConfiguration("chat").get<Record<string, boolean>>("hookFilesLocations", {});
+        await vscode.workspace.getConfiguration("chat").update("hookFilesLocations", { ...hooks, [result.hook_location]: true }, vscode.ConfigurationTarget.Global);
+      }
+      void vscode.window.showInformationMessage(`AtoAxis: ${adapter} activity hooks configured. Tool intervals and unavailable metrics require separate evidence. ${result.next_step ?? ""}`);
+    } catch { void vscode.window.showErrorMessage("AtoAxis: activity hooks could not be configured; user hooks remain preserved. Check consent and runtime metadata."); }
+  }));
   statusBar.setBufferedSecondsProvider(() => bufferManager.getBufferedSeconds());
+  statusBar.setJournalHealthProvider(() => bufferManager.getJournalHealth());
   statusBar.setBufferedSegmentsProvider(() => bufferManager.getBufferedSegments());
 
   const stableAgentDir = syncAgentPluginsToStableDir({
@@ -346,8 +477,12 @@ async function maybeOfferAiSetup(
   }
 }
 
+let finalJournalPublication: (() => Promise<void>) | undefined;
+
 export function deactivate(): Thenable<void> | undefined {
   const bufferManager = activeBufferManager;
   activeBufferManager = undefined;
-  return bufferManager?.flushAllBuffers("shutdown");
+  return bufferManager?.flushAllBuffers("shutdown").finally(async () => {
+    try { await finalJournalPublication?.(); } finally { finalJournalPublication = undefined; bufferManager.closeJournal(); }
+  });
 }

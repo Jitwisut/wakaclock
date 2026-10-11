@@ -4,6 +4,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error("paused_by_user")]
+    RuntimePaused,
     #[error("ClickHouse error: {0}")]
     ClickHouse(String),
 

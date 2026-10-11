@@ -301,7 +301,8 @@ describe("offline status contract", () => {
       queuedSeconds: 90,
       connection: { state: "online", reachable: true, authenticated: true },
     }).refresh();
-    expect(item.text).toBe("$(clock) 0s");
+    // Pending is visible immediately even while connectivity is online.
+    expect(item.text).toBe("$(cloud-upload) 0s · pending");
     expect(String(item.tooltip)).toContain("Held locally: 3 heartbeat(s)");
   });
 

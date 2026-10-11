@@ -1797,6 +1797,38 @@ fn set_private_permissions(path: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Native metadata capture is usable independently of legacy Bash/JQ edit
+/// hooks. Windows can install this path without claiming edit certification.
+pub(crate) fn native_activity_setup(
+    adapter: &str,
+    yes: bool,
+    uninstall: bool,
+) -> Result<serde_json::Value, Box<dyn Error>> {
+    if !["claude-code", "gemini-cli", "cursor", "copilot", "cline"].contains(&adapter) {
+        return Err("activity_native_hook_contract_evidence_pending".into());
+    }
+    if adapter == "cline" && cfg!(windows) {
+        return Err("cline_windows_hook_contract_evidence_pending".into());
+    }
+    let home = dirs::home_dir().ok_or("service_home_unavailable")?;
+    let _lock = acquire_setup_lock(&home)?;
+    if !uninstall {
+        if effective_consent(&home, adapter) == Some(HookConsent::Denied) {
+            return Err("activity_hook_opted_out".into());
+        }
+        if effective_consent(&home, adapter) != Some(HookConsent::Enabled) && !yes {
+            return Err("activity_hook_consent_required".into());
+        }
+        set_hook_consent(&home, adapter, HookConsent::Enabled)?;
+    }
+    let executable = if uninstall {
+        std::env::current_exe()?
+    } else {
+        crate::runtime_service::stage_binary()?
+    };
+    crate::native_hooks::configure(&home, adapter, &executable, uninstall)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

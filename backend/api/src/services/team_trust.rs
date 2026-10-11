@@ -89,6 +89,22 @@ pub fn device_health(
             let Some(c) = &d.capture else {
                 return Health::new("unconfirmed", "capture_evidence_missing", at, "own_account");
             };
+            let Some(journal) = &c.editor_journal else {
+                return Health::new("unconfirmed", "journal_evidence_missing", at, "own_account");
+            };
+            if !(0..=300).contains(
+                &now.signed_duration_since(journal.last_observed_at)
+                    .num_seconds(),
+            ) {
+                return Health::new("stale", "journal_observation_stale", at, "own_account");
+            }
+            if journal.pending.is_none()
+                || journal.status != "ready"
+                || journal.pending != Some(0)
+                || journal.dead_letter > 0
+            {
+                return Health::new("partial", "journal_not_ready", at, "own_account");
+            }
             if !(0..=300).contains(&now.signed_duration_since(c.captured_at).num_seconds())
                 || c.last_scan_success_at.is_none_or(|a| {
                     !(0..=300).contains(&now.signed_duration_since(a).num_seconds())
@@ -260,6 +276,7 @@ mod tests {
         s.dead_letter = Some(1);
         assert_eq!(health(s.clone(), false).reason, "dead_letter");
         s.capture = Some(CaptureHealthSnapshot {
+            editor_journal: None,
             schema_version: 1,
             captured_at: now,
             enabled: true,
@@ -268,7 +285,30 @@ mod tests {
             parser_errors: 0,
             pending: 0,
         });
+        assert_eq!(health(s.clone(), true).reason, "journal_evidence_missing");
+        s.capture.as_mut().unwrap().editor_journal =
+            Some(wakaclock_core::editor_health::EditorJournalHealth {
+                status: "ready".into(),
+                pending: Some(0),
+                dead_letter: 0,
+                last_observed_at: now,
+            });
         assert_eq!(health(s.clone(), true).status, "observed");
+        s.capture
+            .as_mut()
+            .unwrap()
+            .editor_journal
+            .as_mut()
+            .unwrap()
+            .status = "write_failure".into();
+        assert_eq!(health(s.clone(), true).reason, "journal_not_ready");
+        s.capture
+            .as_mut()
+            .unwrap()
+            .editor_journal
+            .as_mut()
+            .unwrap()
+            .status = "ready".into();
         s.capture.as_mut().unwrap().parser_errors = 1;
         assert_eq!(health(s.clone(), true).status, "partial");
         s.captured_at = now - Duration::seconds(301);

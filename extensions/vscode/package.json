@@ -1,6 +1,6 @@
 {
   "name": "atoaxis-vscode",
-  "displayName": "AtoAxis — Developer Time Tracking",
+  "displayName": "AtoAxis \u2014 Developer Time Tracking",
   "description": "Developer time tracking for VS Code with AI agent attribution. Install, add your AtoAxis API key, and start tracking.",
   "version": "0.2.0",
   "publisher": "atoaxis",
@@ -90,6 +90,34 @@
       {
         "command": "wakaclock.testAiDetection",
         "title": "AtoAxis: Test AI Detection"
+      },
+      {
+        "command": "wakaclock.runtimePause",
+        "title": "AtoAxis: Pause Runtime"
+      },
+      {
+        "command": "wakaclock.runtimeResume",
+        "title": "AtoAxis: Resume Runtime"
+      },
+      {
+        "command": "wakaclock.rollbackManagedCli",
+        "title": "AtoAxis: Roll Back Managed CLI"
+      },
+      {
+        "command": "wakaclock.upgradeManagedCli",
+        "title": "AtoAxis: Upgrade Managed CLI"
+      },
+      {
+        "command": "wakaclock.retryJournalRejection",
+        "title": "AtoAxis: Retry Retained Editor Record"
+      },
+      {
+        "command": "wakaclock.manageRuntime",
+        "title": "AtoAxis: Manage Background Runtime"
+      },
+      {
+        "command": "wakaclock.setupNativeActivity",
+        "title": "AtoAxis: Configure Native Activity Hooks"
       }
     ],
     "configuration": {

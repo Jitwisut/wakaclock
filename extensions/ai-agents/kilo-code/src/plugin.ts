@@ -1,5 +1,5 @@
 import { extractFileChange, type KiloProducerMetadata } from "./event-normalizer.ts";
-import { emitMetadata, runSessionLifecycle, runToolLifecycle } from "./producer-client.ts";
+import { emitActivityMarker, emitMetadata, runSessionLifecycle, runToolLifecycle } from "./producer-client.ts";
 
 type AnyRecord = Record<string, any>;
 
@@ -83,11 +83,25 @@ function sessionLifecycleInput(
 }
 
 /** Kilo server plugin. All hooks are best-effort and fail open by design. */
-const server = async (ctx: AnyRecord) => {
+const server = async (ctx: AnyRecord, options: { activitySurface?: "cli" | "ide" } = {}) => {
   const DEDUP_WINDOW_MS = 120_000;
   const pending = new Map<string, { input: AnyRecord; at: number }>();
   const emitted = new Map<string, number>();
   const identity = () => contextIdentity(ctx);
+  const activity = async (phase: "before" | "after" | "failure", input: AnyRecord) => {
+    // The same plugin runs in CLI and IDE. Require explicit configuration rather
+    // than inferring a surface from a missing runtime or process name.
+    if (!["cli", "ide"].includes(options.activitySurface ?? "")) return;
+    const current = identity();
+    const sessionId = getString(input.sessionID, input.sessionId, input.session_id, current.sessionId);
+    const callId = getString(input.callID, input.callId, input.toolCallId, input.tool_call_id);
+    const directory = getString(input.cwd, input.directory, input.worktree, current.directory);
+    if (!sessionId || !callId || !directory) { console.warn("AtoAxis: activity_context_unresolved"); return; }
+    await emitActivityMarker({ phase, sessionId, callId, directory, surface: options.activitySurface! }).catch(() => {
+      // Keep the host fail-open while exposing the failure without payload text.
+      console.warn("AtoAxis: activity_durable_handoff_failed");
+    });
+  };
   const emitOnce = async (raw: unknown) => {
     const metadata = extractFileChange(raw, identity());
     if (!metadata) return;
@@ -121,6 +135,7 @@ const server = async (ctx: AnyRecord) => {
 
   return {
     "tool.execute.before": async (input: AnyRecord) => {
+      await activity("before", input);
       cleanup();
       const id = getString(input.callID, input.callId, input.toolCallId, input.tool_call_id);
       const tool = getString(input.tool, input.name, input.tool_name);
@@ -141,6 +156,7 @@ const server = async (ctx: AnyRecord) => {
       }
     },
     "tool.execute.after": async (input: AnyRecord, output: AnyRecord) => {
+      await activity(output?.error || output?.success === false ? "failure" : "after", input);
       cleanup();
       const id = getString(input.callID, input.callId, input.toolCallId, input.tool_call_id);
       const before = id ? pending.get(id) : undefined;

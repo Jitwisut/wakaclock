@@ -40,6 +40,54 @@ pub enum ActivityKind {
     MessageComplete,
 }
 
+/// Provider-neutral project activity. v2 remains a nested, unchanged evidence
+/// contract; edits and usage retain their existing independent streams.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrokerActivityEventV3 {
+    pub schema_version: u8,
+    pub adapter_id: String,
+    pub execution_surface: String,
+    pub provider_schema_version: String,
+    pub activity: BrokerActivityEventV2,
+}
+impl BrokerActivityEventV3 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != 3
+            || super::AdapterRegistry::builtin()
+                .get(&self.adapter_id)
+                .is_none()
+            || !["cli", "ide", "desktop", "inline", "mcp"]
+                .contains(&self.execution_surface.as_str())
+            || self.provider_schema_version.is_empty()
+            || self.provider_schema_version.len() > 80
+            || !self
+                .provider_schema_version
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+        {
+            return Err("invalid_activity_v3_contract".into());
+        }
+        self.activity.validate()
+    }
+    pub fn normalized(&self) -> Result<BrokerActivityEventV2, String> {
+        self.validate()?;
+        let mut event = self.activity.clone();
+        if self.adapter_id != "codex" {
+            event.event_id = opaque(&format!(
+                "activity-v3\0{}\0{}\0{}\0{:?}",
+                self.adapter_id, event.session_id, event.operation_id, event.kind
+            ));
+            // Identical operation identity permits native to revise a wrapper;
+            // no wall-clock proximity, line counts or transcript text are used.
+            event.revision =
+                event.revision.saturating_mul(2) + u32::from(event.provenance == "native");
+        }
+        event.validate()?;
+        Ok(event)
+    }
+}
+
 impl BrokerActivityEventV2 {
     pub fn validate(&self) -> Result<(), String> {
         if self.schema_version != 2
@@ -111,6 +159,23 @@ pub struct ActivityBatch {
     pub events: Vec<BrokerActivityEventV2>,
     pub cursor: ActivityCursor,
     pub records: usize,
+    pub contracts: BTreeMap<(String, u32), ActivityContract>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityContract {
+    pub adapter_id: String,
+    pub execution_surface: String,
+    pub provider_schema_version: String,
+}
+impl BrokerActivityEventV3 {
+    pub fn contract(&self) -> ActivityContract {
+        ActivityContract {
+            adapter_id: self.adapter_id.clone(),
+            execution_surface: self.execution_surface.clone(),
+            provider_schema_version: self.provider_schema_version.clone(),
+        }
+    }
 }
 pub fn opaque(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
@@ -132,9 +197,9 @@ fn make(
     started: Option<DateTime<Utc>>,
     native: bool,
     tool: Option<String>,
-    status: Option<String>,
-    revision: u32,
+    status_revision: (Option<String>, u32),
 ) -> Option<BrokerActivityEventV2> {
+    let (status, revision) = status_revision;
     if c.session.is_empty() || !c.root.is_absolute() {
         return None;
     }
@@ -281,8 +346,7 @@ pub fn parse_activity(
                             None,
                             true,
                             None,
-                            None,
-                            1,
+                            (None, 1),
                         ),
                     );
                 }
@@ -373,8 +437,7 @@ pub fn parse_activity(
                                     None,
                                     true,
                                     Some(tool),
-                                    Some("native_children".into()),
-                                    2,
+                                    (Some("native_children".into()), 2),
                                 ),
                             );
                         }
@@ -413,8 +476,7 @@ pub fn parse_activity(
                                         None,
                                         true,
                                         tool.clone(),
-                                        None,
-                                        1,
+                                        (None, 1),
                                     ),
                                 );
                             }
@@ -432,8 +494,7 @@ pub fn parse_activity(
                                     start.filter(|s| *s <= end),
                                     true,
                                     tool,
-                                    status,
-                                    1,
+                                    (status, 1),
                                 ),
                             );
                         } else if typ == "AgentMessage" {
@@ -447,8 +508,7 @@ pub fn parse_activity(
                                     None,
                                     true,
                                     None,
-                                    None,
-                                    1,
+                                    (None, 1),
                                 ),
                             );
                         }
@@ -495,8 +555,7 @@ pub fn parse_activity(
                                 None,
                                 false,
                                 Some(tool),
-                                None,
-                                1,
+                                (None, 1),
                             ),
                         );
                     }
@@ -526,8 +585,7 @@ pub fn parse_activity(
                             None,
                             false,
                             None,
-                            None,
-                            1,
+                            (None, 1),
                         ),
                     );
                 }
@@ -588,8 +646,7 @@ pub fn parse_activity(
                 start,
                 false,
                 Some(tool),
-                None,
-                1,
+                (None, 1),
             ),
         );
     }
@@ -607,7 +664,411 @@ pub fn parse_activity(
         events,
         cursor,
         records,
+        contracts: BTreeMap::new(),
     })
+}
+
+/// Common incremental reader. Only metadata survives normalization. An unknown
+/// schema leaves the cursor immediately before that record while accepted earlier
+/// records can commit; other sources continue independently.
+pub fn parse_shared_activity(
+    adapter: &str,
+    surface: &str,
+    metadata_contract: bool,
+    path: &Path,
+    previous: &ActivityCursor,
+    now: DateTime<Utc>,
+) -> Result<(ActivityBatch, Option<String>), String> {
+    if adapter == "codex" && !metadata_contract {
+        return parse_activity(path, previous, now).map(|batch| (batch, None));
+    }
+    if super::AdapterRegistry::builtin().get(adapter).is_none() {
+        return Err("unknown_activity_adapter".into());
+    }
+    let metadata = std::fs::metadata(path).map_err(|_| "transcript_unavailable")?;
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        format!("{}:{}", metadata.dev(), metadata.ino())
+    };
+    #[cfg(not(unix))]
+    let identity = format!("{:?}", metadata.created().ok());
+    let mut cursor = if previous.file_identity == identity && previous.offset <= metadata.len() {
+        previous.clone()
+    } else {
+        ActivityCursor {
+            capture_since: previous.capture_since,
+            capture_until: previous.capture_until,
+            ..Default::default()
+        }
+    };
+    cursor.file_identity = identity;
+    let mut reader =
+        JsonlCursorReader::open(path, cursor.offset).map_err(|_| "transcript_unavailable")?;
+    let mut events = Vec::new();
+    let mut records = 0;
+    let mut blocked = None;
+    let mut contracts = BTreeMap::new();
+    while records < 2000 {
+        let Some(line) = reader
+            .next_line(2 * 1024 * 1024)
+            .map_err(|_| "transcript_read_failure")?
+        else {
+            break;
+        };
+        let parsed = if line.too_large {
+            Err("activity_record_too_large".to_string())
+        } else {
+            serde_json::from_str::<Value>(&line.text)
+                .map_err(|_| "activity_invalid_json".to_string())
+                .and_then(|record| {
+                    if metadata_contract {
+                        let envelope: BrokerActivityEventV3 = serde_json::from_value(record)
+                            .map_err(|_| "activity_unknown_schema".to_string())?;
+                        if envelope.adapter_id != adapter || envelope.execution_surface != surface {
+                            return Err("activity_source_scope_mismatch".into());
+                        }
+                        let event = envelope.normalized()?;
+                        contracts.insert(
+                            (event.event_id.clone(), event.revision),
+                            envelope.contract(),
+                        );
+                        Ok(vec![event])
+                    } else if adapter == "claude-code" {
+                        claude_activity_record(&record, &mut cursor.context, surface)
+                    } else {
+                        Err("activity_native_schema_pending".into())
+                    }
+                })
+        };
+        match parsed {
+            Ok(mut accepted) => {
+                if adapter == "claude-code" && !metadata_contract {
+                    for event in &accepted {
+                        contracts.insert(
+                            (event.event_id.clone(), event.revision),
+                            ActivityContract {
+                                adapter_id: adapter.into(),
+                                execution_surface: surface.into(),
+                                provider_schema_version: "claude-transcript-v1".into(),
+                            },
+                        );
+                    }
+                }
+                events.append(&mut accepted);
+                cursor.offset = line.offset_after;
+                records += 1;
+            }
+            Err(error) => {
+                cursor.offset = line.offset_before;
+                blocked = Some(error);
+                break;
+            }
+        }
+    }
+    events.retain(|event| {
+        cursor
+            .capture_since
+            .is_none_or(|start| event.occurred_at >= start)
+            && cursor
+                .capture_until
+                .is_none_or(|end| event.occurred_at < end)
+    });
+    Ok((
+        ActivityBatch {
+            events,
+            cursor,
+            records,
+            contracts,
+        },
+        blocked,
+    ))
+}
+fn claude_activity_record(
+    record: &Value,
+    context: &mut ActivityContext,
+    surface: &str,
+) -> Result<Vec<BrokerActivityEventV2>, String> {
+    let kind = record["type"].as_str().ok_or("activity_unknown_schema")?;
+    if ![
+        "assistant",
+        "user",
+        "system",
+        "summary",
+        "progress",
+        "file-history-snapshot",
+        "queue-operation",
+        "last-prompt",
+        "custom-title",
+        "agent-name",
+    ]
+    .contains(&kind)
+    {
+        return Err("activity_unknown_schema".into());
+    }
+    if !["assistant", "user"].contains(&kind) {
+        return Ok(vec![]);
+    }
+    // Session and cwd are historical metadata on the record, never inferred from
+    // today's branch or a document reopened after a crash.
+    if let Some(session) = record["sessionId"].as_str() {
+        context.session = session.to_string();
+    }
+    if let Some(root) = record["cwd"].as_str() {
+        context.root = PathBuf::from(root);
+    }
+    context.surface = surface.into();
+    let blocks = record["message"]["content"].as_array();
+    let relevant = blocks.is_some_and(|blocks| {
+        blocks
+            .iter()
+            .any(|b| matches!(b["type"].as_str(), Some("tool_use" | "tool_result")))
+    }) || record["message"]["stop_reason"] == "end_turn";
+    if !relevant {
+        return Ok(vec![]);
+    }
+    let at = instant(&record["timestamp"]).ok_or("activity_timestamp_missing")?;
+    if context.session.is_empty() || !context.root.is_absolute() {
+        return Err("activity_session_context_missing".into());
+    }
+    let mut events = Vec::new();
+    if let Some(blocks) = blocks {
+        for block in blocks {
+            let (event_kind, operation) = match block["type"].as_str() {
+                Some("tool_use") => (ActivityKind::ToolStart, block["id"].as_str()),
+                Some("tool_result") => (ActivityKind::ToolEnd, block["tool_use_id"].as_str()),
+                _ => continue,
+            };
+            let operation = operation.ok_or("activity_operation_identity_missing")?;
+            let outcome = if block["is_error"] == true {
+                Some("failed".into())
+            } else {
+                None
+            };
+            // Transcript timestamps prove markers, not execution-only intervals:
+            // permission waits and scheduling may lie between these records.
+            let mut event = make(
+                context,
+                event_kind,
+                operation,
+                at,
+                None,
+                true,
+                None,
+                (outcome, 0),
+            )
+            .ok_or("activity_invalid_metadata")?;
+            event.revision = 0;
+            events.push(
+                BrokerActivityEventV3 {
+                    schema_version: 3,
+                    adapter_id: "claude-code".into(),
+                    execution_surface: surface.into(),
+                    provider_schema_version: "claude-transcript-v1".into(),
+                    activity: event,
+                }
+                .normalized()?,
+            );
+        }
+    }
+    if record["message"]["stop_reason"] == "end_turn" {
+        let operation = record["message"]["id"]
+            .as_str()
+            .ok_or("activity_message_identity_missing")?;
+        let mut event = make(
+            context,
+            ActivityKind::MessageComplete,
+            operation,
+            at,
+            None,
+            true,
+            None,
+            (None, 0),
+        )
+        .ok_or("activity_invalid_metadata")?;
+        event.revision = 0;
+        events.push(
+            BrokerActivityEventV3 {
+                schema_version: 3,
+                adapter_id: "claude-code".into(),
+                execution_surface: surface.into(),
+                provider_schema_version: "claude-transcript-v1".into(),
+                activity: event,
+            }
+            .normalized()?,
+        );
+    }
+    Ok(events)
+}
+
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+    #[test]
+    fn claude_native_and_transcript_share_usage_identity_and_ordered_revisions() {
+        let root = std::env::temp_dir();
+        let at = Utc::now() - chrono::Duration::seconds(10);
+        let record = serde_json::json!({"type":"assistant","sessionId":"native-session","cwd":root,"timestamp":at,"message":{"content":[{"type":"tool_use","id":"call","name":"Read","input":{"source":"SENSITIVE"}}]}});
+        let transcript = claude_activity_record(&record, &mut ActivityContext::default(), "cli")
+            .unwrap()
+            .remove(0);
+        let hook=super::super::native_activity::normalize_hook("claude-code","cli",&serde_json::json!({"hook_event_name":"PreToolUse","session_id":"native-session","cwd":root,"tool_use_id":"call"}),Utc::now(),"observation").unwrap().event.unwrap().normalized().unwrap();
+        assert_eq!(transcript.event_id, hook.event_id);
+        assert!(transcript.revision < hook.revision);
+        assert_eq!(transcript.session_id, "native-session");
+        assert_eq!(
+            super::super::usage::scoped_session_id("device", "claude-code", &hook.session_id),
+            super::super::usage::scoped_session_id("device", "claude-code", "native-session")
+        );
+        assert!(hook.started_at.is_none());
+        assert!(transcript.started_at.is_none());
+    }
+    #[test]
+    fn contract_and_cursor_commit_together_and_survive_verified_key_rotation() {
+        let root = std::env::temp_dir().join(format!("capture-rebind-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let queue = crate::queue::Queue::open_at(&root.join("queue.db")).unwrap();
+        let old = crate::queue::QueueScope {
+            destination: "https://fixture.test".into(),
+            owner: "old".into(),
+        };
+        let current = crate::queue::QueueScope {
+            owner: "current".into(),
+            ..old.clone()
+        };
+        let envelope=super::super::native_activity::normalize_hook("kilo-code","ide",&serde_json::json!({"hook_event_name":"tool.execute.before","sessionID":"session","callID":"call","directory":root,"timestamp":Utc::now()}),Utc::now(),"observation").unwrap().event.unwrap();
+        let source = root.join("metadata.jsonl");
+        std::fs::write(
+            &source,
+            format!("{}\n", serde_json::to_string(&envelope).unwrap()),
+        )
+        .unwrap();
+        let (batch, error) = parse_shared_activity(
+            "kilo-code",
+            "ide",
+            true,
+            &source,
+            &ActivityCursor::default(),
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(error, None);
+        let event = &batch.events[0];
+        let store = ActivityStore::open(&root.join("capture.db")).unwrap();
+        let old_scope = crate::editor_health::scope_id(&old);
+        let new_scope = crate::editor_health::scope_id(&current);
+        store
+            .commit_for_adapter(&old_scope, "source", &batch, "kilo-code", "ide")
+            .unwrap();
+        store.rebind_verified_scopes(&queue, &current).unwrap();
+        assert_eq!(store.pending_count(&old_scope).unwrap(), 1);
+        assert_eq!(store.pending_count(&new_scope).unwrap(), 0);
+        queue.record_credential_owner(&old, "account").unwrap();
+        queue.record_credential_owner(&current, "account").unwrap();
+        store.rebind_verified_scopes(&queue, &current).unwrap();
+        assert_eq!(store.pending_count(&old_scope).unwrap(), 0);
+        assert_eq!(store.pending(&new_scope).unwrap()[0], *event);
+        assert_eq!(
+            store.cursor(&new_scope, "source").unwrap().offset,
+            batch.cursor.offset
+        );
+        assert_eq!(
+            store
+                .contract_for(&new_scope, &event.event_id, event.revision)
+                .unwrap(),
+            Some(envelope.contract())
+        );
+        assert_eq!(
+            store
+                .wire_revision(&new_scope, &event.event_id, event.revision)
+                .unwrap(),
+            0
+        );
+        // A conflicting schema at the same evidence revision rolls back the
+        // cursor and keeps the original accepted metadata.
+        let mut conflicting = batch;
+        conflicting.cursor.offset += 1;
+        conflicting
+            .contracts
+            .values_mut()
+            .next()
+            .unwrap()
+            .provider_schema_version = "incompatible-revision".into();
+        assert!(store
+            .commit_for_adapter(&new_scope, "source", &conflicting, "kilo-code", "ide")
+            .is_err());
+        assert_eq!(
+            store.cursor(&new_scope, "source").unwrap().offset,
+            conflicting.cursor.offset - 1
+        );
+        drop(store);
+        drop(queue);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn claude_non_edit_activity_preserves_markers_without_inventing_intervals_or_contents() {
+        let path =
+            std::env::temp_dir().join(format!("claude-activity-{}.jsonl", uuid::Uuid::new_v4()));
+        let at = Utc::now() - chrono::Duration::minutes(1);
+        let records = [
+            serde_json::json!({"type":"assistant","sessionId":"session","cwd":std::env::temp_dir(),"timestamp":at,"message":{"content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"SENSITIVE_COMMAND"}}]}}),
+            serde_json::json!({"type":"user","sessionId":"session","cwd":std::env::temp_dir(),"timestamp":at+chrono::Duration::seconds(10),"message":{"content":[{"type":"tool_result","tool_use_id":"call","is_error":true,"content":"SENSITIVE_RESPONSE"}]}}),
+        ];
+        std::fs::write(
+            &path,
+            records.iter().map(|r| format!("{r}\n")).collect::<String>(),
+        )
+        .unwrap();
+        let (batch, error) = parse_shared_activity(
+            "claude-code",
+            "cli",
+            false,
+            &path,
+            &ActivityCursor::default(),
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(error, None);
+        assert_eq!(batch.events.len(), 2);
+        assert!(batch.events.iter().all(|e| e.started_at.is_none()));
+        assert_eq!(batch.events[0].operation_id, batch.events[1].operation_id);
+        assert_eq!(batch.events[1].status.as_deref(), Some("failed"));
+        let metadata = serde_json::to_string(&batch.cursor).unwrap()
+            + &serde_json::to_string(&batch.events).unwrap();
+        assert!(!metadata.contains("SENSITIVE"));
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn unknown_schema_commits_good_prefix_but_never_advances_over_the_problem() {
+        let path =
+            std::env::temp_dir().join(format!("activity-schema-{}.jsonl", uuid::Uuid::new_v4()));
+        let good = "{\"type\":\"system\"}\n";
+        std::fs::write(&path, format!("{good}{{\"type\":\"new-schema\"}}\n")).unwrap();
+        let (batch, error) = parse_shared_activity(
+            "claude-code",
+            "cli",
+            false,
+            &path,
+            &ActivityCursor::default(),
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(batch.records, 1);
+        assert_eq!(batch.cursor.offset, good.len() as u64);
+        assert_eq!(error.as_deref(), Some("activity_unknown_schema"));
+        let (again, error) = parse_shared_activity(
+            "claude-code",
+            "cli",
+            false,
+            &path,
+            &batch.cursor,
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(again.cursor.offset, batch.cursor.offset);
+        assert!(error.is_some());
+        std::fs::remove_file(path).unwrap();
+    }
 }
 
 pub struct ActivityStore {
@@ -618,9 +1079,73 @@ impl ActivityStore {
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(2))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+        CREATE TABLE IF NOT EXISTS activity_adapter(scope TEXT,event_id TEXT,adapter TEXT NOT NULL,surface TEXT NOT NULL,PRIMARY KEY(scope,event_id));
+        CREATE TABLE IF NOT EXISTS activity_contract(scope TEXT,event_id TEXT,revision INTEGER,metadata TEXT NOT NULL,PRIMARY KEY(scope,event_id,revision));
         CREATE TABLE IF NOT EXISTS activity_cursor(scope TEXT, source TEXT, cursor TEXT NOT NULL, PRIMARY KEY(scope,source));
         CREATE TABLE IF NOT EXISTS activity_inbox_v2(scope TEXT,event_id TEXT,revision INTEGER,wire_revision INTEGER NOT NULL,payload TEXT NOT NULL,handed_off INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,event_id,revision));")?;
         Ok(Self { conn })
+    }
+    /// Proof comes from the existing queue's verified account/origin ledger.
+    /// Preserve payloads, wire revisions and cursor context exactly; ambiguous
+    /// overlapping histories stay parked rather than silently selecting one.
+    pub fn rebind_verified_scopes(
+        &self,
+        queue: &crate::queue::Queue,
+        current: &crate::queue::QueueScope,
+    ) -> Result<(), crate::error::AppError> {
+        let aliases = queue.verified_editor_journal_scopes(current)?;
+        let current = crate::editor_health::scope_id(current);
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(crate::error::AppError::Queue)?;
+        let merge = || -> Result<(), rusqlite::Error> {
+            for alias in aliases {
+                let old = crate::editor_health::scope_id(&alias);
+                for (table, key, comparison) in [
+                    (
+                        "activity_inbox_v2",
+                        "a.event_id=b.event_id AND a.revision=b.revision",
+                        "a.payload!=b.payload OR a.wire_revision!=b.wire_revision",
+                    ),
+                    (
+                        "activity_contract",
+                        "a.event_id=b.event_id AND a.revision=b.revision",
+                        "a.metadata!=b.metadata",
+                    ),
+                    (
+                        "activity_adapter",
+                        "a.event_id=b.event_id",
+                        "a.adapter!=b.adapter OR a.surface!=b.surface",
+                    ),
+                    ("activity_cursor", "a.source=b.source", "a.cursor!=b.cursor"),
+                ] {
+                    let conflicts:u64=tx.query_row(&format!("SELECT count(*) FROM {table} a JOIN {table} b ON {key} WHERE a.scope=?1 AND b.scope=?2 AND ({comparison})"),params![old,current],|row|row.get(0))?;
+                    if conflicts > 0 {
+                        return Err(rusqlite::Error::InvalidParameterName(
+                            "capture_scope_rebind_conflict".into(),
+                        ));
+                    }
+                }
+                tx.execute("INSERT OR IGNORE INTO activity_inbox_v2 SELECT ?2,event_id,revision,wire_revision,payload,handed_off FROM activity_inbox_v2 WHERE scope=?1",params![old,current])?;
+                // A proven already completed handoff wins over a pending copy.
+                tx.execute("UPDATE activity_inbox_v2 AS current SET handed_off=1 WHERE scope=?2 AND EXISTS(SELECT 1 FROM activity_inbox_v2 old WHERE old.scope=?1 AND old.event_id=current.event_id AND old.revision=current.revision AND old.handed_off=1)",params![old,current])?;
+                tx.execute("INSERT OR IGNORE INTO activity_contract SELECT ?2,event_id,revision,metadata FROM activity_contract WHERE scope=?1",params![old,current])?;
+                tx.execute("INSERT OR IGNORE INTO activity_adapter SELECT ?2,event_id,adapter,surface FROM activity_adapter WHERE scope=?1",params![old,current])?;
+                tx.execute("INSERT OR IGNORE INTO activity_cursor SELECT ?2,source,cursor FROM activity_cursor WHERE scope=?1",params![old,current])?;
+                for table in [
+                    "activity_inbox_v2",
+                    "activity_contract",
+                    "activity_adapter",
+                    "activity_cursor",
+                ] {
+                    tx.execute(&format!("DELETE FROM {table} WHERE scope=?1"), [&old])?;
+                }
+            }
+            Ok(())
+        };
+        merge().map_err(crate::error::AppError::Queue)?;
+        tx.commit().map_err(crate::error::AppError::Queue)
     }
     pub fn cursor(&self, scope: &str, source: &str) -> Result<ActivityCursor, rusqlite::Error> {
         let raw: Option<String> = self
@@ -644,8 +1169,53 @@ impl ActivityStore {
         source: &str,
         batch: &ActivityBatch,
     ) -> Result<(), rusqlite::Error> {
+        self.commit_for_adapter(scope, source, batch, "codex", "cli")
+    }
+    pub fn commit_for_adapter(
+        &self,
+        scope: &str,
+        source: &str,
+        batch: &ActivityBatch,
+        adapter: &str,
+        surface: &str,
+    ) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
         for e in &batch.events {
+            let prior: Option<String> = tx
+                .query_row(
+                    "SELECT adapter FROM activity_adapter WHERE scope=?1 AND event_id=?2",
+                    params![scope, e.event_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if prior.as_deref().is_some_and(|v| v != adapter) {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "activity_adapter_conflict".into(),
+                ));
+            }
+            tx.execute(
+                "INSERT OR IGNORE INTO activity_adapter VALUES(?1,?2,?3,?4)",
+                params![scope, e.event_id, adapter, surface],
+            )?;
+            if let Some(contract) = batch.contracts.get(&(e.event_id.clone(), e.revision)) {
+                if contract.adapter_id != adapter || contract.execution_surface != surface {
+                    return Err(rusqlite::Error::InvalidParameterName(
+                        "activity_contract_scope_conflict".into(),
+                    ));
+                }
+                let metadata = serde_json::to_string(contract)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+                let previous:Option<String>=tx.query_row("SELECT metadata FROM activity_contract WHERE scope=?1 AND event_id=?2 AND revision=?3",params![scope,e.event_id,e.revision],|row|row.get(0)).optional()?;
+                if previous.is_some_and(|previous| previous != metadata) {
+                    return Err(rusqlite::Error::InvalidParameterName(
+                        "activity_contract_revision_conflict".into(),
+                    ));
+                }
+                tx.execute(
+                    "INSERT OR IGNORE INTO activity_contract VALUES(?1,?2,?3,?4)",
+                    params![scope, e.event_id, e.revision, metadata],
+                )?;
+            }
             let raw = serde_json::to_string(e)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             let existing: Option<String> = tx.query_row(
@@ -680,6 +1250,30 @@ impl ActivityStore {
         tx.execute("INSERT INTO activity_cursor VALUES(?1,?2,?3) ON CONFLICT(scope,source) DO UPDATE SET cursor=excluded.cursor",params![scope,source,raw])?;
         tx.commit()
     }
+    pub fn adapter_for(&self, scope: &str, id: &str) -> Result<String, rusqlite::Error> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT adapter FROM activity_adapter WHERE scope=?1 AND event_id=?2",
+                params![scope, id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| "codex".into()))
+    }
+    pub fn contract_for(
+        &self,
+        scope: &str,
+        id: &str,
+        revision: u32,
+    ) -> Result<Option<ActivityContract>, rusqlite::Error> {
+        let raw:Option<String>=self.conn.query_row("SELECT metadata FROM activity_contract WHERE scope=?1 AND event_id=?2 AND revision=?3",params![scope,id,revision],|row|row.get(0)).optional()?;
+        raw.map(|raw| {
+            serde_json::from_str(&raw)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+        })
+        .transpose()
+    }
     pub fn pending(&self, scope: &str) -> Result<Vec<BrokerActivityEventV2>, rusqlite::Error> {
         let mut q=self.conn.prepare("SELECT payload FROM activity_inbox_v2 WHERE scope=?1 AND handed_off=0 ORDER BY event_id,wire_revision LIMIT 500")?;
         let result = q
@@ -699,6 +1293,19 @@ impl ActivityStore {
             params![scope, id],
             |r| r.get(0),
         )
+    }
+    pub fn evidence_at_revision(
+        &self,
+        scope: &str,
+        id: &str,
+        revision: u32,
+    ) -> Result<Option<BrokerActivityEventV2>, rusqlite::Error> {
+        let raw:Option<String>=self.conn.query_row("SELECT payload FROM activity_inbox_v2 WHERE scope=?1 AND event_id=?2 AND revision=?3",params![scope,id,revision],|row|row.get(0)).optional()?;
+        raw.map(|raw| {
+            serde_json::from_str(&raw)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+        })
+        .transpose()
     }
     pub fn wire_revision(
         &self,

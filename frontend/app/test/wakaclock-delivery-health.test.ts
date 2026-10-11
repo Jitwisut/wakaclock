@@ -11,7 +11,7 @@ function report(
     storage: 'postgres',
     devices: [
       {
-        capture: { schema_version: 1, captured_at: new Date(now).toISOString(), enabled: true, status: 'fresh', last_scan_success_at: new Date(now).toISOString(), parser_errors: 0, pending: 0 },
+        capture: { schema_version: 1, captured_at: new Date(now).toISOString(), enabled: true, status: 'fresh', last_scan_success_at: new Date(now).toISOString(), parser_errors: 0, pending: 0, editor_journal: {status: 'ready', pending: 0, dead_letter: 0, last_observed_at: new Date(now).toISOString()} },
         schema_version: 2,
         age_seconds: 0,
         captured_at: new Date(now).toISOString(),
@@ -39,6 +39,15 @@ function report(
   };
 }
 describe('delivery completeness', () => {
+  it('retains upstream journal problems even when server delivery is complete', () => {
+    const data = report();
+    data.devices[0].capture!.editor_journal!.pending = 3;
+    expect(deliveryHealth(data, false, now).state).toBe('pending');
+    data.devices[0].capture!.editor_journal!.status = 'corrupt';
+    expect(deliveryHealth(data, false, now).state).toBe('critical');
+    data.devices[0].capture!.editor_journal = undefined;
+    expect(deliveryHealth(data, false, now).state).toBe('unknown');
+  });
   it('new successful delivery never hides the remaining backlog', () => {
     const result = deliveryHealth(
       report({ pending: 1191, oldest_pending_at: new Date(now - 60_000).toISOString() }),

@@ -36,8 +36,8 @@
 //! which do need `correlation_engine::EvidenceKind`) live in `dedup.rs`
 //! instead, so `canonical.rs` itself has no path to the excluded engine.
 
-pub mod adapter;
 pub mod activity;
+pub mod adapter;
 pub mod canonical;
 pub mod certification;
 pub mod claude;
@@ -50,6 +50,7 @@ pub mod follow_up;
 pub mod gemini;
 pub mod identity;
 mod jsonl;
+pub mod native_activity;
 pub mod parser;
 pub mod patch;
 pub mod path;
@@ -142,3 +143,5 @@ pub use usage::{
     parse_gemini_usage, parse_gemini_usage_str, AiUsageIngestReport, AiUsageIngestReportV2,
     AiUsageProcessingState, AiUsageRecord, TokenSource, MAX_USAGE_IDENTIFIER_BYTES,
 };
+
+pub mod activity_capability;

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
+import { createHash } from "node:crypto";
 import type { KiloProducerMetadata } from "./event-normalizer.ts";
 
 async function cliPath(): Promise<string> {
@@ -25,6 +26,52 @@ interface SessionLifecycleInput {
   provider?: unknown;
   model?: unknown;
   directory?: string;
+}
+
+/** A native marker is accepted only after the CLI's local durable inbox ACK.
+ * Missing/old CLI and response loss are failures, never an exit-code-only ACK.
+ * The hook invocation itself is the observation boundary; no tool content is
+ * copied into this payload and it carries no claimed execution interval.
+ */
+export async function emitActivityMarker(input: {
+  phase: "before" | "after" | "failure";
+  sessionId: string;
+  callId: string;
+  directory: string;
+  surface: "cli" | "ide";
+}): Promise<void> {
+  const payload = JSON.stringify({
+    hook_event_name: `tool.execute.${input.phase}`,
+    sessionID: input.sessionId,
+    callID: input.callId,
+    directory: input.directory,
+    timestamp: new Date().toISOString(),
+  });
+  const cli = await cliPath();
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  const operation = hash(`${input.sessionId}\0${input.callId}`);
+  const kind = input.phase === "before" ? "ToolStart" : "ToolEnd";
+  const expectedId = hash(`activity-v3\0kilo-code\0${input.sessionId}\0${operation}\0${kind}`);
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(cli, ["ai", "activity-hook", "--adapter", "kilo-code", "--surface", input.surface], { stdio: ["pipe", "pipe", "ignore"] });
+    let stdout = "";
+    const timer = setTimeout(() => { child.kill(); reject(new Error("activity_handoff_timeout")); }, 8_000);
+    child.stdout.on("data", chunk => {
+      stdout += chunk.toString();
+      if (Buffer.byteLength(stdout) > 16_384) { child.kill(); clearTimeout(timer); reject(new Error("activity_handoff_invalid_ack")); }
+    });
+    child.stdin.on("error", () => { clearTimeout(timer); reject(new Error("activity_handoff_write_failed")); });
+    child.once("error", () => { clearTimeout(timer); reject(new Error("activity_handoff_unavailable")); });
+    child.once("close", code => {
+      clearTimeout(timer);
+      try {
+        const ack = JSON.parse(stdout).acknowledgement;
+        if (code !== 0 || ack?.schema_version !== 3 || ack.event_id !== expectedId || ack.durable !== true || !["accepted", "duplicate"].includes(ack.status)) throw new Error();
+        resolve();
+      } catch { reject(new Error("activity_handoff_not_durable")); }
+    });
+    child.stdin.end(payload);
+  });
 }
 
 function runMetadataCommand(command: string, payload: string): Promise<void> {

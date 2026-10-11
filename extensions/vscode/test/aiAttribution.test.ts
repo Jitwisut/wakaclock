@@ -65,6 +65,19 @@ describe("AiAttributionStore.classify — correlation window", () => {
 
     expect(result.attribution).toBe("unattributed");
   });
+  it("does not overwrite an unreadable cursor or acknowledge a failed checkpoint", async () => {
+    await writeSidecar("/project/a.ts",100);
+    const cursor=path.join(homeDir,".wakaclock","ai-events.cursor.json");
+    await fs.writeFile(cursor,"invalid record retained");
+    const corrupt=new AiAttributionStore(homeDir);
+    await expect(corrupt.classify("/project/a.ts",100000,3,1)).rejects.toThrow("sidecar_cursor_unreadable_or_corrupt");
+    expect(await fs.readFile(cursor,"utf8")).toBe("invalid record retained");
+    expect(corrupt.checkpointHealth().errorCode).toBe("sidecar_cursor_unreadable_or_corrupt");
+    await fs.rm(cursor);await fs.mkdir(cursor);
+    const blocked=new AiAttributionStore(homeDir);
+    await expect(blocked.classify("/project/a.ts",100000,3,1)).rejects.toThrow("sidecar_cursor_unreadable_or_corrupt");
+    expect((await fs.stat(cursor)).isDirectory()).toBe(true);
+  });
 });
 
 describe("AiAttributionStore — sidecar v2 incremental transport", () => {
@@ -306,4 +319,6 @@ describe("F0-02 reproducer — ai-coverage-gap-audit-2026-09-05.md gap #1", () =
       expect(actual).toEqual({ ai_added: 4, human_added: 0, unattributed_added: 6 });
     }
   );
+
+
 });

@@ -3,6 +3,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 
 const ALLOWED_TARGETS = new Set([
   "darwin-x64",
@@ -47,6 +48,39 @@ const manifest = {
   binary,
   sha256,
 };
+if (process.env.INTERNAL_CANDIDATE === "1") {
+  if (!/^[0-9a-f]{40}$/.test(process.env.SOURCE_COMMIT || "")) throw new Error("Internal candidates require a full source commit.");
+  manifest.sourceCommit = process.env.SOURCE_COMMIT;
+  manifest.buildProfile = "release";
+  manifest.releaseChannel = "internal";
+  manifest.signing = "unsigned";
+  manifest.capabilities = ["editor_durable_ack_v1", "activity_envelope_v3", "persistent_runtime_intent_v1", "native_activity_hook_v1"];
+  const repository = path.resolve(root, "../..");
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim();
+  if (head !== manifest.sourceCommit) throw new Error("candidate_source_commit_mismatch");
+  const sourceFiles = execFileSync("git", ["ls-files", "backend/api", "extensions/vscode/src", "extensions/vscode/scripts", "extensions/ai-agents", "extensions/vscode/tsconfig.json", "extensions/vscode/package.json", "extensions/vscode/package-lock.json"], { cwd: repository, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }).trim().split("\n").filter(name => name && !name.includes("/target/"));
+  const sourceInputs = {};
+  for (const name of sourceFiles.sort()) {
+    const committed = execFileSync("git", ["show", `${head}:${name}`], { cwd: repository, maxBuffer: 16 * 1024 * 1024 });
+    const observed = fs.readFileSync(path.join(repository, name));
+    if (!observed.equals(committed)) throw new Error("candidate_source_input_changed");
+    sourceInputs[name] = crypto.createHash("sha256").update(observed).digest("hex");
+  }
+  manifest.sourceTreeDigest = crypto.createHash("sha256").update(JSON.stringify(sourceInputs)).digest("hex");
+  manifest.compiledSha256 = {};
+  function recordCompiled(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) recordCompiled(absolute);
+      else if (entry.isFile() && entry.name.endsWith(".js")) {
+        const relative = path.relative(root, absolute).split(path.sep).join("/");
+        manifest.compiledSha256[relative] = crypto.createHash("sha256").update(fs.readFileSync(absolute)).digest("hex");
+      }
+    }
+  }
+  recordCompiled(path.join(root, "out", "src"));
+  if (!Object.keys(manifest.compiledSha256).length) throw new Error("candidate_compiled_inputs_missing");
+}
 fs.mkdirSync(path.dirname(path.join(root, "resources", "cli-manifest.json")), { recursive: true });
 fs.writeFileSync(
   path.join(root, "resources", "cli-manifest.json"),

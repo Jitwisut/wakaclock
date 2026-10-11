@@ -21,6 +21,8 @@ mod ai_setup;
 mod broker;
 mod capture_service;
 mod delivery_service;
+mod native_hooks;
+mod runtime_service;
 mod team_context_capture;
 mod tool_snapshot;
 use tool_snapshot::{AiToolInput, ToolSnapshot, WorkspaceChange};
@@ -127,6 +129,15 @@ struct Cli {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum Commands {
+    Runtime {
+        #[command(subcommand)]
+        action: RuntimeAction,
+    },
+    /// Offline capability/scope handshake; never probes or drains the server.
+    JournalScope,
+    /// Accept metadata batches from stdin into the durable queue, with per-ID ACK.
+    HeartbeatBatch,
+    JournalHealth,
     Heartbeat {
         #[arg(short, long)]
         entity: String,
@@ -422,6 +433,42 @@ enum DeliveryAction {
 }
 
 #[derive(Subcommand)]
+enum RuntimeAction {
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    Pause {
+        #[arg(long, default_value = "all")]
+        component: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Resume {
+        #[arg(long, default_value = "all")]
+        component: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Install {
+        #[arg(long)]
+        component: String,
+    },
+    Upgrade {
+        #[arg(long)]
+        component: String,
+    },
+    Rollback {
+        #[arg(long)]
+        component: String,
+    },
+    Uninstall {
+        #[arg(long)]
+        component: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum CaptureAction {
     Run {
         #[arg(long)]
@@ -545,6 +592,25 @@ enum AgentAction {
 
 #[derive(Subcommand)]
 enum AiAction {
+    /// Normalize provider stdin transiently and durably accept metadata markers.
+    ActivityHook {
+        #[arg(long)]
+        adapter: String,
+        #[arg(long)]
+        surface: String,
+        /// Emit the provider's neutral hook response after durable acceptance.
+        #[arg(long, default_value_t = false)]
+        hook_output: bool,
+    },
+    /// Install metadata activity hooks without installing a background service.
+    ActivitySetup {
+        #[arg(long)]
+        adapter: String,
+        #[arg(long, default_value_t = false)]
+        yes: bool,
+        #[arg(long, default_value_t = false)]
+        uninstall: bool,
+    },
     /// Report transcript discovery state for each supported agent, without reading or
     /// sending anything.
     Status {
@@ -736,7 +802,7 @@ enum ConfigAction {
     /// Remove the saved API key (heartbeats fall back to the unauthenticated user_id)
     ClearKey,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct ExtraHeartbeatInput {
     entity: String,
     #[serde(default)]
@@ -1197,6 +1263,21 @@ fn apply_env_overrides(config: &mut Config) -> Result<(), String> {
 
 async fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
+    let creates_capture = matches!(
+        &cli.command,
+        Commands::Heartbeat { .. }
+            | Commands::Ai {
+                action: AiAction::ActivityHook { .. }
+                    | AiAction::Emit { .. }
+                    | AiAction::ToolBefore { .. }
+                    | AiAction::ToolAfter { .. }
+                    | AiAction::SessionStart { .. }
+                    | AiAction::SessionEnd { .. }
+            }
+    );
+    if creates_capture && wakaclock_core::runtime::paused("capture") {
+        return Err(AppError::RuntimePaused.into());
+    }
     let mut config = Config::load();
 
     if let Err(error) = apply_env_overrides(&mut config) {
@@ -1221,6 +1302,179 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let api_client = ApiClient::new(config.clone())?;
 
     match cli.command {
+        Commands::JournalHealth => {
+            let mut input = String::new();
+            io::stdin().take(8193).read_to_string(&mut input)?;
+            if input.len() > 8192 {
+                return Err("journal_health_too_large".into());
+            }
+            let observation: wakaclock_core::editor_health::JournalObservation =
+                serde_json::from_str(&input).map_err(|_| "journal_health_invalid")?;
+            wakaclock_core::editor_health::save(
+                &wakaclock_core::runtime::directory()?,
+                &api_client.queue_scope(),
+                &observation,
+            )?;
+            println!(
+                "{}",
+                serde_json::json!({"status":"accepted","metadata_only":true})
+            );
+        }
+        Commands::Runtime { action } => {
+            let runtime_dir = wakaclock_core::runtime::directory()?;
+            std::fs::create_dir_all(&runtime_dir)?;
+            let controller_lock = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(runtime_dir.join("runtime-controller.lock"))?;
+            controller_lock.lock_exclusive()?;
+            match &action {
+                RuntimeAction::Install { component } | RuntimeAction::Upgrade { component } => {
+                    println!("{}", runtime_service::install(component)?);
+                    return Ok(());
+                }
+                RuntimeAction::Rollback { component } => {
+                    println!("{}", runtime_service::rollback(component)?);
+                    return Ok(());
+                }
+                RuntimeAction::Uninstall { component } => {
+                    println!("{}", runtime_service::uninstall(component)?);
+                    return Ok(());
+                }
+                _ => {}
+            }
+            let (component, running) = match action {
+                RuntimeAction::Status { .. } => (None, false),
+                RuntimeAction::Pause { component, .. } => (Some(component), false),
+                RuntimeAction::Resume { component, .. } => (Some(component), true),
+                _ => unreachable!("service operations returned above"),
+            };
+            let mut resumed_services = Vec::new();
+            let state = if let Some(component) = component {
+                if running && config.api_key.as_deref().is_none_or(str::is_empty) {
+                    return Err("runtime_identity_unconfirmed".into());
+                }
+                let previous = wakaclock_core::runtime::read()?;
+                if running {
+                    for service in ["capture", "delivery"] {
+                        if component == "all" || component == service {
+                            runtime_service::validate_resume_installed(service)?;
+                        }
+                    }
+                    if component == "all" || component == "backend-local" {
+                        runtime_service::validate_resume_backend_local(&config.server_url)?;
+                    }
+                }
+                let desired = wakaclock_core::runtime::set_at(
+                    &wakaclock_core::runtime::directory()?,
+                    &component,
+                    running,
+                    Utc::now().timestamp(),
+                )?;
+                if running {
+                    let resumed = (|| -> Result<(), Box<dyn Error>> {
+                        if component == "all" || component == "backend-local" {
+                            resumed_services
+                                .push(runtime_service::resume_backend_local(&config.server_url)?);
+                        }
+                        for service in ["capture", "delivery"] {
+                            if component == "all" || component == service {
+                                resumed_services.push(runtime_service::resume_installed(service)?);
+                            }
+                        }
+                        Ok(())
+                    })();
+                    if let Err(error) = resumed {
+                        for service in ["capture", "delivery", "backend-local"] {
+                            if (component == "all" || component == service)
+                                && previous.desired.get(service) == Some(&false)
+                            {
+                                wakaclock_core::runtime::set_at(
+                                    &wakaclock_core::runtime::directory()?,
+                                    service,
+                                    false,
+                                    Utc::now().timestamp(),
+                                )?;
+                            }
+                        }
+                        return Err(error);
+                    }
+                }
+                desired
+            } else {
+                wakaclock_core::runtime::read()?
+            };
+            println!(
+                "{}",
+                serde_json::json!({"desired":state,"capture":capture_service::status(),"delivery":delivery_service::status(),"build":build_identity(),"resumed_services":resumed_services})
+            );
+        }
+        Commands::JournalScope => {
+            let scope = api_client.queue_scope();
+            let recoverable_scope_ids = Queue::open()?
+                .verified_editor_journal_scopes(&scope)?
+                .iter()
+                .map(journal_scope_id)
+                .collect::<Vec<_>>();
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"capabilities":["editor_durable_ack_v1","activity_envelope_v3","persistent_runtime_intent_v1","native_activity_hook_v1"],
+                "scope_id":journal_scope_id(&scope),"owner_confirmed":config.api_key.is_some(),"recoverable_scope_ids":recoverable_scope_ids,
+                "build":build_identity()})
+            );
+        }
+        Commands::HeartbeatBatch => {
+            let mut input = String::new();
+            io::stdin()
+                .take(8 * 1024 * 1024 + 1)
+                .read_to_string(&mut input)?;
+            if input.len() > 8 * 1024 * 1024 {
+                return Err("journal_batch_too_large".into());
+            }
+            let envelope: serde_json::Value = serde_json::from_str(&input)?;
+            let scope = api_client.queue_scope();
+            let queue = Queue::open()?;
+            let requested_scope = envelope["scope_id"]
+                .as_str()
+                .ok_or("journal_scope_unconfirmed")?;
+            let verified_recovery = queue
+                .verified_editor_journal_scopes(&scope)?
+                .iter()
+                .any(|old| journal_scope_id(old) == requested_scope);
+            let items = envelope["items"]
+                .as_array()
+                .filter(|v| v.len() <= 100)
+                .ok_or("journal_batch_invalid")?;
+            if envelope["schema_version"] != 1
+                || (requested_scope != journal_scope_id(&scope) && !verified_recovery)
+                || config.api_key.is_none()
+            {
+                return Err("journal_scope_unconfirmed".into());
+            }
+            let results = items
+                .iter()
+                .map(|item| {
+                    let id = item["heartbeat_id"].as_str().unwrap_or_default();
+                    let result = accept_journal_item(&config, &queue, &scope, item);
+                    let (status, code) = match result {
+                        Ok(true) => ("accepted", None),
+                        Ok(false) => ("duplicate", None),
+                        Err(AppError::Validation(_)) => (
+                            "permanent_rejection",
+                            Some("invalid_metadata_or_id_conflict"),
+                        ),
+                        Err(_) => ("recoverable_rejection", Some("durable_queue_write_failed")),
+                    };
+                    serde_json::json!({"heartbeat_id":id,"status":status,"error_code":code})
+                })
+                .collect::<Vec<_>>();
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"scope_id":requested_scope,"results":results})
+            );
+        }
         Commands::Heartbeat {
             entity,
             entity_type,
@@ -2158,6 +2412,60 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
         }
         Commands::Ai { action } => match action {
+            AiAction::ActivitySetup {
+                adapter,
+                yes,
+                uninstall,
+            } => {
+                println!(
+                    "{}",
+                    ai_setup::native_activity_setup(&adapter, yes, uninstall)?
+                );
+            }
+            AiAction::ActivityHook {
+                adapter,
+                surface,
+                hook_output,
+            } => {
+                let mut bytes = Vec::new();
+                io::stdin()
+                    .take(2 * 1024 * 1024 + 1)
+                    .read_to_end(&mut bytes)?;
+                if bytes.len() > 2 * 1024 * 1024 {
+                    return Err("activity_hook_input_too_large".into());
+                }
+                let raw: serde_json::Value =
+                    serde_json::from_slice(&bytes).map_err(|_| "activity_hook_invalid_json")?;
+                let mut normalized = wakaclock_core::ai::native_activity::normalize_hook(
+                    &adapter,
+                    &surface,
+                    &raw,
+                    Utc::now(),
+                    &Uuid::new_v4().to_string(),
+                )
+                .map_err(io::Error::other)?;
+                // Discard raw contents before entering the inbox/network pipeline.
+                drop(raw);
+                bytes.fill(0);
+                drop(bytes);
+                let acknowledgement = if let Some(event) = normalized.event.take() {
+                    capture_service::submit_activity_v3(&config, &api_client, event).await?
+                } else {
+                    serde_json::json!({"status":"unavailable","durable":false})
+                };
+                if hook_output {
+                    if adapter == "cline" {
+                        println!("{{\"cancel\":false}}");
+                    } else {
+                        println!("{{}}");
+                    }
+                } else {
+                    println!(
+                        "{}",
+                        serde_json::json!({"acknowledgement":acknowledgement,"observation":normalized})
+                    );
+                }
+            }
             AiAction::Status { json } => print_ai_status(json)?,
             AiAction::Topology { root, json } => print_ai_topology(root.as_deref(), json)?,
             AiAction::Capabilities { json } => print_ai_capabilities(json)?,
@@ -2183,6 +2491,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 from_start,
                 transcript,
             } => {
+                if !dry_run && wakaclock_core::runtime::paused("capture") {
+                    return Err(AppError::RuntimePaused.into());
+                }
                 if transcript.is_some() && agent.is_none() {
                     return Err("--transcript requires --agent".into());
                 }
@@ -3527,6 +3838,7 @@ fn collect_ai_diagnostics_v2(upload: bool) -> Result<AiDiagnosticsReportV2, Box<
 /// git SHA and build time are baked in by `build.rs`; `version` is the crate
 /// version. `git_sha` / `build_time` are the literal string `"unknown"` when the
 /// binary was built outside a git checkout.
+#[derive(Serialize)]
 struct BuildIdentity {
     version: &'static str,
     git_sha: &'static str,
@@ -6732,6 +7044,13 @@ async fn run_ai_emit(
     // New project activity never passes through the file-edit v1 adapter.
     // Older envelopes retain their original validation and field semantics.
     let wire: serde_json::Value = serde_json::from_str(&stdin)?;
+    if wire.get("schema_version").and_then(|v| v.as_u64()) == Some(3) {
+        let event: wakaclock_core::ai::activity::BrokerActivityEventV3 =
+            serde_json::from_value(wire).map_err(|_| "invalid activity v3 envelope")?;
+        let ack = capture_service::submit_activity_v3(config, api_client, event).await?;
+        println!("{ack}");
+        return Ok(());
+    }
     if wire.get("schema_version").and_then(|v| v.as_u64()) == Some(2) {
         let event: wakaclock_core::ai::activity::BrokerActivityEventV2 =
             serde_json::from_value(wire).map_err(|_| "invalid activity v2 envelope")?;
@@ -7240,6 +7559,106 @@ fn build_heartbeat(
     is_write: bool,
     extra: Option<ExtraHeartbeatInput>,
 ) -> Result<Heartbeat, Box<dyn Error>> {
+    build_heartbeat_with_observation(
+        config,
+        entity,
+        entity_type,
+        project_override,
+        alternate_project,
+        category,
+        is_write,
+        (extra, true),
+    )
+}
+
+fn journal_scope_id(scope: &wakaclock_core::queue::QueueScope) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("{}\0{}", scope.destination, scope.owner).as_bytes())
+    )
+}
+
+fn accept_journal_item(
+    config: &Config,
+    queue: &Queue,
+    scope: &wakaclock_core::queue::QueueScope,
+    item: &serde_json::Value,
+) -> Result<bool, AppError> {
+    let invalid = || AppError::Validation("invalid_journal_metadata".into());
+    let extra: ExtraHeartbeatInput = serde_json::from_value(item.clone()).map_err(|_| invalid())?;
+    let known = serde_json::to_value(&extra).map_err(AppError::Serde)?;
+    if item
+        .as_object()
+        .ok_or_else(invalid)?
+        .keys()
+        .any(|key| known.get(key).is_none())
+        || extra.heartbeat_id.as_deref().is_none_or(str::is_empty)
+        || extra
+            .time
+            .is_none_or(|time| !time.is_finite() || time <= 0.0)
+        || extra
+            .active_seconds
+            .is_some_and(|seconds| !seconds.is_finite() || seconds < 0.0)
+        || extra
+            .activity_segments
+            .iter()
+            .any(|s| !s.start.is_finite() || !s.end.is_finite() || s.end < s.start)
+    {
+        return Err(invalid());
+    }
+    let input_hash = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(item).map_err(AppError::Serde)?)
+    );
+    let entity_type = extra
+        .entity_type
+        .as_deref()
+        .map(EntityType::from_str)
+        .transpose()
+        .map_err(|_| invalid())?
+        .unwrap_or(EntityType::File);
+    let category = extra
+        .category
+        .as_deref()
+        .map(Category::from_str)
+        .transpose()
+        .map_err(|_| invalid())?
+        .unwrap_or(Category::Coding);
+    let mut heartbeat = build_heartbeat_with_observation(
+        config,
+        &extra.entity.clone(),
+        entity_type,
+        extra.project.clone(),
+        extra.alternate_project.clone(),
+        category,
+        extra.write.unwrap_or(false),
+        (Some(extra), false),
+    )
+    .map_err(|_| invalid())?;
+    ensure_activity_segment(&mut heartbeat);
+    heartbeat.enforce_attribution_policy();
+    heartbeat.validate().map_err(AppError::Validation)?;
+    apply_plugin_user_agent(&mut heartbeat, Some("wakaclock-vscode/journal-v1"));
+    queue.accept_editor_handoff(
+        &serde_json::to_value(heartbeat).map_err(AppError::Serde)?,
+        scope,
+        &input_hash,
+    )
+}
+
+// Existing callers retain live enrichment. Journal replay must never read today's
+// file/branch to manufacture historical measurement/context.
+fn build_heartbeat_with_observation(
+    config: &Config,
+    entity: &str,
+    entity_type: EntityType,
+    project_override: Option<String>,
+    alternate_project: Option<String>,
+    category: Category,
+    is_write: bool,
+    observation: (Option<ExtraHeartbeatInput>, bool),
+) -> Result<Heartbeat, Box<dyn Error>> {
+    let (extra, inspect_current) = observation;
     let entity_path = normalize_entity(entity)?;
     let mut heartbeat = Heartbeat::new(
         config.user_id,
@@ -7248,7 +7667,9 @@ fn build_heartbeat(
         "wakaclock-cli/1.0".to_string(),
     );
 
-    let git_info = git::discover(&entity_path);
+    let git_info = inspect_current
+        .then(|| git::discover(&entity_path))
+        .flatten();
     // WakaTime order: an explicit `--project` override, then the repository, then the
     // editor's `--alternate-project` (its workspace folder name), then non-Git markers.
     // The stat-walk repository check backs up `gix`, so a workspace folder opened on a
@@ -7273,7 +7694,7 @@ fn build_heartbeat(
     heartbeat.editor = detect_editor();
 
     let entity_file = Path::new(&entity_path);
-    if entity_file.exists() {
+    if inspect_current && entity_file.exists() {
         heartbeat.lines = Some(count_file_lines(entity_file)?);
         if let Some(ast) = detect_file(entity_file)? {
             heartbeat.language = Some(ast.language.clone());

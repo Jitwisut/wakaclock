@@ -80,5 +80,20 @@ export function deliveryHealth(
       message = 'Capture details not available or capture is disabled. Update/check the local collector.';
     }
   }
+  const journals = devices.map((device) => device.capture?.editor_journal);
+  if (journals.some((journal) => journal && (journal.dead_letter > 0 || ['corrupt', 'write_failure', 'locked'].includes(journal.status)))) {
+    state = 'critical';
+    message = 'Editor capture needs attention. Durable journal or handoff failed; queued data is retained.';
+  } else if (state === 'complete') {
+    if (journals.some((journal) => !journal || journal.pending == null)) {
+      state = 'unknown'; message = 'Editor journal details not available. Completion remains unconfirmed.';
+    } else if (journals.some((journal) => journal && (journal.status === 'stale' || now - Date.parse(journal.last_observed_at) > 300_000))) {
+      state = 'stale'; message = 'Editor journal status is stale. Check the local client.';
+    } else if (journals.some((journal) => journal && journal.status !== 'ready')) {
+      state = 'unavailable'; message = 'Editor capture is paused or unavailable. Existing data is retained.';
+    } else if (journals.some((journal) => (journal?.pending ?? 0) > 0)) {
+      state = 'pending'; message = 'Editor activity awaits durable CLI handoff. An empty server queue does not confirm completeness.';
+    }
+  }
   return { incomplete: state !== 'complete', state, pending, deadLetter, message };
 }

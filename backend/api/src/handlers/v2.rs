@@ -94,6 +94,7 @@ pub struct CapabilityData {
     pub delivery_snapshot_versions: Vec<u8>,
     pub capture_activity_versions: Vec<u8>,
     pub capture_status_supported: bool,
+    pub editor_journal_status_supported: bool,
     pub team_weekly_aggregates_supported: bool,
     pub team_measurement_health_supported: bool,
     pub session_context_versions: Vec<u8>,
@@ -805,8 +806,9 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
         CapabilityData {
             api_version: "2",
             delivery_snapshot_versions: vec![1, 2],
-            capture_activity_versions: vec![2],
+            capture_activity_versions: vec![2, 3],
             capture_status_supported: true,
+            editor_journal_status_supported: true,
             team_weekly_aggregates_supported: state.config.team_enabled && state.postgres.is_some(),
             team_measurement_health_supported: state.postgres.is_some(),
             session_context_versions: if state.config.team_enabled && state.postgres.is_some() {
@@ -1344,8 +1346,15 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
     if let Some(capture) = &snapshot.capture {
         if snapshot.schema_version != 2
             || capture.schema_version != 1
-            || !["fresh", "unavailable", "parser_failure", "disabled"]
-                .contains(&capture.status.as_str())
+            || ![
+                "fresh",
+                "unavailable",
+                "parser_failure",
+                "disabled",
+                "paused_by_user",
+                "stale",
+            ]
+            .contains(&capture.status.as_str())
             || capture.pending > MAX_COUNTER
             || capture.parser_errors > MAX_COUNTER
             || capture.captured_at > now + Duration::minutes(5)
@@ -1354,6 +1363,14 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
                 .is_some_and(|v| v > capture.captured_at)
         {
             return Err(ApiError::bad_request("invalid capture health snapshot"));
+        }
+        if capture.editor_journal.as_ref().is_some_and(|journal| {
+            !journal.validate()
+                || journal.pending.is_some_and(|n| n > MAX_COUNTER)
+                || journal.dead_letter > MAX_COUNTER
+                || journal.last_observed_at > now + Duration::minutes(5)
+        }) {
+            return Err(ApiError::bad_request("invalid editor journal health"));
         }
     }
     Ok(())
@@ -4132,6 +4149,7 @@ mod delivery_snapshot_tests {
         let mut snapshot = available(2);
         let at = snapshot.captured_at;
         snapshot.capture = Some(wakaclock_core::queue::CaptureHealthSnapshot {
+            editor_journal: None,
             schema_version: 1,
             captured_at: at,
             enabled: true,

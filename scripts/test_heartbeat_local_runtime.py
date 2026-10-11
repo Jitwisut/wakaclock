@@ -15,6 +15,29 @@ spec.loader.exec_module(runtime)
 
 
 class RecoveryBindingTests(unittest.TestCase):
+    def test_paused_install_does_not_probe_docker(self):
+        with patch.object(runtime,'backend_paused',return_value=True), patch.object(runtime,'verify_binding') as verify, patch.object(runtime,'docker') as docker:
+            with self.assertRaises(runtime.RuntimePaused):runtime.install()
+            verify.assert_not_called();docker.assert_not_called()
+
+    def test_resume_rejects_unproven_supervisor_without_launching_anything(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home=Path(directory); runtime_dir=home/'runtime';runtime_dir.mkdir();(runtime_dir/'supervisor.py').write_text('fixture-only')
+            binding=home/'binding.json';binding.write_text(json.dumps({'account_verified':True,'canonical_data_verified':True,'supervisor_sha256':'wrong'}))
+            with patch.object(runtime,'RUNTIME',runtime_dir),patch.object(runtime,'MANIFEST',binding),patch.object(runtime,'backend_paused',return_value=False),patch.object(runtime.subprocess,'run') as command,patch.object(runtime,'docker') as docker:
+                with self.assertRaisesRegex(ValueError,'backend_resume_identity_or_build_unconfirmed'):runtime.resume()
+                command.assert_not_called();docker.assert_not_called()
+    def test_persistent_pause_never_opens_docker_or_dependencies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home=Path(directory); state=home/'backend-state.json'
+            (home/'runtime-desired.json').write_text(json.dumps({'schema_version':1,'desired':{'backend-local':False}}))
+            with patch.object(runtime,'HOME_DIR',home), patch.object(runtime,'STATE',state), \
+                    patch.object(runtime,'docker') as docker, patch.object(runtime.subprocess,'Popen') as start, \
+                    patch.object(runtime.subprocess,'run') as command, patch.object(runtime,'healthy',return_value=False):
+                runtime.run(once=True)
+            docker.assert_not_called(); start.assert_not_called(); command.assert_not_called()
+            self.assertEqual(json.loads(state.read_text())['error_code'],'paused_by_user')
+
     def test_reinstall_enables_persistently_disabled_service_before_bootstrap(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); home=root/'home'; runtime_dir=home/'.wakaclock/runtime'

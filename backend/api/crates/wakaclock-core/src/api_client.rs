@@ -651,6 +651,14 @@ impl ApiClient {
             queue: &queue,
             owner: lease_owner.clone(),
         };
+        if crate::runtime::paused("delivery") {
+            return Ok(SendReport::queued(
+                0,
+                deduped,
+                original_count,
+                Some("paused_by_user".into()),
+            ));
+        }
         if pending.is_empty() {
             self.schedule_delivery_snapshot(false);
             return Ok(SendReport::queued(0, deduped, original_count, None));
@@ -698,6 +706,12 @@ impl ApiClient {
         };
 
         match send_result {
+            Err(AppError::RuntimePaused) => Ok(SendReport::queued(
+                0,
+                deduped,
+                original_count,
+                Some("paused_by_user".into()),
+            )),
             Ok(()) => {
                 for (id, _) in &pending {
                     queue.remove(*id)?;
@@ -814,6 +828,7 @@ impl ApiClient {
                                 sent += 1;
                                 queued -= 1;
                             }
+                            Err(AppError::RuntimePaused) => break,
                             Err(item_error) => {
                                 self.record_delivery_failure(&queue, &item_error);
                                 if is_retryable_heartbeat_delivery_error(&item_error)
@@ -857,6 +872,12 @@ impl ApiClient {
     }
 
     pub async fn flush_queue(&self) -> AppResult<FlushReport> {
+        if crate::runtime::paused("delivery") {
+            return Ok(FlushReport {
+                flushed: 0,
+                stopped_because: Some("paused_by_user".into()),
+            });
+        }
         let queue = Queue::open()?;
         self.flush_queue_inner(&queue, false).await
     }
@@ -894,6 +915,9 @@ impl ApiClient {
     /// its own presence lease via the SSE stream). Best-effort: the caller decides how to
     /// treat a failure, since a missed presence ping should never affect time tracking.
     pub async fn presence_heartbeat(&self) -> AppResult<()> {
+        if crate::runtime::paused("delivery") {
+            return Err(AppError::RuntimePaused);
+        }
         let response = self
             .client
             .post(format!(
@@ -998,6 +1022,9 @@ impl ApiClient {
         &self,
         records: &[AiUsageRecord],
     ) -> AppResult<AiUsageIngestReportV2> {
+        if crate::runtime::paused("delivery") {
+            return Err(AppError::RuntimePaused);
+        }
         let response = self
             .client
             .post(format!("{}/api/v1/ai/usage", self.config.server_url))
@@ -1051,6 +1078,9 @@ impl ApiClient {
         timezone: Option<&str>,
         apply: bool,
     ) -> AppResult<RepairDayReport> {
+        if crate::runtime::paused("delivery") {
+            return Err(AppError::RuntimePaused);
+        }
         let response = self
             .client
             .post(format!("{}/api/v1/repair/day", self.config.server_url))
@@ -1075,6 +1105,9 @@ impl ApiClient {
         &self,
         request: &AiIdentityRepairRequest,
     ) -> AppResult<AiIdentityRepairReport> {
+        if crate::runtime::paused("delivery") {
+            return Err(AppError::RuntimePaused);
+        }
         let response = self
             .client
             .post(format!(
@@ -1102,6 +1135,9 @@ impl ApiClient {
         timezone: &str,
         candidates: &[Value],
     ) -> AppResult<Value> {
+        if crate::runtime::paused("delivery") {
+            return Err(AppError::RuntimePaused);
+        }
         let response = self
             .client
             .post(format!(
@@ -1163,9 +1199,21 @@ impl ApiClient {
         queue: &Queue,
         accepted_direct: bool,
     ) -> AppResult<FlushReport> {
+        if crate::runtime::paused("delivery") {
+            return Ok(FlushReport {
+                flushed: 0,
+                stopped_because: Some("paused_by_user".into()),
+            });
+        }
         let scope = self.queue_scope();
         let lease_owner = uuid::Uuid::new_v4().to_string();
-        let recovery = std::env::var("WAKACLOCK_RECOVERY_PROBE").as_deref() == Ok("1");
+        let recovery = match std::env::var("WAKACLOCK_RECOVERY_PROBE") {
+            Ok(value) => value == "1",
+            Err(_) => crate::runtime::directory()
+                .ok()
+                .and_then(|d| fs::read_to_string(d.join("delivery-recovery-enabled")).ok())
+                .is_some_and(|v| v.trim() == "1"),
+        };
         let recovery_probe = recovery && queue.prepare_recovery_scoped(&scope)?;
         let pending = queue.claim_batch_scoped(&scope, &lease_owner)?;
         let _claim = QueueClaimGuard {
@@ -1216,6 +1264,9 @@ impl ApiClient {
 
         let main_delivery_accepted = delivery.is_ok();
         match delivery {
+            Err(AppError::RuntimePaused) => {
+                stopped_because = Some("paused_by_user".into());
+            }
             Ok(()) => {
                 for (id, _) in &pending {
                     queue.remove(*id)?;
@@ -1261,6 +1312,10 @@ impl ApiClient {
                             queue.remove(*id)?;
                             flushed += 1;
                         }
+                        Err(AppError::RuntimePaused) => {
+                            stopped_because = Some("paused_by_user".into());
+                            break;
+                        }
                         Err(item_error) => {
                             stopped_because.get_or_insert_with(|| item_error.to_string());
                             self.record_delivery_failure(queue, &item_error);
@@ -1305,7 +1360,7 @@ impl ApiClient {
         // heartbeat is known to exist and the live server advertises this exact
         // version. Keep failures in the outbox; a retry must never create a second
         // line-count set or erase the original time heartbeat.
-        if supports_line_metrics {
+        if supports_line_metrics && !crate::runtime::paused("delivery") {
             for (id, correction) in queue.pending_line_measurements_scoped(&scope, 500)? {
                 match self.post_json("/api/v1/heartbeats", &correction).await {
                     Ok(()) => queue.remove_pending_line_measurement(id)?,
@@ -1343,6 +1398,9 @@ impl ApiClient {
     /// queue, reserve at most one upload per minute, and send in the background so
     /// diagnostics never delays heartbeat collection or delivery.
     fn schedule_delivery_snapshot(&self, _delivery_succeeded: bool) {
+        if crate::runtime::paused("delivery") {
+            return;
+        }
         let scope = self.queue_scope();
         let client = self.client.clone();
         let url = format!(
@@ -1350,6 +1408,7 @@ impl ApiClient {
             self.config.server_url.trim_end_matches('/')
         );
         tokio::spawn(async move {
+            let snapshot_scope = scope.clone();
             let snapshot = tokio::task::spawn_blocking(move || {
                 let queue = Queue::open()?;
                 queue.capture_delivery_snapshot_scoped(&scope)
@@ -1368,27 +1427,28 @@ impl ApiClient {
                 }
             };
             let capabilities_url = url.replace("/me/delivery-status", "/capabilities");
-            let v2 = match client
+            let capabilities = match client
                 .get(capabilities_url)
                 .timeout(Duration::from_secs(3))
                 .send()
                 .await
             {
-                Ok(response) => response
-                    .json::<Value>()
-                    .await
-                    .ok()
-                    .and_then(|v| v.pointer("/data/delivery_snapshot_versions").cloned())
-                    .and_then(|v| {
-                        v.as_array()
-                            .map(|a| a.iter().any(|v| v.as_u64() == Some(2)))
-                    })
-                    .unwrap_or(false),
-                Err(_) => false,
+                Ok(response) => response.json::<Value>().await.unwrap_or(Value::Null),
+                Err(_) => Value::Null,
             };
+            let v2 = capabilities
+                .pointer("/data/delivery_snapshot_versions")
+                .and_then(Value::as_array)
+                .is_some_and(|a| a.iter().any(|v| v.as_u64() == Some(2)));
+            if attach_capture_health(&mut snapshot, &capabilities, &snapshot_scope, v2).is_err() {
+                return;
+            }
             if !v2 {
                 snapshot.schema_version = 1;
                 snapshot.details = None;
+            }
+            if crate::runtime::paused("delivery") {
+                return;
             }
             let result = client
                 .post(url)
@@ -1405,6 +1465,9 @@ impl ApiClient {
     /// Fail closed while offline or talking to a pre-activity receiver. The
     /// capture inbox is retained independently until a supported receiver returns.
     pub async fn capture_activity_supported(&self) -> bool {
+        self.capture_activity_version_supported(2).await
+    }
+    pub async fn capture_activity_version_supported(&self, version: u64) -> bool {
         let response = self
             .client
             .get(format!("{}/api/v2/capabilities", self.config.server_url))
@@ -1419,7 +1482,7 @@ impl ApiClient {
                 .and_then(|v| v.pointer("/data/capture_activity_versions").cloned())
                 .and_then(|v| {
                     v.as_array()
-                        .map(|a| a.iter().any(|v| v.as_u64() == Some(2)))
+                        .map(|a| a.iter().any(|v| v.as_u64() == Some(version)))
                 })
                 .unwrap_or(false),
             _ => false,
@@ -1447,33 +1510,7 @@ impl ApiClient {
                 snapshot.schema_version = 1;
                 snapshot.details = None;
             }
-            if v2
-                && capabilities
-                    .pointer("/data/capture_status_supported")
-                    .and_then(Value::as_bool)
-                    == Some(true)
-            {
-                if let Some(path) =
-                    dirs::home_dir().map(|p| p.join(".wakaclock/capture-state.json"))
-                {
-                    if let Ok(bytes) = std::fs::read(path) {
-                        if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
-                            use sha2::{Digest, Sha256};
-                            let scope = self.queue_scope();
-                            let expected = format!(
-                                "{:x}",
-                                Sha256::digest(
-                                    format!("{}\0{}", scope.destination, scope.owner).as_bytes()
-                                )
-                            );
-                            if value["scope"].as_str() == Some(&expected) {
-                                let filtered = serde_json::json!({"schema_version":1,"captured_at":value["checked_at"],"enabled":value["enabled"],"status":value["status"],"last_scan_success_at":value["last_scan_success_at"],"parser_errors":value["parser_errors"],"pending":value["pending"]});
-                                snapshot.capture = serde_json::from_value(filtered).ok();
-                            }
-                        }
-                    }
-                }
-            }
+            attach_capture_health(&mut snapshot, &capabilities, &self.queue_scope(), v2)?;
             self.post_json("/api/v2/me/delivery-status", &snapshot)
                 .await?;
         }
@@ -1518,6 +1555,12 @@ impl ApiClient {
 
     /// Delivery-only tick: no transcript scanning and no synthetic activity.
     pub async fn drain_delivery_tick(&self) -> AppResult<FlushReport> {
+        if crate::runtime::paused("delivery") {
+            return Ok(FlushReport {
+                flushed: 0,
+                stopped_because: Some("paused_by_user".into()),
+            });
+        }
         let started = Instant::now();
         let mut total = FlushReport {
             flushed: 0,
@@ -1538,6 +1581,9 @@ impl ApiClient {
     }
 
     async fn post_json<T: Serialize + ?Sized>(&self, path: &str, payload: &T) -> AppResult<()> {
+        if crate::runtime::paused("delivery") {
+            return Err(AppError::RuntimePaused);
+        }
         let response = self
             .client
             .post(format!("{}{}", self.config.server_url, path))
@@ -2004,6 +2050,66 @@ struct FilteredHeartbeats {
 /// it matters most.
 ///
 /// Pure and I/O-free so the rule can be tested without touching `~/.wakaclock`.
+fn attach_capture_health(
+    snapshot: &mut crate::queue::DeliveryQueueSnapshot,
+    capabilities: &Value,
+    scope: &crate::queue::QueueScope,
+    v2: bool,
+) -> AppResult<()> {
+    if v2
+        && capabilities
+            .pointer("/data/capture_status_supported")
+            .and_then(Value::as_bool)
+            == Some(true)
+    {
+        if let Some(path) = dirs::home_dir().map(|p| p.join(".wakaclock/capture-state.json")) {
+            if let Ok(bytes) = std::fs::read(path) {
+                if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+                    use sha2::{Digest, Sha256};
+                    let scope = scope.clone();
+                    let expected = format!(
+                        "{:x}",
+                        Sha256::digest(
+                            format!("{}\0{}", scope.destination, scope.owner).as_bytes()
+                        )
+                    );
+                    if value["scope"].as_str() == Some(&expected) {
+                        let filtered = serde_json::json!({"schema_version":1,"captured_at":value["checked_at"],"enabled":value["enabled"],"status":value["status"],"last_scan_success_at":value["last_scan_success_at"],"parser_errors":value["parser_errors"],"pending":value["pending"]});
+                        snapshot.capture = serde_json::from_value(filtered).ok();
+                    }
+                }
+            }
+        }
+    }
+    if v2
+        && capabilities
+            .pointer("/data/editor_journal_status_supported")
+            .and_then(Value::as_bool)
+            == Some(true)
+    {
+        let health = crate::editor_health::read(
+            &crate::runtime::directory()?,
+            &scope.clone(),
+            chrono::Utc::now(),
+        );
+        let capture = snapshot
+            .capture
+            .get_or_insert(crate::queue::CaptureHealthSnapshot {
+                schema_version: 1,
+                captured_at: chrono::Utc::now(),
+                enabled: false,
+                status: "unavailable".into(),
+                last_scan_success_at: None,
+                parser_errors: 0,
+                pending: 0,
+                editor_journal: None,
+            });
+        capture.editor_journal = Some(health);
+    }
+
+    Ok(())
+}
+
 fn filter_duplicates_against(
     heartbeats: Vec<Heartbeat>,
     last_by_entity: &mut HashMap<String, Heartbeat>,

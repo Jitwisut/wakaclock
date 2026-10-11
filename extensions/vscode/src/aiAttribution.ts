@@ -125,6 +125,9 @@ export class AiAttributionStore {
   private readonly seenOperationKeys = new Set<string>();
   private cursorLoaded = false;
   private refreshInFlight?: Promise<void>;
+  private checkpointFailure?: string;
+
+  public checkpointHealth(): { errorCode?: string } { return { errorCode: this.checkpointFailure }; }
 
   public constructor(homeDir = os.homedir()) {
     this.logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
@@ -508,12 +511,12 @@ export class AiAttributionStore {
     let snapshot: Partial<PersistedSidecarCursor>;
     try {
       const decoded: unknown = JSON.parse(await fs.readFile(this.cursorPath, "utf8"));
-      if (!decoded || typeof decoded !== "object") {
-        return;
-      }
+      if (!decoded || typeof decoded !== "object") throw new Error("sidecar_cursor_invalid");
       snapshot = decoded as Partial<PersistedSidecarCursor>;
-    } catch {
-      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      this.checkpointFailure = "sidecar_cursor_unreadable_or_corrupt";
+      throw new Error(this.checkpointFailure);
     }
     const readOffset = snapshot.read_offset;
     if (
@@ -522,7 +525,8 @@ export class AiAttributionStore {
       !Number.isSafeInteger(readOffset) ||
       readOffset < 0
     ) {
-      return;
+      this.checkpointFailure = "sidecar_cursor_unreadable_or_corrupt";
+      throw new Error(this.checkpointFailure);
     }
     this.readOffset = readOffset;
     this.fileIdentity =
@@ -638,6 +642,7 @@ export class AiAttributionStore {
     if (!this.cursorLoaded) {
       return;
     }
+    if (this.checkpointFailure === "sidecar_cursor_unreadable_or_corrupt") throw new Error(this.checkpointFailure);
     const partialBytes = this.partialLine.length;
     const stableOffset = Math.max(0, this.readOffset - partialBytes);
     const snapshot: PersistedSidecarCursor = {
@@ -655,21 +660,23 @@ export class AiAttributionStore {
     const temporaryPath = `${this.cursorPath}.${process.pid}.tmp`;
     try {
       await fs.mkdir(path.dirname(this.cursorPath), { recursive: true });
-      await fs.writeFile(temporaryPath, `${JSON.stringify(snapshot)}\n`, {
-        encoding: "utf8",
-        mode: 0o600
-      });
+      const file = await fs.open(temporaryPath, "w", 0o600);
+      try { await file.writeFile(`${JSON.stringify(snapshot)}\n`, "utf8"); await file.sync(); } finally { await file.close(); }
       await fs.rename(temporaryPath, this.cursorPath);
       await fs.chmod(this.cursorPath, 0o600);
+      if (process.platform !== "win32") {
+        const directory = await fs.open(path.dirname(this.cursorPath), "r");
+        try { await directory.sync(); } finally { await directory.close(); }
+      }
+      this.checkpointFailure = undefined;
     } catch {
-      // The sidecar remains usable if a read-only home or an interrupted atomic
-      // replace prevents checkpoint persistence; the in-memory reader still applies
-      // the same bounded, ordered rules for this extension process.
+      this.checkpointFailure = "sidecar_cursor_write_failed";
       try {
         await fs.rm(temporaryPath, { force: true });
       } catch {
-        // Ignore cleanup failures on the best-effort metadata checkpoint.
+        // The original cursor remains the last durable checkpoint.
       }
+      throw new Error(this.checkpointFailure);
     }
   }
 }
