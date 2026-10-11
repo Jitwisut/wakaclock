@@ -11,7 +11,15 @@ function report(
     storage: 'postgres',
     devices: [
       {
-        capture: { schema_version: 1, captured_at: new Date(now).toISOString(), enabled: true, status: 'fresh', last_scan_success_at: new Date(now).toISOString(), parser_errors: 0, pending: 0 },
+        capture: {
+          schema_version: 1,
+          captured_at: new Date(now).toISOString(),
+          enabled: true,
+          status: 'fresh',
+          last_scan_success_at: new Date(now).toISOString(),
+          parser_errors: 0,
+          pending: 0,
+        },
         schema_version: 2,
         age_seconds: 0,
         captured_at: new Date(now).toISOString(),
@@ -97,15 +105,23 @@ describe('delivery completeness', () => {
   it('does not confuse an empty delivery queue with complete capture', () => {
     const data = report();
     const capture = data.devices[0].capture!;
-    capture.parser_errors = 1; capture.status = 'parser_failure';
-    expect(deliveryHealth(data, false, now)).toMatchObject({state: 'critical', incomplete: true});
-    capture.parser_errors = 0; capture.status = 'fresh';
+    capture.parser_errors = 1;
+    capture.status = 'parser_failure';
+    expect(deliveryHealth(data, false, now)).toMatchObject({ state: 'critical', incomplete: true });
+    capture.parser_errors = 0;
+    capture.status = 'fresh';
     capture.captured_at = new Date(now - 301_000).toISOString();
     expect(deliveryHealth(data, false, now).state).toBe('stale');
-    capture.captured_at = new Date(now).toISOString(); capture.pending = 2;
+    capture.captured_at = new Date(now).toISOString();
+    capture.pending = 2;
     expect(deliveryHealth(data, false, now).incomplete).toBe(true);
     delete data.devices[0].capture;
-    expect(deliveryHealth(data, false, now)).toMatchObject({state: 'unknown', incomplete: true});
+    expect(deliveryHealth(data, false, now)).toMatchObject({ state: 'unknown', incomplete: true });
   });
+});
 
+it('treats a device that reports no dead-letter count as having none', () => {
+  const data = report();
+  delete (data.devices[0] as { dead_letter?: number }).dead_letter;
+  expect(deliveryHealth(data, false, now)).toMatchObject({ deadLetter: 0, state: 'complete' });
 });

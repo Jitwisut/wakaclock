@@ -8,8 +8,9 @@ import { getDurations } from '@/lib/wakaclock/endpoints';
 import { formatEpochRange, formatEpochTime, todayDateString } from '@/lib/wakaclock/format';
 import type { DurationBlock } from '@/lib/wakaclock/types';
 
+const delivery = vi.hoisted(() => ({ incomplete: false }));
 vi.mock('@/hooks/use-delivery-health', () => ({
-  useDeliveryHealth: () => ({ incomplete: false }),
+  useDeliveryHealth: () => delivery,
 }));
 vi.mock('@/lib/wakaclock/endpoints', () => ({ getDurations: vi.fn() }));
 const session = vi.hoisted(() => ({ userId: 'test-user' as null | string }));
@@ -18,6 +19,7 @@ vi.mock('@/lib/wakaclock/user-store', () => ({
 }));
 beforeEach(() => {
   session.userId = 'test-user';
+  delivery.incomplete = false;
 });
 
 it('uses UTC when the browser cannot resolve a timezone', async () => {
@@ -34,6 +36,19 @@ it('uses UTC when the browser cannot resolve a timezone', async () => {
   );
   await screen.findByText('No recorded sessions on this day');
   expect(getDurations).toHaveBeenCalledWith('test-user', todayDateString(), 'UTC');
+});
+
+it('says an empty day is incomplete while delivery is still catching up', async () => {
+  delivery.incomplete = true;
+  vi.mocked(getDurations).mockResolvedValue({ date: todayDateString(), total: 0, data: [] });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <DurationTimeline />
+    </QueryClientProvider>
+  );
+  await screen.findByText('No received sessions yet — data incomplete');
+  expect(screen.queryByText('No recorded sessions on this day')).toBeNull();
 });
 
 it('does not fetch private timeline data without an owner', () => {

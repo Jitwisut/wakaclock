@@ -4,11 +4,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TeamTrustPanel } from '@/app/dashboard/(auth)/wakaclock/teams/components/team-trust-panel';
 import { closedWeeks } from '@/lib/wakaclock/team-weeks';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
-const mocks = vi.hoisted(() => ({ health: vi.fn(), toast: vi.fn(), user: 'alice' }));
+const mocks = vi.hoisted(() => ({
+  health: vi.fn(),
+  toast: vi.fn(),
+  user: 'alice' as null | string,
+}));
 vi.mock('@/lib/wakaclock/team-endpoints', () => ({ getTeamMeasurementHealth: mocks.health }));
 vi.mock('sonner', () => ({ toast: mocks.toast }));
 vi.mock('@/lib/wakaclock/user-store', () => ({
-  useWakaclockUserStore: (s: (value: { userId: string }) => unknown) => s({ userId: mocks.user }),
+  useWakaclockUserStore: (s: (value: { userId: null | string }) => unknown) =>
+    s({ userId: mocks.user }),
 }));
 const state = (status: string) => ({ status, reason: 'snapshot', updated_at: null });
 const health = (status: string) => ({
@@ -89,4 +94,11 @@ describe('closed weekly reports and Trust', () => {
     view.rerender(ui('other'));
     expect(screen.queryByText('Your delivery: pending · snapshot')).not.toBeInTheDocument();
   });
+});
+
+it('does not read team health before the session has an owner', () => {
+  mocks.user = null;
+  const { ui } = setup();
+  render(ui());
+  expect(mocks.health).not.toHaveBeenCalled();
 });
