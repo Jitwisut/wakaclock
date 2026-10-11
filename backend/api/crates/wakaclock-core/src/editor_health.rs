@@ -26,6 +26,7 @@ impl EditorJournalHealth {
             "stopped",
             "handoff_pending",
             "incompatible",
+            "historical_incomplete",
         ]
         .contains(&self.status.as_str())
     }
@@ -106,6 +107,7 @@ pub fn read(directory: &Path, scope: &QueueScope, now: DateTime<Utc>) -> EditorJ
     let mut known = true;
     let priority = |status: &str| match status {
         "corrupt" | "write_failure" | "locked" => 5,
+        "historical_incomplete" => 4,
         "incompatible" => 4,
         "unavailable" => 3,
         "stale" => 2,
@@ -167,6 +169,7 @@ pub fn read(directory: &Path, scope: &QueueScope, now: DateTime<Utc>) -> EditorJ
         };
         if priority(effective) > priority(status) {
             status = match effective {
+                "historical_incomplete" => "historical_incomplete",
                 "corrupt" => "corrupt",
                 "write_failure" => "write_failure",
                 "locked" => "locked",

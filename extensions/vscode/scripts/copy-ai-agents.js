@@ -19,7 +19,10 @@ function main() {
 
   fs.rmSync(TARGET_DIR, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(TARGET_DIR), { recursive: true });
-  fs.cpSync(SOURCE_DIR, TARGET_DIR, { recursive: true });
+  fs.cpSync(SOURCE_DIR, TARGET_DIR, { recursive: true, filter: source => {
+    const name = path.basename(source);
+    return !["node_modules", "__pycache__", ".git", ".DS_Store"].includes(name) && !/\.(pyc|pyo)$/.test(name);
+  } });
   makeShellScriptsExecutable(TARGET_DIR);
 
   console.log(`copy-ai-agents: copied ${SOURCE_DIR} -> ${TARGET_DIR}`);

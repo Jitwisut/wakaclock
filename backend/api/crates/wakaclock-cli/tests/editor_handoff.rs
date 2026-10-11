@@ -195,3 +195,76 @@ fn failed_resume_preflight_keeps_persistent_pause() {
             .unwrap();
     assert_eq!(status["desired"]["desired"]["capture"], false);
 }
+
+#[test]
+fn receipt_inspection_reads_existing_ack_without_enqueue_or_scope_leak() {
+    let home = Home::new();
+    let scope: Value =
+        serde_json::from_slice(&home.command(&["journal-scope"], None).stdout).unwrap();
+    let batch = json!({"schema_version":1,"scope_id":scope["scope_id"],"items":[{"heartbeat_id":"receipt-fixture","time":1000.0,"entity":"fixture.rs","active_seconds":2.0}]});
+    assert!(home
+        .command(&["heartbeat-batch"], Some(&batch))
+        .status
+        .success());
+    let before = home.queue().len().unwrap();
+    let query = json!({"schema_version":1,"scope_id":scope["scope_id"],"ids":["receipt-fixture","missing"]});
+    let result = home.command(&["journal-receipts"], Some(&query));
+    assert!(result.status.success());
+    let result: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(result["results"][0]["status"], "accepted");
+    assert_eq!(result["results"][1]["status"], "missing");
+    assert!(result["results"][0]["input_hash"].as_str().unwrap().len() == 64);
+    assert_eq!(home.queue().len().unwrap(), before);
+    let foreign = json!({"schema_version":1,"scope_id":"foreign","ids":["receipt-fixture"]});
+    assert!(!home
+        .command(&["journal-receipts"], Some(&foreign))
+        .status
+        .success());
+    assert!(!String::from_utf8_lossy(&result.to_string().into_bytes()).contains("fixture.rs"));
+}
+
+#[test]
+fn idle_collector_reconciles_retained_producer_spool_without_new_activity() {
+    let home = Home::new();
+    let scope: Value =
+        serde_json::from_slice(&home.command(&["journal-scope"], None).stdout).unwrap();
+    let id = Uuid::new_v4().to_string();
+    let root = home
+        .0
+        .join(".wakaclock/native-producer-spool")
+        .join(scope["scope_id"].as_str().unwrap());
+    fs::create_dir_all(&root).unwrap();
+    let record = json!({"schema_version":1,"scope_id":scope["scope_id"],"adapter_id":"kimi-code-cli","execution_surface":"cli","observation_id":id,"observed_at":chrono::Utc::now(),"metadata":{"hook_event_name":"PreToolUse","session_id":"fixture-session","cwd":home.0,"tool_call_id":"fixture-operation"}});
+    let file = root.join(format!("{id}.json"));
+    fs::write(&file, record.to_string()).unwrap();
+    let first = home.command(&["capture", "run", "--once"], None);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let state: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(state["producer_spool"]["accepted"], 1);
+    assert!(!file.exists());
+    // Lost ACK/producer crash: replay exact original observation after inbox commit.
+    fs::write(&file, record.to_string()).unwrap();
+    let second = home.command(&["capture", "run", "--once"], None);
+    assert!(second.status.success());
+    let state: Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(state["producer_spool"]["accepted"], 1);
+    assert!(!file.exists());
+    // Invalid content and foreign scope remain recoverable, never silently removed.
+    let bad = root.join(format!("{}.json", Uuid::new_v4()));
+    fs::write(&bad, r#"{"prompt":"SENSITIVE"}"#).unwrap();
+    let foreign = home
+        .0
+        .join(".wakaclock/native-producer-spool")
+        .join("b".repeat(64));
+    fs::create_dir_all(&foreign).unwrap();
+    fs::write(foreign.join("retained.json"), record.to_string()).unwrap();
+    let third = home.command(&["capture", "run", "--once"], None);
+    assert!(third.status.success());
+    assert!(bad.exists());
+    assert!(foreign.join("retained.json").exists());
+    assert!(!String::from_utf8_lossy(&third.stdout).contains("SENSITIVE"));
+}

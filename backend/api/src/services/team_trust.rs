@@ -115,6 +115,27 @@ pub fn device_health(
             if !c.enabled || c.status != "fresh" || c.parser_errors > 0 || c.pending > 0 {
                 return Health::new("partial", "capture_not_ready", at, "own_account");
             }
+            let Some(spool) = &c.producer_spool else {
+                return Health::new(
+                    "unconfirmed",
+                    "producer_spool_evidence_missing",
+                    at,
+                    "own_account",
+                );
+            };
+            if spool.last_scan_success_at.is_none_or(|scan| {
+                !(0..=300).contains(&now.signed_duration_since(scan).num_seconds())
+            }) {
+                return Health::new(
+                    "unconfirmed",
+                    "producer_spool_observation_missing_or_stale",
+                    at,
+                    "own_account",
+                );
+            }
+            if spool.status != "observed" || spool.pending != Some(0) || spool.failure_count > 0 {
+                return Health::new("partial", "producer_spool_not_ready", at, "own_account");
+            }
         } else {
             let Some(details) = &d.details else {
                 return Health::new("unconfirmed", "delivery_details_missing", at, "own_account");
@@ -277,6 +298,7 @@ mod tests {
         assert_eq!(health(s.clone(), false).reason, "dead_letter");
         s.capture = Some(CaptureHealthSnapshot {
             editor_journal: None,
+            producer_spool: None,
             schema_version: 1,
             captured_at: now,
             enabled: true,
@@ -292,6 +314,20 @@ mod tests {
                 pending: Some(0),
                 dead_letter: 0,
                 last_observed_at: now,
+            });
+        assert_eq!(
+            health(s.clone(), true).reason,
+            "producer_spool_evidence_missing"
+        );
+        s.capture.as_mut().unwrap().producer_spool =
+            Some(wakaclock_core::queue::ProducerSpoolHealth {
+                status: "observed".into(),
+                pending: Some(0),
+                accepted: 0,
+                failure_count: 0,
+                paused_excluded: 0,
+                last_scan_success_at: Some(now),
+                error_code: None,
             });
         assert_eq!(health(s.clone(), true).status, "observed");
         s.capture

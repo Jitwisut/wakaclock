@@ -497,6 +497,11 @@ async fn run_inner(
         let now = Utc::now();
         let mut scanned = 0;
         let mut parsed = 0;
+        let producer_spool = if dry_run {
+            json!({"status":"not_checked_dry_run"})
+        } else {
+            crate::native_spool::drain(&dir, &config, &api).await
+        };
         let mut errors = 0;
         let mut parser_failure_codes = BTreeSet::new();
         let mut queued = 0;
@@ -715,7 +720,7 @@ async fn run_inner(
             .transpose()?
             .unwrap_or(0)
             .saturating_add(unread_sources);
-        let state = json!({"schema_version":2,"checked_at":now,"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),"binary_sha256":binary_hash,"scope":scope,"enabled":true,"status":if errors>0{"parser_failure"}else if scanned==0{"unavailable"}else{"fresh"},"last_scan_success_at":if errors==0&&scanned>0{json!(now)}else{status()["last_scan_success_at"].clone()},"parser_errors":errors,"parser_failure_codes":parser_failure_codes,"pending":pending,"unread_sources":unread_sources,"scanned_sources":scanned,"parsed_records":parsed,"queued":queued,"receiver_capable":capability,"last_event_at":last_event,"tick_elapsed_ms":began.elapsed().as_millis(),"incomplete":errors>0||pending>0||scanned==0,"dry_run":dry_run,"candidates":if dry_run{Some(candidates)}else{None}});
+        let state = json!({"schema_version":2,"checked_at":now,"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),"binary_sha256":binary_hash,"scope":scope,"enabled":true,"status":if errors>0{"parser_failure"}else if scanned==0{"unavailable"}else{"fresh"},"last_scan_success_at":if errors==0&&scanned>0{json!(now)}else{status()["last_scan_success_at"].clone()},"parser_errors":errors,"parser_failure_codes":parser_failure_codes,"pending":pending,"unread_sources":unread_sources,"scanned_sources":scanned,"parsed_records":parsed,"queued":queued,"receiver_capable":capability,"producer_spool":producer_spool,"last_event_at":last_event,"tick_elapsed_ms":began.elapsed().as_millis(),"incomplete":errors>0||pending>0||scanned==0||producer_spool["pending"].as_u64().is_some_and(|n|n>0)||producer_spool["status"]=="unavailable"||producer_spool["status"]=="capture_failure","dry_run":dry_run,"candidates":if dry_run{Some(candidates)}else{None}});
         if !dry_run {
             save(&dir.join("capture-state.json"), &state)?;
         }

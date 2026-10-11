@@ -22,6 +22,8 @@ mod broker;
 mod capture_service;
 mod delivery_service;
 mod native_hooks;
+mod native_spool;
+mod opencode_plugin;
 mod runtime_service;
 mod team_context_capture;
 mod tool_snapshot;
@@ -138,6 +140,8 @@ enum Commands {
     /// Accept metadata batches from stdin into the durable queue, with per-ID ACK.
     HeartbeatBatch,
     JournalHealth,
+    /// Inspect existing handoff receipts without modifying the queue.
+    JournalReceipts,
     Heartbeat {
         #[arg(short, long)]
         entity: String,
@@ -598,6 +602,15 @@ enum AiAction {
         adapter: String,
         #[arg(long)]
         surface: String,
+        /// Stable producer observation identity for replay of metadata spools.
+        #[arg(long)]
+        observation_id: Option<String>,
+        /// Original producer observation time, preserved through durable replay.
+        #[arg(long)]
+        observed_at: Option<chrono::DateTime<Utc>>,
+        /// Refuse replay into a different account/origin scope.
+        #[arg(long)]
+        scope_id: Option<String>,
         /// Emit the provider's neutral hook response after durable acceptance.
         #[arg(long, default_value_t = false)]
         hook_output: bool,
@@ -610,6 +623,8 @@ enum AiAction {
         yes: bool,
         #[arg(long, default_value_t = false)]
         uninstall: bool,
+        #[arg(long)]
+        contract: Option<String>,
     },
     /// Report transcript discovery state for each supported agent, without reading or
     /// sending anything.
@@ -1420,9 +1435,51 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .collect::<Vec<_>>();
             println!(
                 "{}",
-                serde_json::json!({"schema_version":1,"capabilities":["editor_durable_ack_v1","activity_envelope_v3","persistent_runtime_intent_v1","native_activity_hook_v1"],
+                serde_json::json!({"schema_version":1,"capabilities":["editor_durable_ack_v1","activity_envelope_v3","persistent_runtime_intent_v1","native_activity_hook_v1","editor_receipts_read_v1","native_producer_spool_v1"],
                 "scope_id":journal_scope_id(&scope),"owner_confirmed":config.api_key.is_some(),"recoverable_scope_ids":recoverable_scope_ids,
                 "build":build_identity()})
+            );
+        }
+        Commands::JournalReceipts => {
+            let mut input = String::new();
+            io::stdin()
+                .take(1024 * 1024 + 1)
+                .read_to_string(&mut input)?;
+            if input.len() > 1024 * 1024 {
+                return Err("journal_receipts_too_large".into());
+            }
+            let envelope: serde_json::Value = serde_json::from_str(&input)?;
+            let scope = api_client.queue_scope();
+            if config.api_key.is_none()
+                || envelope["schema_version"] != 1
+                || envelope["scope_id"].as_str().is_none()
+            {
+                return Err("journal_scope_unconfirmed".into());
+            }
+            let ids = envelope["ids"]
+                .as_array()
+                .filter(|ids| ids.len() <= 100)
+                .ok_or("journal_receipts_invalid")?
+                .iter()
+                .map(|id| {
+                    id.as_str()
+                        .filter(|id| !id.is_empty() && id.len() <= 512)
+                        .map(str::to_owned)
+                        .ok_or("journal_receipts_invalid")
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let requested = envelope["scope_id"]
+                .as_str()
+                .ok_or("journal_scope_unconfirmed")?;
+            let results = Queue::inspect_verified_editor_receipts_at(
+                &Queue::db_path(),
+                &scope,
+                requested,
+                &ids,
+            )?;
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"scope_id":requested,"results":results})
             );
         }
         Commands::HeartbeatBatch => {
@@ -2416,17 +2473,42 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 adapter,
                 yes,
                 uninstall,
+                contract,
             } => {
                 println!(
                     "{}",
-                    ai_setup::native_activity_setup(&adapter, yes, uninstall)?
+                    ai_setup::native_activity_setup(
+                        &adapter,
+                        yes,
+                        uninstall,
+                        &api_client.queue_scope(),
+                        config.api_key.is_some(),
+                        contract.as_deref()
+                    )?
                 );
             }
             AiAction::ActivityHook {
                 adapter,
                 surface,
                 hook_output,
+                observation_id,
+                observed_at,
+                scope_id,
             } => {
+                if scope_id
+                    .as_ref()
+                    .is_some_and(|id| id != &journal_scope_id(&api_client.queue_scope()))
+                {
+                    return Err("activity_producer_scope_mismatch".into());
+                }
+                let observation_id = observation_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+                if observation_id.len() > 128
+                    || !observation_id
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                {
+                    return Err("activity_observation_identity_invalid".into());
+                }
                 let mut bytes = Vec::new();
                 io::stdin()
                     .take(2 * 1024 * 1024 + 1)
@@ -2440,8 +2522,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     &adapter,
                     &surface,
                     &raw,
-                    Utc::now(),
-                    &Uuid::new_v4().to_string(),
+                    observed_at.unwrap_or_else(Utc::now),
+                    &observation_id,
                 )
                 .map_err(io::Error::other)?;
                 // Discard raw contents before entering the inbox/network pipeline.

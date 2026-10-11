@@ -31,6 +31,17 @@ pub fn normalize_hook(
         operation_identity: "unavailable",
     };
     let string = |name: &str| raw[name].as_str().filter(|s| !s.is_empty());
+    let antigravity_operation = if adapter == "antigravity" {
+        let key = match string("hook_event_name") {
+            Some("PostToolUse") => "stepIdx",
+            Some("PostInvocation") => "invocationNum",
+            Some("Stop") => "executionNum",
+            _ => "",
+        };
+        raw[key].as_u64().map(|n| format!("{key}:{n}"))
+    } else {
+        None
+    };
     let (session, root, hook, provider_operation, kind) = match adapter {
         "claude-code" | "copilot" => {
             let hook = string("hook_event_name").ok_or("activity_hook_schema_unknown")?;
@@ -38,6 +49,7 @@ pub fn normalize_hook(
                 "PreToolUse" => ActivityKind::ToolStart,
                 "PostToolUse" | "PostToolUseFailure" => ActivityKind::ToolEnd,
                 "Stop" => ActivityKind::MessageComplete,
+                "SessionEnd" if adapter == "copilot" => ActivityKind::TaskEnd,
                 "SessionStart" | "UserPromptSubmit" if adapter == "copilot" => {
                     ActivityKind::TaskStart
                 }
@@ -48,6 +60,26 @@ pub fn normalize_hook(
                 string("cwd"),
                 hook,
                 string("tool_use_id"),
+                kind,
+            )
+        }
+        "kimi-code-cli" => {
+            let hook = string("hook_event_name").ok_or("activity_hook_schema_unknown")?;
+            let kind = match hook {
+                "PreToolUse" => ActivityKind::ToolStart,
+                "PostToolUse" | "PostToolUseFailure" => ActivityKind::ToolEnd,
+                "SessionStart" | "TurnStarted" => ActivityKind::TaskStart,
+                "SessionEnd" | "Interrupt" => ActivityKind::TaskEnd,
+                "Stop" | "StopFailure" => ActivityKind::MessageComplete,
+                _ => return Ok(unavailable("activity_hook_not_an_activity_marker")),
+            };
+            // PreToolUse is before permission checks. An operation ID is for
+            // deduplication only, never proof of permission-free execution time.
+            (
+                string("session_id"),
+                string("cwd"),
+                hook,
+                string("tool_call_id"),
                 kind,
             )
         }
@@ -98,6 +130,28 @@ pub fn normalize_hook(
                 .and_then(|roots| roots[0].as_str());
             // Tool names do not identify individual invocations.
             (string("taskId"), root, hook, None, kind)
+        }
+        "antigravity" => {
+            let hook = string("hook_event_name").ok_or("activity_hook_schema_unknown")?;
+            let kind = match hook {
+                "PostToolUse" => ActivityKind::ToolEnd,
+                "PostInvocation" => ActivityKind::MessageComplete,
+                "Stop" if raw["fullyIdle"] == true => ActivityKind::TaskEnd,
+                "Stop" => ActivityKind::MessageComplete,
+                // PreToolUse permission decisions are not overridden by tracking.
+                _ => return Ok(unavailable("activity_hook_not_an_activity_marker")),
+            };
+            let root = raw["workspacePaths"]
+                .as_array()
+                .filter(|roots| roots.len() == 1)
+                .and_then(|roots| roots[0].as_str());
+            (
+                string("conversationId"),
+                root,
+                hook,
+                antigravity_operation.as_deref(),
+                kind,
+            )
         }
         "kilo-code" | "opencode" => {
             let hook = string("hook_event_name").ok_or("activity_hook_schema_unknown")?;
@@ -155,6 +209,7 @@ pub fn normalize_hook(
     let status = if hook.ends_with("Failure")
         || hook.ends_with(".failure")
         || adapter == "cline" && hook == "PostToolUse" && raw["postToolUse"]["success"] == false
+        || adapter == "antigravity" && raw["failed"] == true
     {
         Some("failed".into())
     } else {
@@ -200,6 +255,47 @@ pub fn normalize_hook(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn antigravity_native_step_identity_is_metadata_only_and_not_a_measured_interval() {
+        let at = Utc::now();
+        let raw = serde_json::json!({"hook_event_name":"PostToolUse","conversationId":"session","workspacePaths":[std::env::temp_dir()],"stepIdx":7,"failed":true,"toolCall":{"args":"SENSITIVE"},"error":"SENSITIVE"});
+        let a = normalize_hook("antigravity", "ide", &raw, at, "first-observation").unwrap();
+        let b = normalize_hook("antigravity", "ide", &raw, at, "second-observation").unwrap();
+        let event = a.event.unwrap();
+        assert_eq!(event.activity.event_id, b.event.unwrap().activity.event_id);
+        assert!(event.activity.started_at.is_none());
+        assert_eq!(event.activity.status.as_deref(), Some("failed"));
+        assert!(!serde_json::to_string(&event).unwrap().contains("SENSITIVE"));
+        let pre = normalize_hook(
+            "antigravity",
+            "ide",
+            &serde_json::json!({"hook_event_name":"PreToolUse"}),
+            at,
+            "observation",
+        )
+        .unwrap();
+        assert!(pre.event.is_none());
+    }
+    #[test]
+    fn kimi_markers_exclude_permission_waits_and_contents() {
+        let at = Utc::now();
+        for hook in ["PreToolUse", "PostToolUseFailure", "Stop"] {
+            let marker = normalize_hook("kimi-code-cli", "cli", &serde_json::json!({"hook_event_name":hook,"session_id":"fixture-kimi","cwd":std::env::temp_dir(),"tool_call_id":"call","tool_input":{"command":"SENSITIVE"},"tool_output":"SENSITIVE","timestamp":at}), at, "observation").unwrap().event.unwrap();
+            assert!(marker.activity.started_at.is_none());
+            assert!(!serde_json::to_string(&marker)
+                .unwrap()
+                .contains("SENSITIVE"));
+        }
+        let wait = normalize_hook(
+            "kimi-code-cli",
+            "cli",
+            &serde_json::json!({"hook_event_name":"PermissionRequest"}),
+            at,
+            "observation",
+        )
+        .unwrap();
+        assert!(wait.event.is_none());
+    }
     #[test]
     fn native_markers_keep_failures_and_missing_identity_is_unavailable() {
         let at = Utc::now();

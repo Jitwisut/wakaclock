@@ -26,6 +26,8 @@ import type {
 import { appendSegment, MAX_ACTIVITY_GAP_MS, unionSeconds } from "./activity";
 import { randomUUID } from "node:crypto";
 import { HeartbeatJournal, type JournalHealth } from "./heartbeatJournal";
+import { validateEditorCheckpoint } from "./journalCheckpoint";
+import { journalHistory } from "./journalRecovery";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -117,6 +119,7 @@ export class HeartbeatBufferManager {
   private journal?: HeartbeatJournal<JournalCheckpoint>;
   private journalScope?: string;
   private journalError?: string;
+  private historicalIncomplete = false;
   private readonly rejections = new Map<string, string>();
   private readonly external = new Map<string, { entity: string; metadata: ExternalFileChangeMetadata; now: number; project?: string; workspaceRoot?: string }>();
   private readonly externalPayloads = new Map<string, ExtraHeartbeatPayload>();
@@ -137,18 +140,25 @@ export class HeartbeatBufferManager {
     };
     try {
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-      this.journal = new HeartbeatJournal<JournalCheckpoint>(path.join(directory, randomUUID()));
+      this.journal = new HeartbeatJournal<JournalCheckpoint>(path.join(directory, randomUUID()), validateEditorCheckpoint);
       for (const recoveryDirectory of [directory, ...verifiedRecoveryDirectories]) {
       if (!fs.existsSync(recoveryDirectory)) continue;
       for (const entry of fs.readdirSync(recoveryDirectory, { withFileTypes: true })) {
         if (!entry.isDirectory() || !fs.existsSync(path.join(recoveryDirectory, entry.name, "metadata.jsonl"))) continue;
         let previous: HeartbeatJournal<JournalCheckpoint>;
-        try { previous = new HeartbeatJournal<JournalCheckpoint>(path.join(recoveryDirectory, entry.name)); }
+        try { previous = new HeartbeatJournal<JournalCheckpoint>(path.join(recoveryDirectory, entry.name), validateEditorCheckpoint);
+          this.historicalIncomplete ||= journalHistory(path.join(recoveryDirectory, entry.name)).some(m => m.historicalIncomplete); }
         catch (error) {
           if (!(error instanceof Error) || error.message !== "journal_locked") this.journalError = "journal_recovery_ownership_unconfirmed";
           continue;
         }
         abandoned.push(previous);
+        if (previous.health().status !== "ready") {
+          // Inspect may show the verified prefix, but explicit Apply is the only
+          // authority to activate it. Never adopt a damaged journal automatically.
+          this.journalError = "journal_corrupt_recovery_source";
+          continue;
+        }
         const recovered = previous.read();
       if (recovered) {
         for (const [id, value] of recovered.external ?? []) importVerified(this.external, id, value);
@@ -179,17 +189,22 @@ export class HeartbeatBufferManager {
         else this.journalError = "journal_corrupt_recovery_source";
         previous.close();
       }
-    } catch { this.journalError = "journal_initialization_failed"; }
+    } catch { this.journalError ??= "journal_initialization_failed"; }
     finally { for (const previous of abandoned) previous.close(); }
   }
 
   public getJournalHealth(): JournalHealth | undefined {
     const sidecarFailure = this.aiAttributionStore.checkpointHealth().errorCode;
     const health = this.journalError ? { status: "write_failure" as const, pending: this.states.size + this.retrySnapshots.size, errorCode: this.journalError } : this.journal?.health();
-    return health ? { ...health, ...(sidecarFailure ? { status: "write_failure" as const, errorCode: sidecarFailure } : {}), deadLetter: this.rejections.size, handoffErrorCode: this.rejections.size ? "journal_dead_letter" : undefined } : undefined;
+    return health ? { ...health, historicalIncomplete: this.historicalIncomplete, ...(sidecarFailure ? { status: "write_failure" as const, errorCode: sidecarFailure } : {}), deadLetter: this.rejections.size, handoffErrorCode: this.rejections.size ? "journal_dead_letter" : undefined } : undefined;
   }
 
   public closeJournal(): void { this.journal?.close(); }
+  public async parkJournalForRecovery(directory: string): Promise<void> {
+    if (!this.journal?.ownsDirectory(directory)) return;
+    this.setCapturePaused(true);
+    await this.enqueueFlush(async () => { this.journal?.close(); this.journalError = "journal_recovery_parked"; });
+  }
 
   public rejectedJournalItems(): Array<{ id: string; errorCode: string; time?: number }> {
     return [...this.rejections].map(([id, errorCode]) => {

@@ -2076,6 +2076,16 @@ fn attach_capture_health(
                     if value["scope"].as_str() == Some(&expected) {
                         let filtered = serde_json::json!({"schema_version":1,"captured_at":value["checked_at"],"enabled":value["enabled"],"status":value["status"],"last_scan_success_at":value["last_scan_success_at"],"parser_errors":value["parser_errors"],"pending":value["pending"]});
                         snapshot.capture = serde_json::from_value(filtered).ok();
+                        if capabilities
+                            .pointer("/data/producer_spool_status_supported")
+                            .and_then(Value::as_bool)
+                            == Some(true)
+                        {
+                            if let Some(capture) = snapshot.capture.as_mut() {
+                                capture.producer_spool =
+                                    serde_json::from_value(value["producer_spool"].clone()).ok();
+                            }
+                        }
                     }
                 }
             }
@@ -2087,11 +2097,21 @@ fn attach_capture_health(
             .and_then(Value::as_bool)
             == Some(true)
     {
-        let health = crate::editor_health::read(
+        let mut health = crate::editor_health::read(
             &crate::runtime::directory()?,
             &scope.clone(),
             chrono::Utc::now(),
         );
+        if health.status == "historical_incomplete"
+            && capabilities
+                .pointer("/data/journal_recovery_status_supported")
+                .and_then(Value::as_bool)
+                != Some(true)
+        {
+            // Old receivers accept unavailable; a repaired writer must never
+            // turn unresolved history into a success, nor break status ingestion.
+            health.status = "unavailable".into();
+        }
         let capture = snapshot
             .capture
             .get_or_insert(crate::queue::CaptureHealthSnapshot {
@@ -2103,6 +2123,7 @@ fn attach_capture_health(
                 parser_errors: 0,
                 pending: 0,
                 editor_journal: None,
+                producer_spool: None,
             });
         capture.editor_journal = Some(health);
     }

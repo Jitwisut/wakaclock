@@ -74,6 +74,15 @@ export interface DeliveryStatusResponse {
       captured_at: string;
       enabled: boolean;
       last_scan_success_at: null | string;
+      producer_spool?: {
+        status: string;
+        pending: null | number;
+        accepted: number;
+        failure_count: number;
+        paused_excluded: number;
+        last_scan_success_at: null | string;
+        error_code?: null | string;
+      };
       editor_journal?: {
         status: string;
         pending: null | number;

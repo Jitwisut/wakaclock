@@ -95,6 +95,8 @@ pub struct CapabilityData {
     pub capture_activity_versions: Vec<u8>,
     pub capture_status_supported: bool,
     pub editor_journal_status_supported: bool,
+    pub journal_recovery_status_supported: bool,
+    pub producer_spool_status_supported: bool,
     pub team_weekly_aggregates_supported: bool,
     pub team_measurement_health_supported: bool,
     pub session_context_versions: Vec<u8>,
@@ -809,6 +811,8 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
             capture_activity_versions: vec![2, 3],
             capture_status_supported: true,
             editor_journal_status_supported: true,
+            journal_recovery_status_supported: true,
+            producer_spool_status_supported: true,
             team_weekly_aggregates_supported: state.config.team_enabled && state.postgres.is_some(),
             team_measurement_health_supported: state.postgres.is_some(),
             session_context_versions: if state.config.team_enabled && state.postgres.is_some() {
@@ -1363,6 +1367,13 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
                 .is_some_and(|v| v > capture.captured_at)
         {
             return Err(ApiError::bad_request("invalid capture health snapshot"));
+        }
+        if capture
+            .producer_spool
+            .as_ref()
+            .is_some_and(|spool| !spool.validate(now))
+        {
+            return Err(ApiError::bad_request("invalid producer spool health"));
         }
         if capture.editor_journal.as_ref().is_some_and(|journal| {
             !journal.validate()
@@ -4150,6 +4161,7 @@ mod delivery_snapshot_tests {
         let at = snapshot.captured_at;
         snapshot.capture = Some(wakaclock_core::queue::CaptureHealthSnapshot {
             editor_journal: None,
+            producer_spool: None,
             schema_version: 1,
             captured_at: at,
             enabled: true,
@@ -4159,6 +4171,30 @@ mod delivery_snapshot_tests {
             pending: 0,
         });
         assert!(validate_delivery_snapshot(&snapshot).is_ok());
+        snapshot.capture.as_mut().unwrap().producer_spool =
+            Some(wakaclock_core::queue::ProducerSpoolHealth {
+                status: "observed".into(),
+                pending: Some(0),
+                accepted: 1,
+                failure_count: 0,
+                paused_excluded: 0,
+                last_scan_success_at: Some(at),
+                error_code: None,
+            });
+        assert!(validate_delivery_snapshot(&snapshot).is_ok());
+        let mut producer_value = serde_json::to_value(&snapshot).unwrap();
+        producer_value["capture"]["producer_spool"]["response"] = serde_json::json!("SENSITIVE");
+        assert!(serde_json::from_value::<DeliveryQueueSnapshot>(producer_value).is_err());
+        snapshot
+            .capture
+            .as_mut()
+            .unwrap()
+            .producer_spool
+            .as_mut()
+            .unwrap()
+            .pending = Some(10_000_001);
+        assert!(validate_delivery_snapshot(&snapshot).is_err());
+        snapshot.capture.as_mut().unwrap().producer_spool = None;
         let mut value = serde_json::to_value(&snapshot).unwrap();
         value["capture"]["prompt"] = serde_json::json!("secret");
         assert!(serde_json::from_value::<DeliveryQueueSnapshot>(value).is_err());

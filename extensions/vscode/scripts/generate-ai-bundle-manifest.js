@@ -22,6 +22,7 @@ function collect(current, files) {
     a.name < b.name ? -1 : a.name > b.name ? 1 : 0
   )) {
     const full = path.join(current, entry.name);
+    if (["node_modules", "__pycache__", ".git", ".DS_Store"].includes(entry.name) || /\.(pyc|pyo)$/.test(entry.name)) continue;
     if (entry.isSymbolicLink()) throw new Error(`symlink in bundle: ${full}`);
     if (entry.isDirectory()) collect(full, files);
     else if (entry.isFile()) {

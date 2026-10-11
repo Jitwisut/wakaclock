@@ -103,6 +103,50 @@ pub struct DeliveryQueueSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProducerSpoolHealth {
+    pub status: String,
+    pub pending: Option<u32>,
+    #[serde(default)]
+    pub accepted: u32,
+    #[serde(default)]
+    pub failure_count: u32,
+    #[serde(default)]
+    pub paused_excluded: u32,
+    #[serde(default)]
+    pub last_scan_success_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+impl ProducerSpoolHealth {
+    pub fn validate(&self, now: DateTime<Utc>) -> bool {
+        [
+            "capture_failure",
+            "pending",
+            "observed",
+            "unconfirmed",
+            "unavailable",
+        ]
+        .contains(&self.status.as_str())
+            && self.pending.is_none_or(|n| n <= 10_000_000)
+            && self.accepted <= 10_000_000
+            && self.failure_count <= 10_000_000
+            && self.paused_excluded <= 10_000_000
+            && self
+                .last_scan_success_at
+                .is_none_or(|at| at <= now + chrono::Duration::minutes(5))
+            && self.error_code.as_deref().is_none_or(|code| {
+                [
+                    "producer_spool_symlink",
+                    "producer_cursor_symlink",
+                    "producer_spool_unreadable",
+                    "producer_scope_proof_unavailable",
+                ]
+                .contains(&code)
+            })
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CaptureHealthSnapshot {
     pub schema_version: u8,
     pub captured_at: DateTime<Utc>,
@@ -113,6 +157,8 @@ pub struct CaptureHealthSnapshot {
     pub pending: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor_journal: Option<crate::editor_health::EditorJournalHealth>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer_spool: Option<ProducerSpoolHealth>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -521,6 +567,85 @@ impl Queue {
         scope: &QueueScope,
     ) -> Result<(), AppError> {
         self.push_scoped_after(payload, scope, None)
+    }
+
+    /// Read-only receipt inspection. Does not create directories, migrate or drain.
+    pub fn inspect_editor_receipts_at(
+        path: &std::path::Path,
+        scope: &QueueScope,
+        ids: &[String],
+    ) -> Result<Vec<serde_json::Value>, AppError> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(AppError::Queue)?;
+        conn.busy_timeout(std::time::Duration::from_secs(2))
+            .map_err(AppError::Queue)?;
+        ids.iter().map(|id| {
+            let receipt: Option<(String, i64)> = conn.query_row(
+                "SELECT input_hash, accepted_at FROM editor_handoff_receipts WHERE destination=?1 AND owner_scope=?2 AND heartbeat_id=?3",
+                params![scope.destination, scope.owner, id], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).optional().map_err(AppError::Queue)?;
+            Ok(match receipt {
+                Some((hash, at)) => serde_json::json!({"heartbeat_id":id,"status":"accepted","input_hash":hash,"accepted_at":at}),
+                None => serde_json::json!({"heartbeat_id":id,"status":"missing"}),
+            })
+        }).collect()
+    }
+
+    /// Read-only reconciliation for a retained journal after API-key rotation.
+    /// Both origins and recorded numeric-owner proofs must match; no migration
+    /// or identity inference is performed by this inspection operation.
+    pub fn inspect_verified_editor_receipts_at(
+        path: &std::path::Path,
+        current: &QueueScope,
+        requested_scope_id: &str,
+        ids: &[String],
+    ) -> Result<Vec<serde_json::Value>, AppError> {
+        if crate::editor_health::scope_id(current) == requested_scope_id {
+            return Self::inspect_editor_receipts_at(path, current, ids);
+        }
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(AppError::Queue)?;
+        conn.busy_timeout(std::time::Duration::from_secs(2))
+            .map_err(AppError::Queue)?;
+        let _snapshot = conn.unchecked_transaction().map_err(AppError::Queue)?;
+        let mut statement = conn.prepare("SELECT old.credential_scope FROM credential_owner old JOIN credential_owner current ON old.destination=current.destination AND old.owner_id=current.owner_id WHERE current.destination=?1 AND current.credential_scope=?2 AND old.credential_scope!=?2").map_err(AppError::Queue)?;
+        let owners = statement
+            .query_map(params![current.destination, current.owner], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(AppError::Queue)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::Queue)?;
+        let scope = owners
+            .into_iter()
+            .map(|owner| QueueScope {
+                destination: current.destination.clone(),
+                owner,
+            })
+            .find(|scope| crate::editor_health::scope_id(scope) == requested_scope_id)
+            .ok_or_else(|| AppError::Validation("journal_scope_unconfirmed".into()))?;
+        let inspect = |scope: &QueueScope| -> Result<Vec<serde_json::Value>, AppError> {
+            ids.iter().map(|id| {
+                let receipt: Option<(String, i64)> = conn.query_row("SELECT input_hash,accepted_at FROM editor_handoff_receipts WHERE destination=?1 AND owner_scope=?2 AND heartbeat_id=?3",params![scope.destination,scope.owner,id],|row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(AppError::Queue)?;
+                Ok(match receipt { Some((hash,at)) => serde_json::json!({"heartbeat_id":id,"status":"accepted","input_hash":hash,"accepted_at":at}), None => serde_json::json!({"heartbeat_id":id,"status":"missing"}) })
+            }).collect()
+        };
+        let mut old = inspect(&scope)?;
+        let rebound = inspect(current)?;
+        for (previous, current) in old.iter_mut().zip(rebound) {
+            if previous["status"] == "accepted"
+                && current["status"] == "accepted"
+                && previous["input_hash"] != current["input_hash"]
+            {
+                return Err(AppError::Validation(
+                    "journal_receipt_scope_conflict".into(),
+                ));
+            }
+            if current["status"] == "accepted" {
+                *previous = current;
+            }
+        }
+        Ok(old)
     }
 
     /// ACK boundary for editor journals. Receipt and queue insertion commit together.
@@ -1956,7 +2081,7 @@ impl Queue {
         Ok(segments_for_day)
     }
 
-    fn db_path() -> PathBuf {
+    pub fn db_path() -> PathBuf {
         let home = dirs::home_dir().expect("หา home directory ไม่เจอ");
         home.join(".wakaclock").join("queue.db")
     }
@@ -2051,7 +2176,33 @@ mod tests {
         queue
             .accept_editor_handoff(&payload, &old, "original-input")
             .unwrap();
+        let ids = vec!["original-id".into()];
+        let original_scope_id = crate::editor_health::scope_id(&old);
+        assert_eq!(
+            Queue::inspect_verified_editor_receipts_at(&path, &new, &original_scope_id, &ids)
+                .unwrap()[0]["input_hash"],
+            "original-input"
+        );
+        assert!(Queue::inspect_verified_editor_receipts_at(
+            &path,
+            &other,
+            &original_scope_id,
+            &ids
+        )
+        .is_err());
+        assert!(Queue::inspect_verified_editor_receipts_at(
+            &path,
+            &origin,
+            &original_scope_id,
+            &ids
+        )
+        .is_err());
         queue.rebind_same_owner(&new, "account").unwrap();
+        assert_eq!(
+            Queue::inspect_verified_editor_receipts_at(&path, &new, &original_scope_id, &ids)
+                .unwrap()[0]["status"],
+            "accepted"
+        );
         assert!(!queue
             .accept_editor_handoff(&payload, &new, "original-input")
             .unwrap());

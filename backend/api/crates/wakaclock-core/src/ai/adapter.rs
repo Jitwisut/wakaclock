@@ -786,16 +786,15 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
         },
         AdapterManifest {
             id: "deep-code".to_string(),
-            // DeepSeek's standalone coding client is a distinct client when a
-            // future native integration is available.  Do not collapse it into
-            // Kilo/Codex merely because the model provider is the same.
-            provider: "deepseek".to_string(),
+            // Product identity must be confirmed by the owner; a model vendor
+            // name is not evidence for a standalone client integration.
+            provider: "unconfirmed".to_string(),
             executable: ExecutableDetection {
-                command_names: vec!["deep-code".to_string(), "deepseek".to_string()],
+                command_names: vec!["deep-code".to_string()],
                 version_arg: Some("--version".to_string()),
             },
             install: InstallStrategy::Manual {
-                instruction: "standalone DeepSeek client has no supported metadata hook yet; use an explicit MCP/native producer".to_string(),
+                instruction: "product_identity_unconfirmed: confirm the product before hook setup".to_string(),
             },
             native_hooks: no_hooks(),
             transcript_roots: vec![],

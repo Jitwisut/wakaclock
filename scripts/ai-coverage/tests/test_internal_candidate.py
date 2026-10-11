@@ -12,8 +12,9 @@ from verify_release_artifacts import ArtifactError, sha256_bytes
 from test_verify_release_artifacts import bundle_files, bundle_manifest
 
 COMMIT = 'a' * 40
-COMPILED = b'buffer.enableJournal(); cli.runtime(action); commands.registerCommand(`wakaclock.runtime${action}`);'
+COMPILED = b'buffer.enableJournal(); cli.runtime(action); commands.registerCommand(`wakaclock.runtime${action}`); registerJournalRecoveryCommands();'
 COMPILED_CLI = b'async acceptJournalBatch() { return runCli(["heartbeat-batch"]); }'
+COMPILED_RECOVERY = b'function applyJournalRecovery() {}'
 
 
 def fixture(path, target='win32-arm64', sensitive=False):
@@ -22,17 +23,18 @@ def fixture(path, target='win32-arm64', sensitive=False):
         header[:2]=b"MZ";struct.pack_into("<I",header,60,64);header[64:68]=b"PE\0\0";struct.pack_into("<H",header,68,0xAA64 if target.endswith("arm64") else 0x8664)
     else:
         header[:4]=b"\xcf\xfa\xed\xfe";struct.pack_into("<I",header,4,0x0100000C if target.endswith("arm64") else 0x01000007)
-    binary = bytes(header) + b'fixture binary editor_durable_ack_v1 ' + COMMIT.encode()
+    binary = bytes(header) + ' '.join(sorted(REQUIRED_CAPABILITIES)).encode() + COMMIT.encode()
     name = 'wakaclock.exe' if target.startswith('win32') else 'wakaclock'
     manifest = {'schemaVersion': 1, 'protocolVersion': 1, 'cliVersion': '0.1.0',
                 'target': target, 'binary': name, 'sha256': sha256_bytes(binary),
                 'sourceCommit': COMMIT, 'buildProfile': 'release', 'releaseChannel': 'internal',
-                'signing': 'unsigned', 'capabilities': sorted(REQUIRED_CAPABILITIES), 'sourceTreeDigest':'b'*64, 'compiledSha256':{'out/src/extension.js':sha256_bytes(COMPILED),'out/src/cli.js':sha256_bytes(COMPILED_CLI)}}
+                'signing': 'unsigned', 'capabilities': sorted(REQUIRED_CAPABILITIES), 'sourceTreeDigest':'b'*64, 'compiledSha256':{'out/src/extension.js':sha256_bytes(COMPILED),'out/src/cli.js':sha256_bytes(COMPILED_CLI),'out/src/journalRecovery.js':sha256_bytes(COMPILED_RECOVERY)}}
     with zipfile.ZipFile(path, 'w') as archive:
-        archive.writestr('extension/package.json', json.dumps({'version': '0.1.0', 'contributes':{'commands':[{'command':'wakaclock.runtimePause'},{'command':'wakaclock.runtimeResume'}]}}))
+        archive.writestr('extension/package.json', json.dumps({'version': '0.1.0', 'contributes':{'commands':[{'command':name} for name in ['wakaclock.runtimePause','wakaclock.runtimeResume','wakaclock.inspectJournal','wakaclock.prepareJournalRecovery','wakaclock.applyJournalRecovery','wakaclock.journalRecoveryHistory']]}}))
         archive.writestr('extension/resources/cli-manifest.json', json.dumps(manifest))
         archive.writestr('extension/out/src/extension.js', COMPILED)
         archive.writestr('extension/out/src/cli.js', COMPILED_CLI)
+        archive.writestr('extension/out/src/journalRecovery.js', COMPILED_RECOVERY)
         archive.writestr('extension/resources/bin/' + name, binary)
         for key, data in bundle_files().items():
             archive.writestr('extension/resources/ai-agents/' + key, data)
