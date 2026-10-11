@@ -30,6 +30,22 @@ impl HeartbeatService {
         }
     }
 
+    /// Account-bound identity readback; no payload or file metadata is exposed.
+    /// Missing/expired history and an unavailable repository remain unconfirmed.
+    pub async fn readback_identities(
+        &self,
+        user_id: Uuid,
+        records: &[(String, u32)],
+    ) -> Vec<serde_json::Value> {
+        let ids = records.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+        let observations = self.repo.readback_ids(user_id, &ids).await;
+        records.iter().map(|(id,revision)|{
+            let observed=observations.as_ref().ok().and_then(|rows|rows.iter().find(|r|&r.0==id));
+            let status=readback_status(*revision,observed.map(|r|(r.1,r.2)),observations.is_ok());
+            serde_json::json!({"heartbeat_id":id,"requested_revision":revision,"canonical_revision":observed.map(|r|r.1),"status":status,"comparison":"id_revision_only","confirmation":if ["found","superseded"].contains(&status){"canonical_observed"}else{"unconfirmed"}})
+        }).collect()
+    }
+
     /// Process incoming heartbeats และ insert ลง repository
     pub async fn process_heartbeats(
         &self,
@@ -578,6 +594,18 @@ fn ai_event_fingerprint(heartbeat: &Heartbeat) -> Option<String> {
 
 /// Normalize the lexical tail for the fingerprint conformance tests. The fingerprint
 /// is never used as authoritative ingestion identity.
+/// A current revision proves identity existence, never a matching file payload.
+fn readback_status(requested: u32, observed: Option<(u32, u64)>, available: bool) -> &'static str {
+    match observed {
+        Some((_, count)) if count > 1 => "conflict",
+        Some((revision, _)) if revision > requested => "superseded",
+        Some((revision, _)) if revision == requested => "found",
+        Some(_) => "missing",
+        None if !available => "unavailable",
+        None => "missing",
+    }
+}
+
 #[cfg(test)]
 fn comparable_entity_key(entity: &str) -> String {
     let normalized = entity.replace('\\', "/");
@@ -688,10 +716,22 @@ pub fn clamp_to_evidence_window(
 
 #[cfg(test)]
 mod tests {
-    use super::{ai_event_fingerprint, clamp_to_evidence_window, comparable_entity_key};
+    use super::{
+        ai_event_fingerprint, clamp_to_evidence_window, comparable_entity_key, readback_status,
+    };
     use wakaclock_core::heartbeat::{
         ActivitySegment, ActorType, EntityType, Heartbeat, MAX_ACTIVITY_GAP_SECONDS,
     };
+
+    #[test]
+    fn readback_keeps_missing_revision_conflict_and_unavailable_separate() {
+        assert_eq!(readback_status(0, None, false), "unavailable");
+        assert_eq!(readback_status(0, None, true), "missing");
+        assert_eq!(readback_status(3, Some((2, 1)), true), "missing");
+        assert_eq!(readback_status(2, Some((2, 1)), true), "found");
+        assert_eq!(readback_status(1, Some((2, 1)), true), "superseded");
+        assert_eq!(readback_status(2, Some((2, 2)), true), "conflict");
+    }
 
     #[test]
     fn fingerprint_is_stable_for_the_same_derived_event() {

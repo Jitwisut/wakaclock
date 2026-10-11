@@ -55,7 +55,7 @@ test("Kilo emits successful file evidence and deduplicates file.edited", async (
     await hooks.event({ event: { type: "file.edited", file_path: "/repo/src/main.ts", tool_call_id: "call-1", lines_added: 3, lines_deleted: 1 } });
     const lines = (await readFile(capture, "utf8")).trim().split("\n").filter(Boolean);
     assert.equal(lines.length, 1);
-    const event = JSON.parse(lines[0]) as Record<string, unknown>;
+    const event = JSON.parse(lines[0]).records[0].metadata as Record<string, unknown>;
     assert.equal(event.agent, "kilo-code");
     assert.equal(event.provider, "deepseek");
     assert.equal(event.model, "deepseek-v4");
@@ -107,7 +107,7 @@ test("Kilo keeps independent edits to one file inside the dedup window", async (
     }
     const lines = (await readFile(capture, "utf8")).trim().split("\n").filter(Boolean);
     assert.equal(lines.length, 2);
-    assert.deepEqual(lines.map((line) => JSON.parse(line).lines_added), [1, 2]);
+    assert.deepEqual(lines.map((line) => JSON.parse(line).records[0].metadata.lines_added), [1, 2]);
   });
 });
 
@@ -150,7 +150,11 @@ test("Kilo shell tools use the shared snapshot lifecycle without forwarding comm
       { success: true, output: "secret output" }
     );
     const args = (await readFile(argsCapture, "utf8")).trim().split("\n");
-    assert.deepEqual(args, ["ai tool-before --json", "ai tool-after --json"]);
+    assert.deepEqual(args, ["ai tool-before --json", "ai producer-batch --json", "ai tool-after --json", "ai producer-batch --json"]);
+    const records = (await readFile(_capture,"utf8")).trim().split("\n").map(line => JSON.parse(line));
+    assert.ok(!JSON.stringify(records).includes("secret"));
+    assert.equal(records[1].records[0].kind,"tool_before");
+    assert.equal(records[3].records[0].kind,"tool_after");
   });
 });
 
@@ -167,9 +171,9 @@ test("Kilo session events persist only bounded lifecycle metadata", async () => 
     await hooks.event({ event: { type: "session.idle", session_id: "session-lifecycle" } });
     const args = (await readFile(argsCapture, "utf8")).trim().split("\n");
     assert.deepEqual(args, [
-      "ai session-start --json",
-      "ai session-start --json",
-      "ai session-end --json"
+      "ai producer-batch --json",
+      "ai producer-batch --json",
+      "ai producer-batch --json"
     ]);
   });
 });

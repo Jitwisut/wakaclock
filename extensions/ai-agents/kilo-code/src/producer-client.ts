@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { retainToolMarker } from "../../common/activity-spool.ts";
+import { retainToolMarker, retainMetadata } from "../../common/activity-spool.ts";
 import type { KiloProducerMetadata } from "./event-normalizer.ts";
 
 async function cliPath(): Promise<string> {
@@ -20,7 +20,9 @@ type ToolLifecycle = "before" | "after" | "abort";
 
 type SessionLifecycle = "start" | "end";
 
+type Surface = "cli" | "ide" | "unknown";
 interface SessionLifecycleInput {
+  surface?: Surface;
   sessionId: string;
   agent: string;
   provider?: unknown;
@@ -73,6 +75,7 @@ function runMetadataCommand(command: string, payload: string): Promise<void> {
 export async function runToolLifecycle(
   phase: ToolLifecycle,
   input: {
+    surface?: Surface;
     toolEventId: string;
     agent: string;
     provider?: unknown;
@@ -83,7 +86,7 @@ export async function runToolLifecycle(
   }
 ): Promise<void> {
   const command = phase === "before" ? "tool-before" : phase === "after" ? "tool-after" : "tool-abort";
-  const payload = JSON.stringify({
+  const metadata = {
     tool_event_id: input.toolEventId,
     agent: input.agent,
     provider: typeof input.provider === "string" ? input.provider : null,
@@ -92,21 +95,26 @@ export async function runToolLifecycle(
     tool: input.tool ?? null,
     transport: "tool_snapshot",
     workspace_root: input.directory ?? null
-  });
-  await runMetadataCommand(command, payload);
+  };
+  const observedAt = new Date().toISOString();
+  // Start the live snapshot before any ownership negotiation can delay it.
+  const snapshot = runMetadataCommand(command, JSON.stringify(metadata));
+  await retainMetadata(await cliPath(), {adapter: "kilo-code", surface: input.surface ?? "unknown", observedAt, kind: phase === "before" ? "tool_before" : phase === "after" ? "tool_after" : "tool_abort", metadata}, process.env.ATOAXIS_PRODUCER_HOME || homedir());
+  // Snapshots are captured only at this live boundary. The idle collector never
+  // reruns a snapshot command against files that may have changed since the hook.
+  await snapshot;
 }
 
 /**
- * Persist a bounded Kilo session interval through the CLI. Session hooks are
- * metadata-only and intentionally do not create file-change evidence; the CLI
- * owns the durable state and keeps the latest reported event as the interval end.
+ * Retain Kilo session lifecycle markers with their observed timestamps. These
+ * metadata-only markers claim neither measured execution intervals nor edits.
  */
 export async function runSessionLifecycle(
   phase: SessionLifecycle,
   input: SessionLifecycleInput
 ): Promise<void> {
   if (!input.sessionId.trim()) return;
-  const payload = JSON.stringify({
+  const metadata = {
     session_id: input.sessionId,
     agent: input.agent,
     provider: typeof input.provider === "string" ? input.provider : null,
@@ -115,14 +123,15 @@ export async function runSessionLifecycle(
     // `source` is the existing provenance enum. The transport of file events
     // is `native_plugin`, but session state currently accepts `agent_hook` and
     // must stay compatible with older CLI binaries.
-    source: "agent_hook"
-  });
-  await runMetadataCommand(phase === "start" ? "session-start" : "session-end", payload);
+    source: "agent_hook",
+    occurred_at: new Date().toISOString()
+  };
+  await retainMetadata(await cliPath(), {adapter: "kilo-code", surface: input.surface ?? "unknown", kind: phase === "start" ? "session_start" : "session_end", metadata}, process.env.ATOAXIS_PRODUCER_HOME || homedir());
 }
 
 /** Send one allowlisted metadata object to the local broker and never block Kilo. */
-export async function emitMetadata(metadata: KiloProducerMetadata): Promise<void> {
-  const payload = JSON.stringify({
+export async function emitMetadata(metadata: KiloProducerMetadata, surface: Surface = "unknown"): Promise<void> {
+  const payload = {
     schema_version: 1,
     producer_version: 1,
     event_type: "file_change",
@@ -144,6 +153,6 @@ export async function emitMetadata(metadata: KiloProducerMetadata): Promise<void
     transport: metadata.transport,
     tool: metadata.tool ?? null,
     tool_event_id: metadata.tool_call_id ?? null
-  });
-  await runMetadataCommand("emit", payload);
+  };
+  await retainMetadata(await cliPath(), {adapter: "kilo-code", surface, kind: "file_mutation", metadata: payload}, process.env.ATOAXIS_PRODUCER_HOME || homedir());
 }

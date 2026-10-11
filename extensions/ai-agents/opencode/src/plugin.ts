@@ -25,16 +25,30 @@ export async function server(ctx: RecordValue, sink: Sink = retainToolMarker) {
 /** V2 2.0.26 public types use id (not callID). Read the actual session's
  * location for each event; ctx.location only identifies the plugin instance.
  */
-export async function setup(ctx: RecordValue, sink: Sink = retainToolMarker) {
+export async function setup(ctx: RecordValue, sink: Sink = retainToolMarker, lookupTimeoutMs = 1000) {
   if (typeof ctx.tool?.hook !== "function" || typeof ctx.session?.get !== "function") throw new Error("opencode_contract_incompatible");
   const emit = async (event: RecordValue, phase: "before" | "after" | "failure") => {
     const observedAt = new Date().toISOString();
     try {
       if (!text(event.sessionID)) throw new Error("opencode_activity_identity_unresolved");
-      const session = await ctx.session.get({ sessionID: event.sessionID });
+      // A stalled provider API must not strand known task/call evidence in RAM.
+      // The deadline changes only lookup readiness, never the event timestamp.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const session = await Promise.race([
+        Promise.resolve().then(() => ctx.session.get({ sessionID: event.sessionID })),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("opencode_session_lookup_unavailable")), lookupTimeoutMs); })
+      ]).finally(() => { if (timer) clearTimeout(timer); });
       if (session?.id !== event.sessionID) throw new Error("opencode_session_identity_conflict");
       const options = sinkOptions(); await sink(options.cli, { ...metadata(event, session.location?.directory, "v2", phase), observedAt }, options.home);
-    } catch { failure(); }
+    } catch {
+      // The native task/call and observation time remain evidence even when
+      // project lookup fails. Persist them without today's plugin workspace.
+      if (text(event.sessionID) && text(event.id)) {
+        const options=sinkOptions();
+        await sink(options.cli,{adapter:"opencode",surface:"cli",phase,sessionId:event.sessionID,callId:event.id,observedAt},options.home).catch(()=>{});
+      }
+      failure();
+    }
   };
   await ctx.tool.hook("execute.before", (event: RecordValue) => emit(event, "before"));
   await ctx.tool.hook("execute.after", (event: RecordValue) => {

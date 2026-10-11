@@ -11,7 +11,7 @@ export interface ProducerObservation {
   execution_surface: "cli" | "ide";
   observation_id: string;
   observed_at: string;
-  metadata: { hook_event_name: string; sessionID: string; callID: string; directory: string };
+  metadata: { hook_event_name: string; sessionID: string; callID: string; directory?: string };
 }
 function safe(target: string): void {
   for (let current = target; ; current = path.dirname(current)) {
@@ -44,7 +44,7 @@ export function runProducerCli(cli: string, args: string[], payload?: unknown): 
 /** Disk acceptance precedes handoff; only the shared Rust collector removes files.
  * Unconfirmed observations remain parked separately and are never rebound by name.
  */
-export async function retainToolMarker(cli: string, input: { adapter: "kilo-code" | "opencode"; phase: "before" | "after" | "failure"; surface: "cli" | "ide"; sessionId: string; callId: string; directory: string; observedAt?: string }, home = homedir()): Promise<{ file: string; observation: ProducerObservation } | undefined> {
+export async function retainToolMarker(cli: string, input: { adapter: "kilo-code" | "opencode"; phase: "before" | "after" | "failure"; surface: "cli" | "ide"; sessionId: string; callId: string; directory?: string; observedAt?: string }, home = homedir()): Promise<{ file: string; observation: ProducerObservation } | undefined> {
   const observedAt = input.observedAt ?? new Date().toISOString();
   if (!Number.isFinite(Date.parse(observedAt))) throw new Error("producer_timestamp_invalid");
   const base = path.join(home, ".wakaclock"); safe(base);
@@ -66,8 +66,8 @@ export async function retainToolMarker(cli: string, input: { adapter: "kilo-code
   } catch {
     if (fs.existsSync(binding)) { const existing = JSON.parse(fs.readFileSync(binding, "utf8")); if (/^[a-f0-9]{64}$/.test(existing.scope_id ?? "")) scope = existing.scope_id; }
   }
-  const metadata = { hook_event_name: `tool.execute.${input.phase}`, sessionID: input.sessionId, callID: input.callId, directory: input.directory };
-  if (Object.values(metadata).some(value => typeof value !== "string" || value.length > 4096) || !path.isAbsolute(input.directory)) throw new Error("producer_metadata_invalid");
+  const metadata = { hook_event_name: `tool.execute.${input.phase}`, sessionID: input.sessionId, callID: input.callId, ...(input.directory ? {directory:input.directory} : {}) };
+  if (Object.values(metadata).some(value => typeof value !== "string" || value.length > 4096) || (input.directory !== undefined && !path.isAbsolute(input.directory))) throw new Error("producer_metadata_invalid");
   const observation: ProducerObservation = { schema_version: 1, scope_id: scope ?? "unconfirmed", adapter_id: input.adapter, execution_surface: input.surface, observation_id: randomUUID(), observed_at: observedAt, metadata };
   const root = path.join(base, "native-producer-spool", observation.scope_id); safe(root); fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   for (const parent of [path.dirname(root), base, home]) syncDirectory(parent);
@@ -77,4 +77,46 @@ export async function retainToolMarker(cli: string, input: { adapter: "kilo-code
     await runProducerCli(cli, ["ai", "activity-hook", "--adapter", input.adapter, "--surface", input.surface, "--scope-id", scope, "--observation-id", observation.observation_id, "--observed-at", observation.observed_at], metadata);
   } catch { /* Already retained: the idle collector performs the durable reconciliation. */ }
   return { file, observation };
+}
+
+export type MetadataKind = "file_mutation" | "session_start" | "session_end" | "tool_before" | "tool_after" | "tool_abort";
+const FILE_FIELDS = ["schema_version", "producer_version", "event_type", "event_id", "occurred_at", "entity", "project_root", "change_kind", "previous_entity", "agent", "provider", "model", "session_id", "source", "confidence", "lines_added", "lines_deleted", "active_seconds", "transport", "tool", "tool_event_id", "editor", "producer_surface"];
+const SESSION_FIELDS = ["session_id", "agent", "provider", "model", "cwd", "source", "occurred_at"];
+const TOOL_FIELDS = ["tool_event_id", "agent", "provider", "model", "session_id", "tool", "transport", "workspace_root", "cwd"];
+export function canonicalMetadata(value: Record<string, unknown>): string {
+  return JSON.stringify(Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])));
+}
+/** Fixed scalar contracts only; never retain native inputs, command arguments or outputs. */
+export async function retainMetadata(cli: string, input: { adapter: string; surface: "cli" | "ide" | "desktop" | "unknown"; kind: MetadataKind; metadata: Record<string, unknown>; observedAt?: string }, home = homedir()) {
+  const observedAt = input.observedAt ?? new Date().toISOString();
+  const fields = input.kind === "file_mutation" ? FILE_FIELDS : input.kind.startsWith("session_") ? SESSION_FIELDS : TOOL_FIELDS;
+  if (!Number.isFinite(Date.parse(observedAt)) || Object.entries(input.metadata).some(([key, value]) => !fields.includes(key) || !(value === null || typeof value === "number" && Number.isFinite(value) || typeof value === "string" && value.length <= 4096 && !value.startsWith("{") && !value.startsWith("[")))) throw new Error("producer_metadata_invalid");
+  const metadata = { ...input.metadata };
+  if (input.kind.startsWith("session_") && metadata.occurred_at == null) metadata.occurred_at = observedAt;
+  const base = path.join(home, ".wakaclock"); safe(base);
+  const runtimeFile = path.join(base, "runtime-desired.json"); safe(runtimeFile);
+  if (fs.existsSync(runtimeFile)) {
+    const runtime = JSON.parse(fs.readFileSync(runtimeFile, "utf8"));
+    if (runtime.schema_version !== 1 || !runtime.desired || !Array.isArray(runtime.intervals)) throw new Error("producer_runtime_unconfirmed");
+    if (runtime.desired.capture === false) return undefined;
+  }
+  const bindings = path.join(base, "native-producer-bindings"); safe(bindings); fs.mkdirSync(bindings, { recursive: true, mode: 0o700 });
+  const binding = path.join(bindings, `${input.adapter}-${input.surface}.json`); safe(binding);
+  let scope: string | undefined;
+  try {
+    const handshake = await runProducerCli(cli, ["journal-scope"]);
+    if (handshake.schema_version !== 1 || handshake.owner_confirmed !== true || !/^[a-f0-9]{64}$/.test(handshake.scope_id ?? "")) throw new Error();
+    scope = handshake.scope_id;
+    const stage = path.join(bindings, `${randomUUID()}.metadata`); write(stage, {scope_id:scope}); fs.renameSync(stage, binding); syncDirectory(bindings);
+  } catch {
+    if (fs.existsSync(binding)) { const old = JSON.parse(fs.readFileSync(binding, "utf8")); if (/^[a-f0-9]{64}$/.test(old.scope_id ?? "")) scope = old.scope_id; }
+  }
+  const { createHash } = await import("node:crypto");
+  const record = {schema_version:2,scope_id:scope ?? "unconfirmed",adapter_id:input.adapter,execution_surface:input.surface,observation_id:randomUUID(),observed_at:observedAt,kind:input.kind,payload_hash:createHash("sha256").update(canonicalMetadata(metadata)).digest("hex"),metadata};
+  const root = path.join(base, "native-producer-spool", record.scope_id); safe(root); fs.mkdirSync(root, {recursive:true,mode:0o700});
+  for (const parent of [path.dirname(root), base, home]) syncDirectory(parent);
+  const file = path.join(root, `${record.observation_id}.json`); write(file, record);
+  if (!scope) throw new Error("producer_scope_unconfirmed_retained");
+  try { await runProducerCli(cli, ["ai","producer-batch","--json"], {schema_version:2,records:[record]}); } catch { /* Original stays until collector verifies the ID/hash ACK. */ }
+  return {file,record};
 }

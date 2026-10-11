@@ -46,6 +46,7 @@ use crate::model::profile::{
 };
 use crate::model::report::{CreateReportScheduleRequest, ReportSchedule};
 
+mod heartbeat_readback;
 mod team_github;
 mod team_insights;
 mod team_webhooks;
@@ -435,6 +436,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             "/me/delivery-status",
             get(delivery_status).post(ingest_delivery_status),
         )
+        .route("/me/heartbeats/readback",post(heartbeat_readback::lookup))
         .route("/imports/wakatime", post(wakatime_import_start))
         .route("/imports/wakatime/:import_id", get(wakatime_import_status))
         .route(

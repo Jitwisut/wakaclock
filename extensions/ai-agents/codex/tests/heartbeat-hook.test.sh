@@ -6,10 +6,16 @@ set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/atoaxis-codex.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
+export ATOAXIS_PRODUCER_HOME="$TMP/producer-home"
+mkdir -p "$ATOAXIS_PRODUCER_HOME"
 MOCK="$TMP/wakaclock"
 CAPTURE="$TMP/capture.log"
 cat >"$MOCK" <<'MOCK'
 #!/usr/bin/env bash
+if [ "${1:-}" = journal-scope ]; then
+  printf '%s\n' '{"schema_version":1,"owner_confirmed":true,"scope_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  exit 0
+fi
 printf 'ARGS:' >>"$ATOAXIS_CAPTURE"
 printf ' %s' "$@" >>"$ATOAXIS_CAPTURE"
 printf '\n' >>"$ATOAXIS_CAPTURE"
@@ -105,9 +111,9 @@ jq '.tool_use_id="partial-call" | .tool_response="Success. Updated the following
 jq '.tool_use_id="replacement" | .tool_input.command="*** Begin Patch\n*** Delete File: src/replace.ts\n*** Add File: src/replace.ts\n+++counter\n*** End Patch" | .tool_response="Success. Updated the following files:\nD src/replace.ts\nA src/replace.ts\n"' <<<"$COMMAND_PAYLOAD" \
   | ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/heartbeat-hook.sh"
 REPLACEMENT="$(grep '"tool_event_id":"replacement"' "$CAPTURE")"
-[ "$(jq -s '[.[].event_id] | unique | length' <<<"$REPLACEMENT")" -eq 2 ]
-jq -se 'any(.[]; .change_kind=="delete" and .lines_deleted==null)' <<<"$REPLACEMENT" >/dev/null
-jq -se 'any(.[]; .change_kind=="create" and .lines_added==1)' <<<"$REPLACEMENT" >/dev/null
+[ "$(jq -s '[.[].records[].metadata.event_id] | unique | length' <<<"$REPLACEMENT")" -eq 2 ]
+jq -se 'any(.[].records[].metadata; .change_kind=="delete" and .lines_deleted==null)' <<<"$REPLACEMENT" >/dev/null
+jq -se 'any(.[].records[].metadata; .change_kind=="create" and .lines_added==1)' <<<"$REPLACEMENT" >/dev/null
 
 # Repeated same-kind paths require evidence for both occurrences; one success
 # cannot identify which proposed mutation actually ran.

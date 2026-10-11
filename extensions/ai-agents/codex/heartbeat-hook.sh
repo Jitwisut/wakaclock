@@ -24,10 +24,7 @@ if [ -z "$WAKACLOCK_BIN" ] && [ -f "${HOME}/.wakaclock/cli-path" ]; then
   WAKACLOCK_BIN="$(tr -d '\r\n' < "${HOME}/.wakaclock/cli-path")"
 fi
 WAKACLOCK_BIN="${WAKACLOCK_BIN:-wakaclock}"
-if ! command -v "$WAKACLOCK_BIN" >/dev/null 2>&1; then
-  echo "atoaxis-heartbeat (codex): '$WAKACLOCK_BIN' not found on PATH — install the wakaclock binary or set WAKACLOCK_CLI_PATH" >&2
-  exit 0
-fi
+
 
 # Keep the adapter-specific patch parser here, but send its allowlisted result
 # through the shared producer boundary. The fallback preserves already-installed
@@ -38,11 +35,8 @@ emit_metadata() {
   if [ -x "$COMMON_EMITTER" ]; then
     "$COMMON_EMITTER"
   else
-    # Older installed hooks may not include the shared emitter. Map its
-    # allowlisted producer object to BrokerEventV1 instead of sending the
-    # producer-only client_id/provider_id names that a strict CLI rejects.
-    jq -c '{schema_version:1,producer_version:(.producer_version // 1),event_type:"file_change",event_id,occurred_at,entity,project_root:(.project_root // null),change_kind:(.change_kind // "modify"),previous_entity:(.previous_entity // null),agent:(.agent // .client_id),provider:(.provider // .provider_id // null),model:(.model // .model_id // null),session_id:(.session_id // null),source:(.source // "agent_hook"),confidence:(.confidence // "verified"),actor_type:(.actor_type // null),actor_confidence:(.actor_confidence // null),lines_added:(.lines_added // null),lines_deleted:(.lines_deleted // null),active_seconds:(.active_seconds // null),transport:(.transport // "native_plugin"),tool:(.tool // null),tool_event_id:(.tool_event_id // .tool_call_id // null)}' \
-      | "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
+    printf '%s\n' 'AtoAxis: producer_capture_failure; shared durable producer required' >&2
+    return 1
   fi
 }
 

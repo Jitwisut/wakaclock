@@ -77,40 +77,71 @@ pub(crate) fn install_producer(
     {
         return Err("producer_python_runtime_missing".into());
     }
-    let script = include_str!("../../../../../extensions/ai-agents/common/activity-producer.py");
-    let hash = format!("{:x}", Sha256::digest(script.as_bytes()));
-    let path = directory.join("activity-producer.py");
-    let ownership = directory.join("producer-ownership.json");
-    if path.is_symlink() || ownership.is_symlink() {
-        return Err("producer_file_symlink_refused".into());
-    }
-    let mut ledger = load(&ownership)?;
-    let mut hashes = ledger["hashes"].as_array().cloned().unwrap_or_default();
-    if path.exists() {
-        let previous = format!("{:x}", Sha256::digest(fs::read(&path)?));
-        if !hashes.contains(&json!(previous)) {
-            return Err("producer_foreign_file_preserved".into());
-        }
-    }
-    if !hashes.contains(&json!(hash)) {
-        hashes.push(json!(hash));
-    }
-    ledger["hashes"] = json!(hashes);
-    persist(&ownership, &ledger)?;
-    let temporary = path.with_extension(format!("staged-{}", uuid::Uuid::new_v4()));
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
+    let python_version = String::from_utf8_lossy(&version.stdout);
+    let mut numbers = python_version
+        .trim()
+        .strip_prefix("Python ")
+        .unwrap_or("")
+        .split('.');
+    if numbers.next().and_then(|v| v.parse::<u16>().ok()) != Some(3)
+        || numbers
+            .next()
+            .and_then(|v| v.parse::<u16>().ok())
+            .is_none_or(|minor| minor < 10)
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        return Err("producer_python_runtime_requires_3_10".into());
     }
-    let mut file = options.open(&temporary)?;
-    file.write_all(script.as_bytes())?;
-    file.sync_all()?;
-    fs::rename(temporary, &path)?;
-    #[cfg(unix)]
-    fs::File::open(&directory)?.sync_all()?;
+    let mut scripts = vec![(
+        "activity-producer.py",
+        include_str!("../../../../../extensions/ai-agents/common/activity-producer.py"),
+    )];
+    if adapter == "cursor" {
+        scripts.extend([
+            (
+                "metadata-producer.py",
+                include_str!("../../../../../extensions/ai-agents/common/metadata-producer.py"),
+            ),
+            (
+                "cursor-edit-producer.py",
+                include_str!("../../../../../extensions/ai-agents/cursor/scripts/edit-producer.py"),
+            ),
+        ]);
+    }
+    for (name, script) in scripts {
+        let hash = format!("{:x}", Sha256::digest(script.as_bytes()));
+        let path = directory.join(name);
+        let ownership = directory.join("producer-ownership.json");
+        if path.is_symlink() || ownership.is_symlink() {
+            return Err("producer_file_symlink_refused".into());
+        }
+        let mut ledger = load(&ownership)?;
+        let mut hashes = ledger["hashes"].as_array().cloned().unwrap_or_default();
+        if path.exists() {
+            let previous = format!("{:x}", Sha256::digest(fs::read(&path)?));
+            if !hashes.contains(&json!(previous)) {
+                return Err("producer_foreign_file_preserved".into());
+            }
+        }
+        if !hashes.contains(&json!(hash)) {
+            hashes.push(json!(hash));
+        }
+        ledger["hashes"] = json!(hashes);
+        persist(&ownership, &ledger)?;
+        let temporary = path.with_extension(format!("staged-{}", uuid::Uuid::new_v4()));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(script.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(temporary, &path)?;
+        #[cfg(unix)]
+        fs::File::open(&directory)?.sync_all()?;
+    }
     let surface =
         surface_override.unwrap_or(specification(adapter).map(|(_, s, _)| s).unwrap_or("ide"));
     let profile = directory.join(if adapter == "copilot" && surface == "cli" {
@@ -184,6 +215,29 @@ fn entries(home: &Path, adapter: &str, executable: &Path) -> Result<Value, Box<d
             _ => json!({"hooks":[{"type":"command","command":command,"timeout":10}]}),
         };
         entries.insert((*event).into(), hook);
+    }
+    if adapter == "cursor" {
+        let directory = home.join(".wakaclock/native-activity-hooks");
+        let profile = directory.join("cursor-producer.json");
+        let script = directory.join("cursor-edit-producer.py");
+        if profile.exists() {
+            assert_safe_path(&script)?;
+            if !script.is_file() {
+                return Err("cursor_edit_producer_missing".into());
+            }
+            let profile = profile.to_str().ok_or("producer_path_invalid")?;
+            let script = script.to_str().ok_or("producer_path_invalid")?;
+            if [profile, script].iter().any(|p| {
+                p.chars()
+                    .any(|c| matches!(c, '"' | '\n' | '\r' | '$' | '`' | '%' | '!'))
+            }) {
+                return Err("producer_path_requires_manual_configuration".into());
+            }
+            let runtime = if cfg!(windows) { "python" } else { "python3" };
+            for hook in ["afterFileEdit", "afterTabFileEdit"] {
+                entries.insert(hook.into(), json!({"command":format!("{runtime} \"{script}\" --profile \"{profile}\" --hook {hook}")}));
+            }
+        }
     }
     Ok(Value::Object(entries))
 }
@@ -786,6 +840,49 @@ fn persist_hook(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cursor_inline_setup_ships_helpers_and_preserves_user_hook_on_uninstall() {
+        let home = std::env::temp_dir().join(format!("cursor-edit-hooks-{}", uuid::Uuid::new_v4()));
+        let scope = wakaclock_core::queue::QueueScope {
+            destination: "https://fixture.invalid".into(),
+            owner: "fixture-owner".into(),
+        };
+        let executable = Path::new("/fixture CLI/wakaclock");
+        install_producer(&home, "cursor", executable, &scope, None).unwrap();
+        let path = home.join(".cursor/hooks.json");
+        persist(
+            &path,
+            &json!({"version":1,"hooks":{"afterTabFileEdit":[{"command":"user-owned-hook"}]}}),
+        )
+        .unwrap();
+        configure(&home, "cursor", executable, false).unwrap();
+        let installed = load(&path).unwrap();
+        assert!(installed["hooks"]["afterTabFileEdit"]
+            .to_string()
+            .contains("cursor-edit-producer.py"));
+        assert!(installed["hooks"]["afterTabFileEdit"]
+            .to_string()
+            .contains("user-owned-hook"));
+        for helper in [
+            "cursor-edit-producer.py",
+            "metadata-producer.py",
+            "activity-producer.py",
+        ] {
+            assert!(home
+                .join(".wakaclock/native-activity-hooks")
+                .join(helper)
+                .is_file());
+        }
+        configure(&home, "cursor", executable, true).unwrap();
+        let removed = load(&path).unwrap();
+        assert_eq!(
+            removed["hooks"]["afterTabFileEdit"],
+            json!([{"command":"user-owned-hook"}])
+        );
+        // Producer data/helpers are preserved; uninstall removes only owned hook entries.
+        fs::remove_dir_all(home).unwrap();
+    }
+
     #[test]
     fn copilot_cli_owns_only_its_file_and_preserves_other_surfaces() {
         let home = std::env::temp_dir().join(format!("copilot-cli-hooks-{}", uuid::Uuid::new_v4()));

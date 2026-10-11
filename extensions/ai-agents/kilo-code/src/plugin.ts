@@ -121,12 +121,13 @@ const server = async (ctx: AnyRecord, options: { activitySurface?: "cli" | "ide"
     // callback/retry path to converge, while independent tool calls retain
     // distinct IDs and are never collapsed by elapsed time alone.
     if (last && now - last < DEDUP_WINDOW_MS) return;
+    try { await emitMetadata(metadata, options.activitySurface ?? "unknown"); }
+    catch { console.warn("AtoAxis: file_durable_handoff_failed"); return; }
     emitted.set(metadata.event_id ?? "", now);
     if (semanticKey) emitted.set(semanticKey, now);
     if (emitted.size > 4_000) {
       for (const [key, at] of emitted) if (now - at > 120_000) emitted.delete(key);
     }
-    await emitMetadata(metadata).catch(() => undefined);
   };
   const cleanup = () => {
     const cutoff = Date.now() - 120_000;
@@ -135,7 +136,8 @@ const server = async (ctx: AnyRecord, options: { activitySurface?: "cli" | "ide"
 
   return {
     "tool.execute.before": async (input: AnyRecord) => {
-      await activity("before", input);
+      const marker = activity("before", input);
+      try {
       cleanup();
       const id = getString(input.callID, input.callId, input.toolCallId, input.tool_call_id);
       const tool = getString(input.tool, input.name, input.tool_name);
@@ -144,6 +146,7 @@ const server = async (ctx: AnyRecord, options: { activitySurface?: "cli" | "ide"
         if (isShellTool(tool)) {
           const current = identity();
           await runToolLifecycle("before", {
+            surface: options.activitySurface ?? "unknown",
             toolEventId: id,
             agent: "kilo-code",
             provider: input.provider ?? current.provider,
@@ -154,9 +157,11 @@ const server = async (ctx: AnyRecord, options: { activitySurface?: "cli" | "ide"
           });
         }
       }
+      } catch { console.warn("AtoAxis: tool_durable_handoff_failed"); } finally { await marker; }
     },
     "tool.execute.after": async (input: AnyRecord, output: AnyRecord) => {
-      await activity(output?.error || output?.success === false ? "failure" : "after", input);
+      const marker = activity(output?.error || output?.success === false ? "failure" : "after", input);
+      try {
       cleanup();
       const id = getString(input.callID, input.callId, input.toolCallId, input.tool_call_id);
       const before = id ? pending.get(id) : undefined;
@@ -164,7 +169,8 @@ const server = async (ctx: AnyRecord, options: { activitySurface?: "cli" | "ide"
       const tool = getString(input.tool, input.name, input.tool_name, before?.input.tool);
       if (output?.error || output?.success === false) {
         if (id && isShellTool(tool)) await runToolLifecycle("abort", {
-          toolEventId: id,
+          surface: options.activitySurface ?? "unknown",
+            toolEventId: id,
           agent: "kilo-code",
           provider: input.provider ?? ctx.provider,
           model: input.model ?? ctx.model,
@@ -176,7 +182,8 @@ const server = async (ctx: AnyRecord, options: { activitySurface?: "cli" | "ide"
       }
       if (id && isShellTool(tool)) {
         await runToolLifecycle("after", {
-          toolEventId: id,
+          surface: options.activitySurface ?? "unknown",
+            toolEventId: id,
           agent: "kilo-code",
           provider: input.provider ?? ctx.provider,
           model: input.model ?? ctx.model,
@@ -191,6 +198,7 @@ const server = async (ctx: AnyRecord, options: { activitySurface?: "cli" | "ide"
       if (before && !getString(input.file_path, input.filePath, input.path)) {
         await emitOnce({ ...before.input, ...output, tool_call_id: id });
       }
+      } catch { console.warn("AtoAxis: tool_durable_handoff_failed"); } finally { await marker; }
     },
     event: async ({ event }: { event: AnyRecord }) => {
       const eventData = event?.data && typeof event.data === "object" ? event.data as AnyRecord : {};
@@ -204,9 +212,9 @@ const server = async (ctx: AnyRecord, options: { activitySurface?: "cli" | "ide"
       const lifecycle = sessionLifecycleInput(event, current);
       if (lifecycle) {
         if (eventType === "session.created" || eventType === "session.updated") {
-          await runSessionLifecycle("start", lifecycle);
+          await runSessionLifecycle("start", {...lifecycle,surface:options.activitySurface ?? "unknown"}).catch(()=>console.warn("AtoAxis: session_durable_handoff_failed"));
         } else if (["session.idle", "session.error", "session.deleted"].includes(eventType ?? "")) {
-          await runSessionLifecycle("end", lifecycle);
+          await runSessionLifecycle("end", {...lifecycle,surface:options.activitySurface ?? "unknown"}).catch(()=>console.warn("AtoAxis: session_durable_handoff_failed"));
         }
       }
       // `file.edited` is emitted by Kilo's successful edit path. A filesystem
@@ -219,6 +227,7 @@ const server = async (ctx: AnyRecord, options: { activitySurface?: "cli" | "ide"
         for (const [id, state] of pending) {
           const tool = getString(state.input.tool);
           if (isShellTool(tool)) await runToolLifecycle("abort", {
+            surface: options.activitySurface ?? "unknown",
             toolEventId: id,
             agent: "kilo-code",
             provider: state.input.provider,
@@ -226,7 +235,7 @@ const server = async (ctx: AnyRecord, options: { activitySurface?: "cli" | "ide"
             sessionId: state.input.session_id,
             tool,
             directory: state.input.cwd
-          });
+          }).catch(() => console.warn("AtoAxis: tool_durable_handoff_failed"));
         }
         pending.clear();
         cleanup();

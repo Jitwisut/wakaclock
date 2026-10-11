@@ -19,6 +19,18 @@ test("unknown identity/schema and missing session location cannot create activit
  await setup({ tool: { hook: async (name: string, fn: any) => { hooks[name] = fn; } }, session: { get: async () => ({ id: "other" }) } }, async (...args: any[]) => { calls.push(args); return undefined; });
  await hooks["execute.before"]({ sessionID: "session", id: "call" });
  await hooks["execute.after"]({ sessionID: "session", id: "call", status: "unknown" });
- assert.equal(calls.length, 0);
+ assert.equal(calls.length, 1); assert.equal(calls[0][1].directory,undefined); assert.equal(calls[0][1].callId,"call"); assert.ok(calls[0][1].observedAt);
  await assert.rejects(setup({}), /incompatible/);
+});
+
+test("stalled session lookup retains original native observation without guessing project", async () => {
+ const hooks: Record<string, any> = {}, calls: any[] = [];
+ await setup({ tool: { hook: async (name: string, fn: any) => { hooks[name] = fn; } }, session: { get: () => new Promise(() => {}) } }, async (...args: any[]) => { calls.push(args); return undefined; }, 20);
+ const before = Date.now();
+ await hooks["execute.before"]({ sessionID: "native-session", id: "native-call" });
+ assert.equal(calls.length, 1);
+ assert.equal(calls[0][1].sessionId, "native-session");
+ assert.equal(calls[0][1].directory, undefined);
+ assert.ok(Date.parse(calls[0][1].observedAt) >= before);
+ assert.ok(Date.parse(calls[0][1].observedAt) < before + 20);
 });

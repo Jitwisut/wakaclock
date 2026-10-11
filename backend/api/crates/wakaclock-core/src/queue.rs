@@ -303,6 +303,11 @@ impl Queue {
             -- server accepts time heartbeats but does not advertise the metric version.
             -- These rows contain the same local heartbeat metadata as the retry queue;
             -- they are posted as a higher revision after a compatible server is found.
+            CREATE TABLE IF NOT EXISTS server_handoff_receipts (
+                destination TEXT NOT NULL, owner_scope TEXT NOT NULL, heartbeat_id TEXT NOT NULL,
+                revision INTEGER NOT NULL, accepted_at INTEGER NOT NULL,
+                PRIMARY KEY(destination,owner_scope,heartbeat_id,revision));
+
             CREATE TABLE IF NOT EXISTS line_measurement_outbox (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 destination TEXT NOT NULL,
@@ -1150,6 +1155,69 @@ impl Queue {
             )
             .map_err(AppError::Queue)?;
         Ok(())
+    }
+
+    pub fn inspect_server_receipts_at(
+        path: &std::path::Path,
+        scope: &QueueScope,
+        records: &[(String, u32)],
+    ) -> Result<Vec<serde_json::Value>, AppError> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(AppError::Queue)?;
+        conn.busy_timeout(std::time::Duration::from_secs(2))
+            .map_err(AppError::Queue)?;
+        let table: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='server_handoff_receipts' AND type='table')",[],|r|r.get(0)).map_err(AppError::Queue)?;
+        records.iter().map(|(id,revision)| {
+            let accepted_at:Option<i64> = if table { conn.query_row("SELECT accepted_at FROM server_handoff_receipts WHERE destination=?1 AND owner_scope=?2 AND heartbeat_id=?3 AND revision=?4",params![scope.destination,scope.owner,id,revision],|r|r.get(0)).optional().map_err(AppError::Queue)? } else {None};
+            Ok(serde_json::json!({"heartbeat_id":id,"revision":revision,"server_ack":if accepted_at.is_some(){"ingress_accepted"}else{"unconfirmed"},"accepted_at":accepted_at,"canonical_readback":"unconfirmed"}))
+        }).collect()
+    }
+
+    /// Persist HTTP ingress acknowledgement and dequeue atomically. This ledger
+    /// deliberately does not claim canonical materialization/readback.
+    pub fn acknowledge_server_and_remove(
+        &self,
+        id: i64,
+        lease_owner: &str,
+        expected: &serde_json::Value,
+    ) -> Result<bool, AppError> {
+        // Stored JSON may use a different floating-point or whitespace spelling
+        // than Value's serializer. Compare the same parsed payload as the request,
+        // then guard DELETE by the original bytes inside one write transaction.
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(AppError::Queue)?;
+        let payload: Option<String> = tx
+            .query_row(
+                "SELECT payload FROM heartbeat_queue WHERE id=?1 AND lease_owner=?2",
+                params![id, lease_owner],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(AppError::Queue)?;
+        let Some(payload) = payload else {
+            tx.commit().map_err(AppError::Queue)?;
+            return Ok(false);
+        };
+        let actual: serde_json::Value = serde_json::from_str(&payload).map_err(AppError::Serde)?;
+        if &actual != expected {
+            tx.commit().map_err(AppError::Queue)?;
+            return Ok(false);
+        }
+        tx.execute("INSERT INTO server_handoff_receipts (destination,owner_scope,heartbeat_id,revision,accepted_at)
+            SELECT destination,owner_scope,heartbeat_id,COALESCE(json_extract(payload,'$.revision'),0),strftime('%s','now')
+            FROM heartbeat_queue WHERE id=?1 AND lease_owner=?2 AND payload=?3 AND heartbeat_id IS NOT NULL
+            ON CONFLICT(destination,owner_scope,heartbeat_id,revision) DO NOTHING",params![id, lease_owner, payload]).map_err(AppError::Queue)?;
+        let removed = tx
+            .execute(
+                "DELETE FROM heartbeat_queue WHERE id=?1 AND lease_owner=?2 AND payload=?3",
+                params![id, lease_owner, payload],
+            )
+            .map_err(AppError::Queue)?;
+        tx.commit().map_err(AppError::Queue)?;
+        Ok(removed == 1)
     }
 
     /// ลบ heartbeat ที่ส่งสำเร็จแล้วออกจาก queue
@@ -2207,6 +2275,99 @@ mod tests {
             .accept_editor_handoff(&payload, &new, "original-input")
             .unwrap());
         assert_eq!(queue.len_scoped(&new).unwrap(), 1);
+    }
+
+    #[test]
+    fn server_ack_accepts_same_json_value_without_requiring_serializer_bytes() {
+        let temp = TempQueue::new();
+        let owner = scope(ORIGIN, "owner");
+        let payload = serde_json::json!({"heartbeat_id":"json-layout","revision":0,"time":1791712177.1991992});
+        temp.queue.push_scoped(&payload, &owner).unwrap();
+        let (id, expected) = temp
+            .queue
+            .claim_batch_scoped(&owner, "request")
+            .unwrap()
+            .remove(0);
+        // Formatting is not a payload correction. Real timestamps can similarly
+        // change their serializer spelling after a JSON floating-point parse.
+        temp.queue
+            .conn
+            .execute(
+                "UPDATE heartbeat_queue SET payload=?2 WHERE id=?1",
+                params![id, serde_json::to_string_pretty(&payload).unwrap()],
+            )
+            .unwrap();
+        assert!(temp
+            .queue
+            .acknowledge_server_and_remove(id, "request", &expected)
+            .unwrap());
+        assert_eq!(temp.queue.len_scoped(&owner).unwrap(), 0);
+    }
+
+    #[test]
+    fn server_ack_and_dequeue_are_atomic_scoped_and_survive_restart() {
+        let path = std::env::temp_dir().join(format!("server-ack-{}.db", Uuid::new_v4()));
+        let queue = Queue::open_at(&path).unwrap();
+        let owner = scope("https://server.test", "owner-a");
+        let payload = serde_json::json!({"heartbeat_id":"original-id","revision":3,"time":1000.0});
+        queue.push_scoped(&payload, &owner).unwrap();
+        let row = queue.claim_batch_scoped(&owner, "lease").unwrap()[0].0;
+        assert!(queue
+            .acknowledge_server_and_remove(row, "lease", &payload)
+            .unwrap());
+        drop(queue);
+        let queue = Queue::open_at(&path).unwrap();
+        assert_eq!(queue.len_scoped(&owner).unwrap(), 0);
+        let ids = vec![("original-id".into(), 3)];
+        let receipt = Queue::inspect_server_receipts_at(&path, &owner, &ids).unwrap();
+        assert_eq!(receipt[0]["server_ack"], "ingress_accepted");
+        assert_eq!(receipt[0]["canonical_readback"], "unconfirmed");
+        let foreign = scope("https://server.test", "owner-b");
+        assert_eq!(
+            Queue::inspect_server_receipts_at(&path, &foreign, &ids).unwrap()[0]["server_ack"],
+            "unconfirmed"
+        );
+        assert_eq!(
+            Queue::inspect_server_receipts_at(&path, &owner, &[("original-id".into(), 4)]).unwrap()
+                [0]["server_ack"],
+            "unconfirmed"
+        );
+    }
+
+    #[test]
+    fn old_server_response_cannot_remove_a_reclaimed_or_changed_row() {
+        let path = std::env::temp_dir().join(format!("server-ack-race-{}.db", Uuid::new_v4()));
+        let queue = Queue::open_at(&path).unwrap();
+        let owner = scope("https://server.test", "owner-a");
+        let payload = serde_json::json!({"heartbeat_id":"same-id","revision":3,"time":1000.0});
+        queue.push_scoped(&payload, &owner).unwrap();
+        let row = queue.claim_batch_scoped(&owner, "old-request").unwrap()[0].0;
+        queue
+            .conn
+            .execute(
+                "UPDATE heartbeat_queue SET lease_owner='new-request' WHERE id=?1",
+                params![row],
+            )
+            .unwrap();
+        assert!(!queue
+            .acknowledge_server_and_remove(row, "old-request", &payload)
+            .unwrap());
+        assert_eq!(queue.len_scoped(&owner).unwrap(), 1);
+        let changed = serde_json::json!({"heartbeat_id":"same-id","revision":4,"time":1000.0});
+        queue
+            .conn
+            .execute(
+                "UPDATE heartbeat_queue SET payload=?2 WHERE id=?1",
+                params![row, changed.to_string()],
+            )
+            .unwrap();
+        assert!(!queue
+            .acknowledge_server_and_remove(row, "new-request", &payload)
+            .unwrap());
+        assert!(queue
+            .acknowledge_server_and_remove(row, "new-request", &changed)
+            .unwrap());
+        assert_eq!(queue.len_scoped(&owner).unwrap(), 0);
     }
 
     #[test]

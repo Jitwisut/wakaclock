@@ -13,7 +13,6 @@ if [ -z "$CLI" ] && [ -f "${HOME}/.wakaclock/cli-path" ]; then
   CLI="$(tr -d '\r\n' < "${HOME}/.wakaclock/cli-path")"
 fi
 CLI="${CLI:-wakaclock}"
-command -v "$CLI" >/dev/null 2>&1 || exit 0
 
 case "$TOOL_NAME" in
   Shell|shell|Bash|bash)
@@ -85,12 +84,8 @@ emit_metadata() {
   if [ -x "$COMMON" ]; then
     "$COMMON"
   else
-    # Keep manually installed/older bundles working for one upgrade cycle. Map
-    # the allowlisted producer object to the strict broker envelope; passing the
-    # producer-only client_id/provider_id keys verbatim would be rejected by the
-    # CLI before it could enqueue the event.
-    jq -c '{schema_version:1,producer_version:(.producer_version // 1),event_type:"file_change",event_id,occurred_at,entity,project_root:(.project_root // null),change_kind:(.change_kind // "modify"),previous_entity:(.previous_entity // null),agent:(.agent // .client_id),provider:(.provider // .provider_id // null),model:(.model // .model_id // null),session_id:(.session_id // null),source:(.source // "agent_hook"),confidence:(.confidence // "verified"),actor_type:(.actor_type // null),actor_confidence:(.actor_confidence // null),lines_added:(.lines_added // null),lines_deleted:(.lines_deleted // null),active_seconds:(.active_seconds // null),transport:(.transport // "native_plugin"),tool:(.tool // null),tool_event_id:(.tool_event_id // .tool_call_id // null)}' \
-      | "$CLI" ai emit --json >/dev/null 2>&1 || true
+    printf '%s\n' 'AtoAxis: producer_capture_failure; shared durable producer required' >&2
+    return 1
   fi
 }
 jq -cn \

@@ -39,6 +39,15 @@ async fn cli(
     args: &[&str],
     input: Option<&BrokerEventV1>,
 ) -> serde_json::Value {
+    let value = input.map(|input| serde_json::to_value(input).unwrap());
+    cli_value(home, server, args, value.as_ref()).await
+}
+async fn cli_value(
+    home: &Path,
+    server: &str,
+    args: &[&str],
+    input: Option<&serde_json::Value>,
+) -> serde_json::Value {
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_wakaclock"));
     command
         .args(args)
@@ -325,6 +334,73 @@ fn write_legacy_alias_manifest(home: &std::path::Path) {
 /// service manifest on the legacy alias, and a recorded 402 classified as
 /// `payment_402` rather than an auth or network failure.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn producer_mixed_batch_is_durable_on_restart_and_conflict_never_overwrites_good_event() {
+    use sha2::{Digest, Sha256};
+    let home = temp_home("producer-batch");
+    let api = fake_api(503).await;
+    let proof = cli_value(&home, &api.url, &["journal-scope"], None).await;
+    let metadata = serde_json::to_value(event("immutable-producer")).unwrap();
+    let make = |metadata: serde_json::Value| serde_json::json!({"schema_version":2,"scope_id":proof["scope_id"],"adapter_id":"codex","execution_surface":"cli","observation_id":uuid::Uuid::new_v4().to_string(),"observed_at":"2026-10-07T01:18:09Z","kind":"file_mutation","payload_hash":format!("{:x}",Sha256::digest(serde_json::to_vec(&metadata).unwrap())),"metadata":metadata});
+    let good = make(metadata.clone());
+    let mut bad_metadata = metadata.clone();
+    bad_metadata["prompt"] = serde_json::json!("SENSITIVE");
+    let bad = make(bad_metadata);
+    let batch = serde_json::json!({"schema_version":2,"records":[good.clone(),bad]});
+    let first = cli_value(
+        &home,
+        &api.url,
+        &["ai", "producer-batch", "--json"],
+        Some(&batch),
+    )
+    .await;
+    assert_eq!(first["results"][0]["status"], "accepted");
+    assert_eq!(first["results"][0]["durable"], true);
+    assert_eq!(first["results"][1]["status"], "permanent_rejection");
+    assert_eq!(first["results"][1]["durable"], false);
+    assert!(!first.to_string().contains("SENSITIVE"));
+    let second = cli_value(
+        &home,
+        &api.url,
+        &["ai", "producer-batch", "--json"],
+        Some(&batch),
+    )
+    .await;
+    assert_eq!(second["results"][0]["status"], "duplicate");
+    let mut conflict = metadata.clone();
+    conflict["lines_added"] = serde_json::json!(99);
+    let conflict = make(conflict);
+    let response = cli_value(
+        &home,
+        &api.url,
+        &["ai", "producer-batch", "--json"],
+        Some(&serde_json::json!({"schema_version":2,"records":[conflict]})),
+    )
+    .await;
+    assert_eq!(
+        response["results"][0]["error_code"],
+        "producer_payload_conflict"
+    );
+    let mut store = BrokerStore::open_at(&home.join(".wakaclock/broker.db")).unwrap();
+    let records = store
+        .claim_ready_scoped(
+            100,
+            Some(&[proof["scope_id"].as_str().unwrap().to_string()]),
+        )
+        .unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].event.event_id, "immutable-producer");
+    assert_eq!(
+        records[0].event.lines_added,
+        metadata["lines_added"].as_u64().map(|n| n as u32)
+    );
+    assert!(
+        api.heartbeats.lock().await.is_empty(),
+        "local ACK must not require HTTP"
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p0_a4_doctor_ai_identifies_pipeline_gaps() {
     let home = temp_home("p0a4");
     write_legacy_alias_manifest(&home);
@@ -405,7 +481,20 @@ async fn payment_refusal_preserves_capture_and_recovery_drains_once() {
     *api.status.lock().await = 200;
     cli(&home, &api.url, &["sync", "--json"], None).await;
     cli(&home, &api.url, &["sync", "--json"], None).await;
-    assert_eq!(api.heartbeats.lock().await.len(), 1);
+    let rows = api.heartbeats.lock().await;
+    assert_eq!(
+        rows.len(),
+        1,
+        "expected one delivery; identity evidence: {:?}",
+        rows.iter()
+            .map(|row| (
+                row.get("heartbeat_id"),
+                row.get("revision"),
+                row.get("actor_type"),
+                row.get("source")
+            ))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(total_rows(&inbox), 1);
     fs::remove_dir_all(home).unwrap();
 }
@@ -418,8 +507,23 @@ async fn new_process_recovers_an_expired_claim_without_duplicate_capture() {
     let db = home.join(".wakaclock/broker.db");
     {
         let mut store = BrokerStore::open_at(&db).unwrap();
-        store.ingest_batch(&[input]).unwrap();
-        assert_eq!(store.claim_ready(1).unwrap().len(), 1);
+        let config = wakaclock_core::config::Config {
+            server_url: api.url.clone(),
+            api_key: Some("process-test-key".into()),
+            ..Default::default()
+        };
+        let scope = wakaclock_core::editor_health::scope_id(
+            &wakaclock_core::api_client::ApiClient::new(config)
+                .unwrap()
+                .queue_scope(),
+        );
+        store
+            .ingest_normalized_batch_scoped(&[input.normalize().unwrap()], Some(&scope))
+            .unwrap();
+        assert_eq!(
+            store.claim_ready_scoped(1, Some(&[scope])).unwrap().len(),
+            1
+        );
     }
     Connection::open(&db)
         .unwrap()

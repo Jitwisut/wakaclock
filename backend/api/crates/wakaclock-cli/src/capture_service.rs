@@ -11,7 +11,8 @@ use std::{
 use wakaclock_core::{
     ai::{
         activity::{
-            opaque, parse_shared_activity, ActivityCursor, ActivityStore, BrokerActivityEventV2,
+            opaque, parse_shared_activity_bounded, ActivityCursor, ActivityStore,
+            BrokerActivityEventV2,
         },
         AdapterRegistry, AiActivityParser, ClaudeCodeParser, CodexParser, DiscoveryContext,
         DiscoveryState,
@@ -181,15 +182,8 @@ pub(crate) async fn submit_activity(
             json!({"schema_version":2,"status":"paused_by_user","event_id":event.event_id,"durable":false}),
         );
     }
-    if !event.monitoring_only {
-        crate::team_context_capture::observe(
-            config,
-            "codex",
-            Some(&event.session_id),
-            Some(&event.project_root),
-            event.occurred_at,
-        )?;
-    }
+    // v2 contains no boundary-frozen Git evidence. It may be a delayed replay:
+    // never read the current branch here to fill a historical context gap.
     let scope = scope_key(api);
     let store = ActivityStore::open(&directory()?.join("capture.db"))?;
     let duplicate = store
@@ -331,6 +325,15 @@ struct ActivitySource {
     path: PathBuf,
     metadata_contract: bool,
 }
+fn scan_source_identity(source: &ActivitySource) -> String {
+    opaque(&format!(
+        "{}\0{}\0{}",
+        source.adapter,
+        source.surface,
+        source.path.to_string_lossy()
+    ))
+}
+
 fn sources(scope: &str) -> Vec<ActivitySource> {
     let discovery = DiscoveryContext {
         home_dir: dirs::home_dir().unwrap_or_default(),
@@ -346,7 +349,12 @@ fn sources(scope: &str) -> Vec<ActivitySource> {
             if let DiscoveryState::TranscriptFound { path } = result.state {
                 sources.push(ActivitySource {
                     adapter: parser.id().into(),
-                    surface: "cli".into(),
+                    surface: if parser.id() == "codex" {
+                        "unknown"
+                    } else {
+                        "cli"
+                    }
+                    .into(),
                     path,
                     metadata_contract: false,
                 });
@@ -441,7 +449,9 @@ async fn run_inner(
     }
     let mut interval = tokio::time::interval(Duration::from_secs(15));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut next_source = 0usize;
+    // Alternate reserved producer/parser slots. Both classes get work even if
+    // one has a permanent backlog; the shared deadline includes handoff work.
+    let mut producer_slots = 2usize;
     loop {
         interval.tick().await;
         if !dry_run && wakaclock_core::runtime::paused("capture") {
@@ -497,10 +507,25 @@ async fn run_inner(
         let now = Utc::now();
         let mut scanned = 0;
         let mut parsed = 0;
+        let producer_batch_slots = producer_slots;
+        producer_slots = 5 - producer_slots;
+        let mut parser_batch_slots = 5 - producer_batch_slots;
+        let record_limit = if dry_run || date.is_some() { 2000 } else { 100 };
         let producer_spool = if dry_run {
             json!({"status":"not_checked_dry_run"})
         } else {
-            crate::native_spool::drain(&dir, &config, &api).await
+            crate::native_spool::drain_bounded(&dir, &config, &api, producer_batch_slots, began)
+                .await
+        };
+        let broker_handoff = if dry_run {
+            json!({"status":"not_checked_dry_run"})
+        } else {
+            match crate::broker::queue_pending(&config, &api, 100).await {
+                Ok(report) => {
+                    json!({"status":if report.owner_unconfirmed>0{"owner_unconfirmed"}else if report.retained_dead_letters>0{"dead_letter"}else if report.pending>0{"pending"}else{"observed"},"claimed":report.claimed,"processed":report.processed,"retried":report.retried,"dead_lettered":report.dead_lettered,"pending":report.pending,"retained_dead_letters":report.retained_dead_letters,"owner_unconfirmed":report.owner_unconfirmed})
+                }
+                Err(_) => json!({"status":"unavailable","error_code":"broker_handoff_failed"}),
+            }
         };
         let mut errors = 0;
         let mut parser_failure_codes = BTreeSet::new();
@@ -517,7 +542,7 @@ async fn run_inner(
             .map(|path| {
                 vec![ActivitySource {
                     adapter: "codex".into(),
-                    surface: "cli".into(),
+                    surface: "unknown".into(),
                     path,
                     metadata_contract: false,
                 }]
@@ -549,14 +574,30 @@ async fn run_inner(
             }
         }
         paths.sort_by(|a, b| a.adapter.cmp(&b.adapter).then(a.path.cmp(&b.path)));
-        if !paths.is_empty() {
-            let index = next_source % paths.len();
-            paths.rotate_left(index);
-            next_source = (index + 1) % paths.len();
+        let scan_checkpoint = dir.join(format!("capture-scan-cursor-{scope}.metadata"));
+        if !dry_run && date.is_none() {
+            if scan_checkpoint.is_symlink() {
+                return Err("capture_cursor_symlink_refused".into());
+            }
+            if let Ok(last) = fs::read_to_string(&scan_checkpoint) {
+                if let Some(index) = paths
+                    .iter()
+                    .position(|source| scan_source_identity(source) == last)
+                {
+                    let count = paths.len();
+                    if count > 0 {
+                        paths.rotate_left((index + 1) % count);
+                    }
+                }
+            }
         }
         for input in paths {
+            let scan_identity = scan_source_identity(&input);
             let path = input.path;
-            if began.elapsed() > Duration::from_secs(10) && !dry_run && date.is_none() {
+            if !dry_run
+                && date.is_none()
+                && (parser_batch_slots == 0 || began.elapsed() >= Duration::from_secs(10))
+            {
                 break;
             }
             let identity = format!(
@@ -613,13 +654,17 @@ async fn run_inner(
                 previous.capture_until = Some(start + chrono::Duration::days(1));
             }
             loop {
-                match parse_shared_activity(
+                if !dry_run && date.is_none() {
+                    parser_batch_slots -= 1;
+                }
+                match parse_shared_activity_bounded(
                     &input.adapter,
                     &input.surface,
                     input.metadata_contract,
                     &path,
                     &previous,
                     now,
+                    record_limit,
                 ) {
                     Ok((mut batch, blocked)) => {
                         if let Some(code) = blocked.as_ref() {
@@ -672,7 +717,7 @@ async fn run_inner(
                                 candidates.push(json!({"event_id":e.event_id,"revision":e.revision,"kind":e.kind,"occurred_at":e.occurred_at,"started_at":e.started_at,"provenance":e.provenance,"source_id":source}));
                             }
                         }
-                        if batch.records == 2000 && !dry_run && date.is_none() {
+                        if batch.records == record_limit && !dry_run && date.is_none() {
                             unread_sources += 1;
                         }
                         previous = batch.cursor.clone();
@@ -682,7 +727,14 @@ async fn run_inner(
                                 &source,
                                 &batch,
                                 &input.adapter,
-                                &input.surface,
+                                if input.adapter == "codex" && !input.metadata_contract {
+                                    match batch.cursor.observed_surface() {
+                                        "codex-desktop" => "desktop",
+                                        _ => "unknown",
+                                    }
+                                } else {
+                                    &input.surface
+                                },
                             )?;
                         }
                         if blocked.is_none() && (dry_run || date.is_some()) && batch.records == 2000
@@ -696,6 +748,9 @@ async fn run_inner(
                     }
                 }
                 break;
+            }
+            if !dry_run && date.is_none() {
+                crate::native_spool::persist_checkpoint(&scan_checkpoint, &scan_identity)?;
             }
         }
         let capability = if dry_run {
@@ -720,7 +775,7 @@ async fn run_inner(
             .transpose()?
             .unwrap_or(0)
             .saturating_add(unread_sources);
-        let state = json!({"schema_version":2,"checked_at":now,"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),"binary_sha256":binary_hash,"scope":scope,"enabled":true,"status":if errors>0{"parser_failure"}else if scanned==0{"unavailable"}else{"fresh"},"last_scan_success_at":if errors==0&&scanned>0{json!(now)}else{status()["last_scan_success_at"].clone()},"parser_errors":errors,"parser_failure_codes":parser_failure_codes,"pending":pending,"unread_sources":unread_sources,"scanned_sources":scanned,"parsed_records":parsed,"queued":queued,"receiver_capable":capability,"producer_spool":producer_spool,"last_event_at":last_event,"tick_elapsed_ms":began.elapsed().as_millis(),"incomplete":errors>0||pending>0||scanned==0||producer_spool["pending"].as_u64().is_some_and(|n|n>0)||producer_spool["status"]=="unavailable"||producer_spool["status"]=="capture_failure","dry_run":dry_run,"candidates":if dry_run{Some(candidates)}else{None}});
+        let state = json!({"schema_version":2,"checked_at":now,"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),"binary_sha256":binary_hash,"scope":scope,"enabled":true,"status":if errors>0{"parser_failure"}else if scanned==0{"unavailable"}else{"fresh"},"last_scan_success_at":if errors==0&&scanned>0{json!(now)}else{status()["last_scan_success_at"].clone()},"parser_errors":errors,"parser_failure_codes":parser_failure_codes,"pending":pending,"unread_sources":unread_sources,"scanned_sources":scanned,"parsed_records":parsed,"queued":queued,"receiver_capable":capability,"producer_spool":producer_spool,"broker_handoff":broker_handoff,"last_event_at":last_event,"tick_elapsed_ms":began.elapsed().as_millis(),"incomplete":errors>0||pending>0||scanned==0||producer_spool["pending"].as_u64().is_some_and(|n|n>0)||producer_spool["status"]=="unavailable"||producer_spool["status"]=="capture_failure"||producer_spool["pending"].is_null()||broker_handoff["status"]=="unavailable"||broker_handoff["pending"].as_u64().is_some_and(|n|n>0)||broker_handoff["retained_dead_letters"].as_u64().is_some_and(|n|n>0)||broker_handoff["owner_unconfirmed"].as_u64().is_some_and(|n|n>0)||broker_handoff["dead_lettered"].as_u64().is_some_and(|n|n>0),"dry_run":dry_run,"candidates":if dry_run{Some(candidates)}else{None}});
         if !dry_run {
             save(&dir.join("capture-state.json"), &state)?;
         }

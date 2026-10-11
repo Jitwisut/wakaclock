@@ -17,7 +17,6 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::sync::Arc;
 use std::{
@@ -56,7 +55,6 @@ pub(crate) const MAX_BATCH_EVENTS: usize = CORE_MAX_BATCH_EVENTS;
 use crate::agent_service;
 
 const BROKER_AI_ACTIVITY_STREAM: &str = "broker-ai";
-const MAX_SIDECAR_FINGERPRINT_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct BrokerProcessReport {
@@ -64,6 +62,9 @@ pub(crate) struct BrokerProcessReport {
     pub processed: usize,
     pub retried: usize,
     pub dead_lettered: usize,
+    pub pending: u64,
+    pub retained_dead_letters: u64,
+    pub owner_unconfirmed: u64,
 }
 
 #[cfg(test)]
@@ -147,7 +148,8 @@ pub(crate) async fn submit_events(
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut store = BrokerStore::open()?;
-    let outcomes = store.ingest_normalized_batch(&normalized)?;
+    let scope = wakaclock_core::editor_health::scope_id(&api_client.queue_scope());
+    let outcomes = store.ingest_normalized_batch_scoped(&normalized, Some(&scope))?;
     let ack = batch_ack(&normalized, &outcomes);
     drop(store);
 
@@ -184,7 +186,12 @@ pub(crate) async fn submit_editor_observation_from_stdin(
         AppError::Validation("editor observation failed metadata validation".to_string())
     })?;
     let observation = observation.normalize()?;
-    let (outcome, status) = BrokerStore::open()?.ingest_editor_observation(&observation)?;
+    let (outcome, status) = BrokerStore::open()?.ingest_editor_observation_scoped(
+        &observation,
+        Some(&wakaclock_core::editor_health::scope_id(
+            &api_client.queue_scope(),
+        )),
+    )?;
     if matches!(
         outcome,
         EditorObservationIngestOutcome::Accepted
@@ -197,6 +204,7 @@ pub(crate) async fn submit_editor_observation_from_stdin(
 }
 
 pub(crate) async fn editor_observation_status_for_cli(
+    api_client: &ApiClient,
     observation_id: &str,
 ) -> Result<EditorObservationAck, AppError> {
     if !wakaclock_core::ai::event::is_safe_event_id(observation_id) {
@@ -204,8 +212,16 @@ pub(crate) async fn editor_observation_status_for_cli(
             "editor observation was not found".to_string(),
         ));
     }
+    let current = api_client.queue_scope();
+    let mut scopes = vec![wakaclock_core::editor_health::scope_id(&current)];
+    scopes.extend(
+        Queue::open()?
+            .verified_editor_journal_scopes(&current)?
+            .iter()
+            .map(wakaclock_core::editor_health::scope_id),
+    );
     BrokerStore::open()?
-        .editor_observation_status(observation_id)?
+        .editor_observation_status_scoped(observation_id, &scopes)?
         .ok_or_else(|| AppError::NotFound("editor observation was not found".to_string()))
 }
 
@@ -269,19 +285,45 @@ pub(crate) async fn process_pending(
     api_client: &ApiClient,
     limit: usize,
 ) -> Result<BrokerProcessReport, AppError> {
-    let records = {
+    process_pending_inner(config, api_client, limit, false).await
+}
+pub(crate) async fn queue_pending(
+    config: &Config,
+    api_client: &ApiClient,
+    limit: usize,
+) -> Result<BrokerProcessReport, AppError> {
+    process_pending_inner(config, api_client, limit, true).await
+}
+async fn process_pending_inner(
+    config: &Config,
+    api_client: &ApiClient,
+    limit: usize,
+    queue_only: bool,
+) -> Result<BrokerProcessReport, AppError> {
+    let (records, scopes) = {
         let mut store = BrokerStore::open()?;
-        store.claim_ready(limit)?
+        let current = api_client.queue_scope();
+        let mut scopes = vec![wakaclock_core::editor_health::scope_id(&current)];
+        scopes.extend(
+            Queue::open()?
+                .verified_editor_journal_scopes(&current)?
+                .iter()
+                .map(wakaclock_core::editor_health::scope_id),
+        );
+        (store.claim_ready_scoped(limit, Some(&scopes))?, scopes)
     };
     let mut report = BrokerProcessReport {
         claimed: records.len(),
         processed: 0,
         retried: 0,
         dead_lettered: 0,
+        pending: 0,
+        retained_dead_letters: 0,
+        owner_unconfirmed: 0,
     };
 
     for record in records {
-        match process_record(config, api_client, &record).await {
+        match process_record(config, api_client, &record, queue_only).await {
             Ok(ProcessRecordOutcome::Processed) => {
                 if BrokerStore::open()?
                     .mark_processed_for_attempt(&record.event_id, record.attempt_count)?
@@ -308,7 +350,13 @@ pub(crate) async fn process_pending(
         }
     }
 
-    BrokerStore::open()?.compact()?;
+    let store = BrokerStore::open()?;
+    store.compact()?;
+    (
+        report.pending,
+        report.retained_dead_letters,
+        report.owner_unconfirmed,
+    ) = store.handoff_health(&scopes)?;
     Ok(report)
 }
 
@@ -339,6 +387,7 @@ async fn process_record(
     config: &Config,
     api_client: &ApiClient,
     record: &wakaclock_core::broker::BrokerRecord,
+    queue_only: bool,
 ) -> Result<ProcessRecordOutcome, AppError> {
     let event = &record.event;
     let event_time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
@@ -348,9 +397,8 @@ async fn process_record(
     // being classified as Human while the API is offline. The append is idempotent by
     // event_id so a lease recovery after a crash cannot grow duplicate correlation
     // records.
-    if append_broker_sidecar(event).is_err() {
-        eprintln!("Warning: could not append AI attribution sidecar code=io");
-    }
+    append_broker_sidecar(event, record.scope_id.as_deref())
+        .map_err(|_| AppError::Io(std::io::Error::other("broker_sidecar_unavailable")))?;
 
     let mut matched_editor = if event
         .editor
@@ -400,7 +448,11 @@ async fn process_record(
     } else {
         let mut state = AiAttributionState::open()?;
         state.record_activity(
-            BROKER_AI_ACTIVITY_STREAM,
+            &record
+                .scope_id
+                .as_ref()
+                .map(|scope| format!("{BROKER_AI_ACTIVITY_STREAM}|owner:{scope}"))
+                .unwrap_or_else(|| BROKER_AI_ACTIVITY_STREAM.to_string()),
             event_time,
             MAX_ACTIVITY_GAP_SECONDS,
         )?
@@ -494,7 +546,11 @@ async fn process_record(
         Vec::new()
     };
 
-    let report = api_client.send_heartbeats(vec![heartbeat]).await?;
+    let report = if queue_only {
+        api_client.queue_heartbeats(vec![heartbeat])?
+    } else {
+        api_client.send_heartbeats(vec![heartbeat]).await?
+    };
     if report.sent == 0 && report.queued == 0 && report.deduped == 0 {
         return Err(AppError::Validation(
             "broker heartbeat was neither sent, queued nor deduplicated".to_string(),
@@ -502,10 +558,7 @@ async fn process_record(
     }
 
     let state = AiAttributionState::open()?;
-    let delivery_id = wakaclock_core::broker::scoped_storage_event_id(
-        &event.event_id,
-        event.session_id.as_deref(),
-    );
+    let delivery_id = record.event_id.clone();
     state.mark_delivered(&delivery_id, "broker")?;
     agent_service::record_heartbeat();
     Ok(ProcessRecordOutcome::Processed)
@@ -531,7 +584,10 @@ fn has_explicit_tool_duration_evidence(event: &BrokerEventV1) -> bool {
             .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
 }
 
-fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
+fn append_broker_sidecar(
+    event: &BrokerEventV1,
+    owner_scope: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
     // The sequence is reserved in the broker's durable inbox database before this
     // append. A retry therefore reuses the same stream/sequence pair without an
     // O(n) scan of the JSONL file; the reader deduplicates a crash-boundary duplicate.
@@ -539,20 +595,32 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&state_dir)?;
     let path = state_dir.join("ai-events.jsonl");
     let mut store = BrokerStore::open()?;
-    let cursor =
-        store.reserve_sidecar_cursor_scoped(&event.event_id, event.session_id.as_deref())?;
+    let sidecar_session = owner_scope.map(|scope| {
+        format!(
+            "{}|owner:{scope}",
+            event.session_id.as_deref().unwrap_or("")
+        )
+    });
+    let sidecar_session = sidecar_session.as_deref().or(event.session_id.as_deref());
+    let cursor = store.reserve_sidecar_cursor_scoped(&event.event_id, sidecar_session)?;
     if cursor.already_written {
         return Ok(());
     }
-    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-    // A post-edit content hash is the only editor↔producer identity proof currently
-    // available. Keep it local metadata, bounded by size, and only emit it for live
-    // producer paths; a delayed transcript replay may point at a newer file version.
-    let content_fingerprint = (event.source.as_str() != "transcript")
-        .then(|| content_fingerprint_for_path(Path::new(&event.entity)))
-        .flatten();
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path)?;
+    set_private_permissions(&path)?;
+    // Replay never reads today's file to manufacture historical edit identity.
+    // Use only a producer fingerprint observed at the actual hook boundary.
+    let content_fingerprint = event.content_fingerprint.as_deref();
     let payload = serde_json::json!({
         "schema_version": AI_SIDECAR_SCHEMA_VERSION,
+        "owner_scope_id": owner_scope,
         "stream_id": cursor.stream_id,
         "sequence": cursor.sequence,
         "event_id": event.event_id,
@@ -581,27 +649,13 @@ fn append_broker_sidecar(event: &BrokerEventV1) -> Result<(), Box<dyn Error>> {
         "previous_entity": event.previous_entity,
     });
     writeln!(file, "{}", serde_json::to_string(&payload)?)?;
-    drop(file);
-    store.mark_sidecar_written_scoped(&event.event_id, event.session_id.as_deref())?;
+    file.sync_all()?;
     set_private_permissions(&path)?;
+    drop(file);
+    #[cfg(unix)]
+    fs::File::open(&state_dir)?.sync_all()?;
+    store.mark_sidecar_written_scoped(&event.event_id, sidecar_session)?;
     Ok(())
-}
-
-fn content_fingerprint_for_path(path: &Path) -> Option<String> {
-    let metadata = fs::metadata(path).ok()?;
-    if metadata.len() > MAX_SIDECAR_FINGERPRINT_BYTES {
-        return None;
-    }
-    let mut input = fs::File::open(path).ok()?;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    input.read_to_end(&mut bytes).ok()?;
-    let digest = Sha256::digest(bytes);
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(hex, "{byte:02x}");
-    }
-    Some(format!("sha256:{hex}"))
 }
 
 #[cfg(test)]

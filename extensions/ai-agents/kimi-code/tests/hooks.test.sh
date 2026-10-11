@@ -4,10 +4,16 @@ set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/atoaxis-kimi.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
+export ATOAXIS_PRODUCER_HOME="$TMP/producer-home"
+mkdir -p "$ATOAXIS_PRODUCER_HOME"
 MOCK="$TMP/wakaclock"
 CAPTURE="$TMP/capture.json"
 cat >"$MOCK" <<'MOCK'
 #!/usr/bin/env bash
+if [ "${1:-}" = journal-scope ]; then
+  printf '%s\n' '{"schema_version":1,"owner_confirmed":true,"scope_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  exit 0
+fi
 cat >"$ATOAXIS_CAPTURE"
 MOCK
 chmod +x "$MOCK"
