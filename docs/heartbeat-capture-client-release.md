@@ -1,5 +1,7 @@
 # Heartbeat → Capture AI → Client Release: implementation ledger
 
+> Latest adapter/journal delivery (2026-10-11): [implementation ledger](ai-adapters-journal-recovery.md) and [candidate report](ai-adapters-journal-candidate-2026-10-11.md). The older candidates and checks below remain historical evidence for their own source commits; they do not certify the newer build.
+
 Updated: 2026-10-10, Asia/Bangkok. Branch: `codex/heartbeat-capture-release`.
 Base: `90774c9`. Foundation commits: `98c81d7`, `4a9d194`; editor redrive and
 Cline wiring: `3484e95`. The current internal macOS arm64 candidate was built
