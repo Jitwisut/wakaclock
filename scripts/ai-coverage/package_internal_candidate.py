@@ -20,7 +20,7 @@ from pathlib import Path
 from verify_release_artifacts import ArtifactError, verify_vsix, _safe_member
 
 TARGETS = {"darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"}
-REQUIRED_CAPABILITIES = {"editor_durable_ack_v1", "activity_envelope_v3", "persistent_runtime_intent_v1", "editor_receipts_read_v1", "native_producer_spool_v1"}
+REQUIRED_CAPABILITIES = {"editor_durable_ack_v1", "activity_envelope_v3", "persistent_runtime_intent_v1", "editor_receipts_read_v1", "native_producer_spool_v1", "producer_batch_ack_v2", "journal_evidence_read_v1"}
 SECRET_PATTERNS = [rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", rb"gh[pousr]_[A-Za-z0-9]{30,}", rb"github_pat_[A-Za-z0-9_]{40,}", rb"sk-(?:proj-|ant-)?[A-Za-z0-9_-]{40,}"]
 
 
