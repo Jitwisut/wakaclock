@@ -2,7 +2,7 @@
 # Discard a pending Codex shell snapshot after a failed/cancelled tool call.
 set -u
 INPUT="$(cat)"
-command -v jq >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || { printf '%s\n' 'AtoAxis: producer_capture_failure; jq required' >&2; exit 1; }
 CALL_ID="$(jq -r '.tool_use_id // .toolUseId // .call_id // .callId // .tool_call_id // .toolCallId // empty' <<<"$INPUT" 2>/dev/null || true)"
 EXPLICIT_TOOL_EVENT_ID="$(jq -r '.tool_event_id // empty' <<<"$INPUT" 2>/dev/null || true)"
 [ -n "$CALL_ID" ] || [ -n "$EXPLICIT_TOOL_EVENT_ID" ] || exit 0
@@ -33,8 +33,14 @@ fi
 CLI="${WAKACLOCK_CLI_PATH:-}"
 if [ -z "$CLI" ] && [ -f "${HOME}/.wakaclock/cli-path" ]; then CLI="$(tr -d '\r\n' < "${HOME}/.wakaclock/cli-path")"; fi
 CLI="${CLI:-wakaclock}"
-command -v "$CLI" >/dev/null 2>&1 || exit 0
+COMMON_DIR="${WAKACLOCK_AGENT_COMMON_DIR:-${SCRIPT_DIR}/../common}"
+PRODUCER="${COMMON_DIR}/tool-boundary-producer.py"
+if ! command -v python3 >/dev/null 2>&1 || [ ! -r "$PRODUCER" ]; then
+  printf '%s\n' 'AtoAxis: producer_capture_failure; durable boundary helper required' >&2
+  exit 1
+fi
 jq -cn --arg tool_event_id "$TOOL_EVENT_ID" --arg agent codex \
-  '{tool_event_id:$tool_event_id,agent:$agent}' \
-  | "$CLI" ai tool-abort --json >/dev/null 2>&1 || true
+  --arg session_id "$SESSION_ID" --arg cwd "$CWD" --arg tool "$TOOL_NAME" \
+  '{tool_event_id:$tool_event_id,agent:$agent,session_id:(if $session_id=="" then null else $session_id end),cwd:$cwd,tool:(if $tool=="" then null else $tool end)}' \
+  | python3 "$PRODUCER" --phase abort --cli "$CLI" --surface "${WAKACLOCK_PRODUCER_SURFACE:-cli}" || exit 1
 exit 0

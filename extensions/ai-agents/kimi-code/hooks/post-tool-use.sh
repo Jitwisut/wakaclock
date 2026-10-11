@@ -4,7 +4,7 @@
 set -u
 
 INPUT="$(cat)"
-command -v jq >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || { printf '%s\n' 'AtoAxis: producer_capture_failure; jq required' >&2; exit 1; }
 TOOL_NAME="$(jq -r '.tool_name // empty' <<<"$INPUT" 2>/dev/null || true)"
 TOOL_EVENT_ID="$(jq -r '.tool_call_id // .toolCallId // .call_id // empty' <<<"$INPUT" 2>/dev/null || true)"
 
@@ -20,7 +20,13 @@ case "$TOOL_NAME" in
       printf '%s\n' 'atoaxis-kimi: missing_tool_call_id (post-tool); skipped' >&2
       exit 0
     fi
-    jq -cn \
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PRODUCER="${WAKACLOCK_AGENT_COMMON_DIR:-${ROOT}/common}/tool-boundary-producer.py"
+if ! command -v python3 >/dev/null 2>&1 || [ ! -r "$PRODUCER" ]; then
+  printf '%s\n' 'AtoAxis: producer_capture_failure; durable boundary helper required' >&2
+  exit 1
+fi
+jq -cn \
       --arg tool_event_id "$TOOL_EVENT_ID" \
       --arg agent "kimi-code-cli" \
       --arg session_id "$(jq -r '.session_id // .sessionId // empty' <<<"$INPUT" 2>/dev/null || true)" \
@@ -28,7 +34,7 @@ case "$TOOL_NAME" in
       --arg transport "tool_snapshot" \
       --arg workspace_root "$(jq -r '.cwd // .workdir // empty' <<<"$INPUT" 2>/dev/null || true)" \
       '{tool_event_id:$tool_event_id,agent:$agent,session_id:(if $session_id=="" then null else $session_id end),tool:$tool,transport:$transport,workspace_root:(if $workspace_root=="" then null else $workspace_root end)}' \
-      | "$CLI" ai tool-after --json >/dev/null 2>&1 || true
+      | python3 "$PRODUCER" --phase after --cli "$CLI" --surface "${WAKACLOCK_PRODUCER_SURFACE:-cli}" || exit 1
     exit 0
     ;;
   WriteFile|StrReplaceFile|write_file|str_replace_file|replace)

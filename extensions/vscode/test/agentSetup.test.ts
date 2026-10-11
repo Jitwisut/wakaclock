@@ -414,14 +414,17 @@ describe("adapter registry consumption (planai2 p1.5)", () => {
 });
 
 describe("AI shell snapshot adapters", () => {
-  it("forwards stable matching Before/After tool metadata to the CLI engine", async () => {
+  it("durably freezes stable Before/After metadata before CLI handoff", async () => {
     const homeDir = path.join(workDir, "home");
     const fakeCli = path.join(workDir, "fake-wakaclock");
     const callsLog = path.join(workDir, "snapshot-calls.log");
     await fs.mkdir(path.join(homeDir, ".wakaclock"), { recursive: true });
+    await fs.mkdir(path.join(homeDir, ".wakaclock", "native-producer-bindings"), { recursive: true });
+    await fs.writeFile(path.join(homeDir, ".wakaclock", "native-producer-bindings", "codex-cli.json"),
+      JSON.stringify({ scope_id: "a".repeat(64), owner_fixed: true }));
     await fs.writeFile(
       fakeCli,
-      '#!/usr/bin/env bash\npayload="$(cat)"\nprintf "%s\\t%s\\n" "$*" "$payload" >> "$WAKACLOCK_TEST_CALLS"\n'
+      '#!/usr/bin/env bash\nif [ "$*" = "journal-scope" ]; then printf \'{"capabilities":["tool_boundary_durable_v1"]}\\n\'; exit 0; fi\npayload="$(cat)"\nprintf "%s\\t%s\\n" "$*" "$payload" >> "$WAKACLOCK_TEST_CALLS"\n'
     );
     await fs.chmod(fakeCli, 0o755);
     await fs.writeFile(path.join(homeDir, ".wakaclock", "cli-path"), `${fakeCli}\n`);
@@ -438,32 +441,34 @@ describe("AI shell snapshot adapters", () => {
     const env = {
       ...process.env,
       HOME: homeDir,
+      ATOAXIS_PRODUCER_HOME: homeDir,
       WAKACLOCK_TEST_CALLS: callsLog
     };
     await runHook(beforeScript, hookInput, env);
     await runHook(afterScript, hookInput, env);
 
-    const rawCalls = (await fs.readFile(callsLog, "utf8"))
-      .trim()
-      .split("\n");
-    const calls = rawCalls
-      .filter((line) => line.startsWith("ai tool-"))
-      .map((line) => {
-        const [args, payload] = line.split("\t", 2);
-        return { args, payload: JSON.parse(payload) as Record<string, unknown> };
-      });
+    const calls = (await fs.readFile(callsLog, "utf8")).trim().split("\n")
+      .filter((line) => line.startsWith("ai producer-batch"))
+      .map((line) => JSON.parse(line.split("\t", 2)[1]));
     expect(calls).toHaveLength(2);
-    expect(calls[0].args).toBe("ai tool-before --json");
-    expect(calls[1].args).toBe("ai tool-after --json");
-    expect(calls[0].payload.tool_event_id).toBe(calls[1].payload.tool_event_id);
-    expect(calls[0].payload).toMatchObject({
-      agent: "codex",
-      provider: "openai",
-      session_id: "session-1",
-      tool: "shell_command",
-      transport: "shell_hook",
-      cwd: workDir
+    const before = calls[0].records[0];
+    const after = calls[1].records[0];
+    expect(before.kind).toBe("tool_boundary");
+    expect(after.kind).toBe("tool_boundary");
+    expect(before.metadata.phase).toBe("before");
+    expect(after.metadata.phase).toBe("after");
+    expect(before.metadata.input.tool_event_id).toBe(after.metadata.input.tool_event_id);
+    expect(before.metadata.input).toMatchObject({
+      agent: "codex", provider: "openai", session_id: "session-1",
+      tool: "shell_command", transport: "shell_hook", cwd: workDir
     });
+    expect(before.metadata.snapshot.started_at).toBe(before.observed_at);
+    expect(after.metadata.snapshot.started_at).toBe(after.observed_at);
+    expect(before.scope_id).toBe("a".repeat(64));
+    expect(after.scope_id).toBe(before.scope_id);
+    const spool = path.join(homeDir, ".wakaclock", "native-producer-spool", before.scope_id);
+    expect(JSON.parse(await fs.readFile(path.join(spool, `${before.observation_id}.json`), "utf8"))).toEqual(before);
+    expect(JSON.parse(await fs.readFile(path.join(spool, `${after.observation_id}.json`), "utf8"))).toEqual(after);
   });
 });
 

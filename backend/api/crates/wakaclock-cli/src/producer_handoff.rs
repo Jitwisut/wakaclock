@@ -1,7 +1,7 @@
 //! Bounded, scoped, metadata-only producer acceptance. ACK is local durability,
 //! never HTTP success; rejected records remain in the producer's original spool.
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ use wakaclock_core::{
     queue::Queue,
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Observation {
     pub schema_version: u8,
@@ -41,7 +41,12 @@ impl Observation {
             return Err("producer_contract_invalid");
         }
         let bytes = serde_json::to_vec(&self.metadata).map_err(|_| "producer_payload_invalid")?;
-        if bytes.len() > 64 * 1024 || format!("{:x}", Sha256::digest(bytes)) != self.payload_hash {
+        let max_bytes = if self.kind == "tool_boundary" {
+            8 * 1024 * 1024
+        } else {
+            64 * 1024
+        };
+        if bytes.len() > max_bytes || format!("{:x}", Sha256::digest(bytes)) != self.payload_hash {
             return Err("producer_hash_mismatch");
         }
         Ok(())
@@ -68,20 +73,15 @@ async fn accept_inner(
     if config.api_key.is_none() {
         return Err(("producer_owner_unconfirmed", true));
     }
-    let current = api.queue_scope();
-    let mut scopes = vec![wakaclock_core::editor_health::scope_id(&current)];
-    scopes.extend(
-        Queue::open()
-            .and_then(|q| q.verified_editor_journal_scopes(&current))
-            .map_err(|_| ("producer_scope_proof_unavailable", true))?
-            .iter()
-            .map(wakaclock_core::editor_health::scope_id),
-    );
+    let scopes = verified_scopes(api).map_err(|_| ("producer_scope_proof_unavailable", true))?;
     if !scopes.contains(&o.scope_id) {
         return Err(("producer_scope_mismatch", false));
     }
     if !wakaclock_core::runtime::capture_allowed_at(o.observed_at.timestamp()) {
         return Err(("paused_by_user", true));
+    }
+    if o.kind == "tool_boundary" {
+        return crate::producer_tool_boundary::accept(o);
     }
     if o.kind == "file_mutation" {
         let event: BrokerEventV1 = serde_json::from_value(o.metadata.clone())
@@ -126,6 +126,21 @@ async fn accept_inner(
     } else {
         "accepted"
     })
+}
+pub(crate) fn verified_scopes(
+    api: &ApiClient,
+) -> Result<Vec<String>, wakaclock_core::error::AppError> {
+    let current = api.queue_scope();
+    let mut scopes = vec![wakaclock_core::editor_health::scope_id(&current)];
+    scopes.extend(
+        Queue::open()?
+            .verified_editor_journal_scopes(&current)?
+            .iter()
+            .map(wakaclock_core::editor_health::scope_id),
+    );
+    scopes.sort();
+    scopes.dedup();
+    Ok(scopes)
 }
 fn lifecycle(o: &Observation) -> Result<BrokerActivityEventV3, &'static str> {
     let (session, root, operation, kind, tool, status, occurred_at) = match o.kind.as_str() {
@@ -222,7 +237,7 @@ pub(crate) async fn batch(
     api: &ApiClient,
     bytes: &[u8],
 ) -> Result<Value, &'static str> {
-    if bytes.len() > 2 * 1024 * 1024 {
+    if bytes.len() > 16 * 1024 * 1024 {
         return Err("producer_batch_too_large");
     }
     let input: Batch = serde_json::from_slice(bytes).map_err(|_| "producer_batch_invalid")?;

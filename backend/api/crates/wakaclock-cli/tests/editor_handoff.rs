@@ -55,6 +55,142 @@ impl Drop for Home {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+
+#[test]
+fn frozen_tool_spool_survives_missing_cli_idle_restart_and_lost_ack() {
+    let home = Home::new();
+    let scope: Value =
+        serde_json::from_slice(&home.command(&["journal-scope"], None).stdout).unwrap();
+    assert!(scope["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c == "tool_boundary_durable_v1"));
+    let bindings = home.0.join(".wakaclock/native-producer-bindings");
+    fs::create_dir_all(&bindings).unwrap();
+    fs::write(
+        bindings.join("codex-cli.json"),
+        json!({"scope_id":scope["scope_id"],"owner_fixed":true}).to_string(),
+    )
+    .unwrap();
+    let project = home.0.join("fixture");
+    fs::create_dir(&project).unwrap();
+    fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname=\"fixture\"\nversion=\"0.1.0\"\n",
+    )
+    .unwrap();
+    let file = project.join("evidence.rs");
+    fs::write(&file, "PRIVATE_BEFORE\n").unwrap();
+    let helper = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../../extensions/ai-agents/common/tool-boundary-producer.py");
+    let input = json!({"agent":"codex","tool_event_id":"original-call","session_id":"original-session","cwd":project,"transport":"shell_hook"});
+    let run_hook = |phase: &str| {
+        let mut command = Command::new("python3");
+        command
+            .arg(&helper)
+            .args(["--phase", phase, "--cli", "/missing/cli"])
+            .env("ATOAXIS_PRODUCER_HOME", &home.0)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.to_string().as_bytes())
+            .unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    };
+    run_hook("before");
+    fs::write(&file, "PRIVATE_AFTER\nsecond\n").unwrap();
+    run_hook("after");
+    let directory = home
+        .0
+        .join(".wakaclock/native-producer-spool")
+        .join(scope["scope_id"].as_str().unwrap());
+    let records: Vec<Value> = fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap())
+        .collect();
+    assert_eq!(records.len(), 2);
+    // Neither source nor the future worktree may affect deferred materialization.
+    fs::remove_file(&file).unwrap();
+    let batch = json!({"schema_version":2,"records":records});
+    let first = home.command(&["ai", "producer-batch", "--json"], Some(&batch));
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let accepted: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert!(accepted["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| r["durable"] == true && r["status"] == "accepted"));
+    // Ignore the first ACK. The collector must dedup retained spool after restart.
+    let replay: Value = serde_json::from_slice(
+        &home
+            .command(&["ai", "producer-batch", "--json"], Some(&batch))
+            .stdout,
+    )
+    .unwrap();
+    assert!(replay["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| r["status"] == "duplicate"));
+    let worker = home.command(&["capture", "run", "--once"], None);
+    assert!(
+        worker.status.success(),
+        "{}",
+        String::from_utf8_lossy(&worker.stderr)
+    );
+    let db = rusqlite::Connection::open(home.0.join(".wakaclock/broker.db")).unwrap();
+    let status: String = db
+        .query_row("SELECT status FROM broker_tool_pairs", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(status, "materialized");
+    let json: String = db
+        .query_row("SELECT batch_json FROM broker_tool_pairs", [], |r| r.get(0))
+        .unwrap();
+    let events: Vec<Value> = serde_json::from_str(&json).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["lines_added"], Value::Null); // Non-Git modified baseline stays unknown.
+    let original_end = batch["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["metadata"]["phase"] == "after")
+        .unwrap();
+    assert_eq!(events[0]["occurred_at"], original_end["observed_at"]);
+    assert!(!json.contains("PRIVATE_BEFORE"));
+    assert!(!json.contains("PRIVATE_AFTER"));
+    assert_eq!(
+        fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|s| s == "json"))
+            .count(),
+        0
+    );
+    // Another idle worker restart must keep the exact frozen batch and receipt.
+    assert!(home
+        .command(&["capture", "run", "--once"], None)
+        .status
+        .success());
+    let again: String = db
+        .query_row("SELECT batch_json FROM broker_tool_pairs", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(again, json);
+}
 #[test]
 fn durable_ack_replays_original_ids_after_lost_response_and_isolates_bad_siblings() {
     let home = Home::new();

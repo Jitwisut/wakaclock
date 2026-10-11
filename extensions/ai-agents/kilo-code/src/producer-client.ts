@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { retainToolMarker, retainMetadata } from "../../common/activity-spool.ts";
 import type { KiloProducerMetadata } from "./event-normalizer.ts";
@@ -45,29 +46,34 @@ export async function emitActivityMarker(input: {
   await retainToolMarker(await cliPath(), { ...input, adapter: "kilo-code" }, process.env.ATOAXIS_PRODUCER_HOME || homedir());
 }
 
-function runMetadataCommand(command: string, payload: string): Promise<void> {
-  return cliPath().then((cli) => new Promise<void>((resolve) => {
-    const child = spawn(cli, ["ai", command, "--json"], {
-      stdio: ["pipe", "ignore", "ignore"]
+function runToolBoundary(cli: string, phase: ToolLifecycle, metadata: string, surface: Surface): Promise<void> {
+  const helper = fileURLToPath(new URL("../../common/tool-boundary-producer.py", import.meta.url));
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn("python3", [helper, "--phase", phase, "--cli", cli, "--surface", surface], {
+      stdio: ["pipe", "ignore", "pipe"]
     });
-    child.stdin.end(payload);
+    // The helper freezes and fsyncs evidence before touching the CLI. Its stderr
+    // contains safe status codes only, including pending/ownership failures.
+    child.stderr.on("data", () => { console.warn("AtoAxis: tool_boundary_status_pending"); });
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(metadata);
     const timer = setTimeout(() => {
       child.kill();
-      resolve();
-    }, 5_000);
-    child.once("close", () => {
+      reject(new Error("producer_boundary_capture_timeout"));
+    }, 60_000);
+    child.once("close", (code) => {
       clearTimeout(timer);
-      resolve();
+      if (code === 0) resolve(); else reject(new Error("producer_boundary_capture_failure"));
     });
     child.once("error", () => {
       clearTimeout(timer);
-      resolve();
+      reject(new Error("producer_boundary_capture_failure"));
     });
-  }));
+  });
 }
 
 /**
- * Run the CLI's metadata-only shell snapshot lifecycle. Kilo's shell tool does
+ * Freeze a metadata-only shell snapshot at the hook boundary. Kilo's shell tool does
  * not expose a file list in its completion event, so the shared before/after
  * engine is the only safe fallback. The object is constructed from an explicit
  * allowlist; command text and tool output never cross this process boundary.
@@ -85,7 +91,6 @@ export async function runToolLifecycle(
     directory?: string;
   }
 ): Promise<void> {
-  const command = phase === "before" ? "tool-before" : phase === "after" ? "tool-after" : "tool-abort";
   const metadata = {
     tool_event_id: input.toolEventId,
     agent: input.agent,
@@ -96,13 +101,7 @@ export async function runToolLifecycle(
     transport: "tool_snapshot",
     workspace_root: input.directory ?? null
   };
-  const observedAt = new Date().toISOString();
-  // Start the live snapshot before any ownership negotiation can delay it.
-  const snapshot = runMetadataCommand(command, JSON.stringify(metadata));
-  await retainMetadata(await cliPath(), {adapter: "kilo-code", surface: input.surface ?? "unknown", observedAt, kind: phase === "before" ? "tool_before" : phase === "after" ? "tool_after" : "tool_abort", metadata}, process.env.ATOAXIS_PRODUCER_HOME || homedir());
-  // Snapshots are captured only at this live boundary. The idle collector never
-  // reruns a snapshot command against files that may have changed since the hook.
-  await snapshot;
+  await runToolBoundary(await cliPath(), phase, JSON.stringify(metadata), input.surface ?? "unknown");
 }
 
 /**

@@ -25,6 +25,7 @@ mod native_hooks;
 mod native_spool;
 mod opencode_plugin;
 mod producer_handoff;
+mod producer_tool_boundary;
 mod runtime_service;
 mod team_context_capture;
 mod tool_snapshot;
@@ -1442,7 +1443,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .collect::<Vec<_>>();
             println!(
                 "{}",
-                serde_json::json!({"schema_version":1,"capabilities":["editor_durable_ack_v1","activity_envelope_v3","persistent_runtime_intent_v1","native_activity_hook_v1","editor_receipts_read_v1","native_producer_spool_v1","producer_batch_ack_v2","journal_evidence_read_v1"],
+                serde_json::json!({"schema_version":1,"capabilities":["editor_durable_ack_v1","activity_envelope_v3","persistent_runtime_intent_v1","native_activity_hook_v1","editor_receipts_read_v1","native_producer_spool_v1","producer_batch_ack_v2","tool_boundary_durable_v1","journal_evidence_read_v1"],
                 "scope_id":journal_scope_id(&scope),"owner_confirmed":config.api_key.is_some(),"recoverable_scope_ids":recoverable_scope_ids,
                 "build":build_identity()})
             );
@@ -2587,7 +2588,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             AiAction::ProducerBatch { json: _ } => {
                 let mut bytes = Vec::new();
                 io::stdin()
-                    .take(2 * 1024 * 1024 + 1)
+                    .take(16 * 1024 * 1024 + 1)
                     .read_to_end(&mut bytes)?;
                 println!(
                     "{}",
@@ -2665,7 +2666,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 all,
                 yes,
                 json,
-            } => ai_setup::run(agent.as_deref(), all, json, yes)?,
+            } => ai_setup::run(
+                agent.as_deref(),
+                all,
+                json,
+                yes,
+                &api_client.queue_scope(),
+                config.api_key.is_some(),
+            )?,
             AiAction::Uninstall { agent, all, json } => {
                 ai_setup::uninstall(agent.as_deref(), all, json)?
             }

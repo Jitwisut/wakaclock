@@ -511,11 +511,32 @@ async fn run_inner(
         producer_slots = 5 - producer_slots;
         let mut parser_batch_slots = 5 - producer_batch_slots;
         let record_limit = if dry_run || date.is_some() { 2000 } else { 100 };
+        let mut tool_boundaries = if dry_run {
+            json!({"status":"not_checked_dry_run"})
+        } else {
+            crate::producer_tool_boundary::health(&api)
+                .unwrap_or_else(|_| json!({"status":"unavailable"}))
+        };
+        let boundary_slot = !dry_run && tool_boundaries["ready"].as_u64().is_some_and(|n| n > 0);
+        if boundary_slot {
+            if crate::producer_tool_boundary::drain_pending(&config, &api, 100, began).is_err() {
+                tool_boundaries["status"] = json!("unavailable");
+            } else {
+                tool_boundaries = crate::producer_tool_boundary::health(&api)
+                    .unwrap_or_else(|_| json!({"status":"unavailable"}));
+            }
+        }
         let producer_spool = if dry_run {
             json!({"status":"not_checked_dry_run"})
         } else {
-            crate::native_spool::drain_bounded(&dir, &config, &api, producer_batch_slots, began)
-                .await
+            crate::native_spool::drain_bounded(
+                &dir,
+                &config,
+                &api,
+                producer_batch_slots - usize::from(boundary_slot),
+                began,
+            )
+            .await
         };
         let broker_handoff = if dry_run {
             json!({"status":"not_checked_dry_run"})
@@ -775,7 +796,7 @@ async fn run_inner(
             .transpose()?
             .unwrap_or(0)
             .saturating_add(unread_sources);
-        let state = json!({"schema_version":2,"checked_at":now,"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),"binary_sha256":binary_hash,"scope":scope,"enabled":true,"status":if errors>0{"parser_failure"}else if scanned==0{"unavailable"}else{"fresh"},"last_scan_success_at":if errors==0&&scanned>0{json!(now)}else{status()["last_scan_success_at"].clone()},"parser_errors":errors,"parser_failure_codes":parser_failure_codes,"pending":pending,"unread_sources":unread_sources,"scanned_sources":scanned,"parsed_records":parsed,"queued":queued,"receiver_capable":capability,"producer_spool":producer_spool,"broker_handoff":broker_handoff,"last_event_at":last_event,"tick_elapsed_ms":began.elapsed().as_millis(),"incomplete":errors>0||pending>0||scanned==0||producer_spool["pending"].as_u64().is_some_and(|n|n>0)||producer_spool["status"]=="unavailable"||producer_spool["status"]=="capture_failure"||producer_spool["pending"].is_null()||broker_handoff["status"]=="unavailable"||broker_handoff["pending"].as_u64().is_some_and(|n|n>0)||broker_handoff["retained_dead_letters"].as_u64().is_some_and(|n|n>0)||broker_handoff["owner_unconfirmed"].as_u64().is_some_and(|n|n>0)||broker_handoff["dead_lettered"].as_u64().is_some_and(|n|n>0),"dry_run":dry_run,"candidates":if dry_run{Some(candidates)}else{None}});
+        let state = json!({"schema_version":2,"checked_at":now,"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"git_sha":env!("WAKACLOCK_GIT_SHA"),"binary_sha256":binary_hash,"scope":scope,"enabled":true,"status":if errors>0{"parser_failure"}else if scanned==0{"unavailable"}else{"fresh"},"last_scan_success_at":if errors==0&&scanned>0{json!(now)}else{status()["last_scan_success_at"].clone()},"parser_errors":errors,"parser_failure_codes":parser_failure_codes,"pending":pending,"unread_sources":unread_sources,"scanned_sources":scanned,"parsed_records":parsed,"queued":queued,"receiver_capable":capability,"producer_spool":producer_spool,"tool_boundaries":tool_boundaries,"broker_handoff":broker_handoff,"last_event_at":last_event,"tick_elapsed_ms":began.elapsed().as_millis(),"incomplete":errors>0||pending>0||scanned==0||tool_boundaries["status"]=="unavailable"||["pending","unavailable","clock_unconfirmed"].iter().any(|field|tool_boundaries[*field].as_u64().is_some_and(|n|n>0))||producer_spool["pending"].as_u64().is_some_and(|n|n>0)||producer_spool["status"]=="unavailable"||producer_spool["status"]=="capture_failure"||producer_spool["pending"].is_null()||broker_handoff["status"]=="unavailable"||broker_handoff["pending"].as_u64().is_some_and(|n|n>0)||broker_handoff["retained_dead_letters"].as_u64().is_some_and(|n|n>0)||broker_handoff["owner_unconfirmed"].as_u64().is_some_and(|n|n>0)||broker_handoff["dead_lettered"].as_u64().is_some_and(|n|n>0),"dry_run":dry_run,"candidates":if dry_run{Some(candidates)}else{None}});
         if !dry_run {
             save(&dir.join("capture-state.json"), &state)?;
         }

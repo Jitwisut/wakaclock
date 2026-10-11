@@ -48,6 +48,7 @@ pub struct AiToolInput {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct FileFingerprint {
     pub size: u64,
     pub modified_ns: u128,
@@ -58,6 +59,7 @@ pub struct FileFingerprint {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolSnapshot {
     pub tool_event_id: String,
     pub agent: String,
@@ -269,6 +271,45 @@ pub fn diff(
     before: &ToolSnapshot,
     after: &ToolSnapshot,
 ) -> Result<Vec<WorkspaceChange>, Box<dyn std::error::Error>> {
+    diff_with(before, after, |path, old| {
+        line_delta_if_safe(before, path, old)
+    })
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenNumstat {
+    pub added: Option<u32>,
+    pub deleted: Option<u32>,
+}
+
+/// Deferred processing must never inspect the current worktree or HEAD. Missing
+/// line evidence stays unavailable; fingerprints still prove the mutation.
+pub fn diff_frozen(
+    before: &ToolSnapshot,
+    after: &ToolSnapshot,
+    numstat: &BTreeMap<String, FrozenNumstat>,
+) -> Result<Vec<WorkspaceChange>, Box<dyn std::error::Error>> {
+    diff_with(before, after, |path, old| {
+        if before.git_backed && old.tracked && !old.dirty_before {
+            Ok(numstat
+                .get(path)
+                .map(|n| (n.added, n.deleted))
+                .unwrap_or((None, None)))
+        } else {
+            Ok((None, None))
+        }
+    })
+}
+
+fn diff_with(
+    before: &ToolSnapshot,
+    after: &ToolSnapshot,
+    mut lines: impl FnMut(
+        &str,
+        &FileFingerprint,
+    ) -> Result<(Option<u32>, Option<u32>), Box<dyn std::error::Error>>,
+) -> Result<Vec<WorkspaceChange>, Box<dyn std::error::Error>> {
     if before.workspace_root != after.workspace_root {
         return Err(io::Error::other("tool snapshots belong to different workspaces").into());
     }
@@ -289,7 +330,7 @@ pub fn diff(
         let old = &before.files[*path];
         let new = &after.files[*path];
         if old.content_hash != new.content_hash {
-            let (lines_added, lines_deleted) = line_delta_if_safe(before, path, old)?;
+            let (lines_added, lines_deleted) = lines(path, old)?;
             changes.push(WorkspaceChange {
                 kind: WorkspaceChangeKind::Modified,
                 entity: before.workspace_root.join(path),
@@ -343,7 +384,7 @@ pub fn diff(
 
     for path in deleted {
         let old = &before.files[&path];
-        let (_, proven_deleted) = line_delta_if_safe(before, &path, old)?;
+        let (_, proven_deleted) = lines(&path, old)?;
         changes.push(WorkspaceChange {
             kind: WorkspaceChangeKind::Deleted,
             entity: before.workspace_root.join(&path),

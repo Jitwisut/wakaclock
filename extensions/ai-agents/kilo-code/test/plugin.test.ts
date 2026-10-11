@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,9 +14,14 @@ async function withMockCli(run: (capture: string, argsCapture: string) => Promis
     cli,
     "#!/usr/bin/env node\n" +
       "let data = ''; process.stdin.on('data', chunk => data += chunk);\n" +
-      "process.stdin.on('end', () => { const fs = require('node:fs'); if(process.argv[2] === 'journal-scope') {console.log(JSON.stringify({schema_version:1,scope_id:'a'.repeat(64),owner_confirmed:true,capabilities:['activity_envelope_v3']}));return;} fs.appendFileSync(process.env.ATOAXIS_CAPTURE, data + '\\n'); fs.appendFileSync(process.env.ATOAXIS_ARGS, process.argv.slice(2).join(' ') + '\\n'); if(process.argv[3] === 'activity-hook') { const x=JSON.parse(data); const hash=x=>require('node:crypto').createHash('sha256').update(x).digest('hex'); const op=hash(x.sessionID+'\\0'+x.callID); const kind=x.hook_event_name.endsWith('before')?'ToolStart':'ToolEnd'; const id=hash('activity-v3\\0kilo-code\\0'+x.sessionID+'\\0'+op+'\\0'+kind); console.log(JSON.stringify({acknowledgement:{schema_version:3,event_id:id,durable:true,status:'accepted'}})); } });\n"
+      "process.stdin.on('end', () => { const fs = require('node:fs'); if(process.argv[2] === 'journal-scope') {console.log(JSON.stringify({schema_version:1,scope_id:'a'.repeat(64),owner_confirmed:true,capabilities:['activity_envelope_v3','tool_boundary_durable_v1']}));return;} fs.appendFileSync(process.env.ATOAXIS_CAPTURE, data + '\\n'); fs.appendFileSync(process.env.ATOAXIS_ARGS, process.argv.slice(2).join(' ') + '\\n'); if(process.argv[3] === 'activity-hook') { const x=JSON.parse(data); const hash=x=>require('node:crypto').createHash('sha256').update(x).digest('hex'); const op=hash(x.sessionID+'\\0'+x.callID); const kind=x.hook_event_name.endsWith('before')?'ToolStart':'ToolEnd'; const id=hash('activity-v3\\0kilo-code\\0'+x.sessionID+'\\0'+op+'\\0'+kind); console.log(JSON.stringify({acknowledgement:{schema_version:3,event_id:id,durable:true,status:'accepted'}})); } });\n"
   );
   await chmod(cli, 0o755);
+  const bindings = join(root, ".wakaclock", "native-producer-bindings");
+  await mkdir(bindings, { recursive: true });
+  for (const surface of ["unknown", "cli", "ide"]) {
+    await writeFile(join(bindings, `kilo-code-${surface}.json`), JSON.stringify({scope_id:"a".repeat(64)}));
+  }
   const previousHome = process.env.ATOAXIS_PRODUCER_HOME;
   process.env.ATOAXIS_PRODUCER_HOME = root;
   const previous = process.env.WAKACLOCK_CLI_PATH;
@@ -150,11 +155,14 @@ test("Kilo shell tools use the shared snapshot lifecycle without forwarding comm
       { success: true, output: "secret output" }
     );
     const args = (await readFile(argsCapture, "utf8")).trim().split("\n");
-    assert.deepEqual(args, ["ai tool-before --json", "ai producer-batch --json", "ai tool-after --json", "ai producer-batch --json"]);
+    assert.deepEqual(args, ["ai producer-batch --json", "ai producer-batch --json"]);
     const records = (await readFile(_capture,"utf8")).trim().split("\n").map(line => JSON.parse(line));
     assert.ok(!JSON.stringify(records).includes("secret"));
-    assert.equal(records[1].records[0].kind,"tool_before");
-    assert.equal(records[3].records[0].kind,"tool_after");
+    assert.equal(records[0].records[0].kind,"tool_boundary");
+    assert.equal(records[1].records[0].kind,"tool_boundary");
+    assert.equal(records[0].records[0].metadata.phase,"before");
+    assert.equal(records[1].records[0].metadata.phase,"after");
+    assert.equal(records[0].records[0].metadata.measurement_error,"tool_boundary_measurement_unavailable");
   });
 });
 
