@@ -1502,8 +1502,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .into_iter()
                 .map(|r| (r.heartbeat_id, r.revision))
                 .collect::<Vec<_>>();
-            let receipts =
-                Queue::inspect_server_receipts_at(&Queue::db_path(), &current, &records)?;
+            let receipts = Queue::inspect_verified_server_receipts_at(
+                &Queue::db_path(),
+                &current,
+                &input.scope_id,
+                &records,
+            )?;
             let readback = api_client.heartbeat_readback(&records).await.ok();
             let observed = readback
                 .as_ref()

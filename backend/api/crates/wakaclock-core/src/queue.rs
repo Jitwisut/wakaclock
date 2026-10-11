@@ -613,22 +613,7 @@ impl Queue {
         conn.busy_timeout(std::time::Duration::from_secs(2))
             .map_err(AppError::Queue)?;
         let _snapshot = conn.unchecked_transaction().map_err(AppError::Queue)?;
-        let mut statement = conn.prepare("SELECT old.credential_scope FROM credential_owner old JOIN credential_owner current ON old.destination=current.destination AND old.owner_id=current.owner_id WHERE current.destination=?1 AND current.credential_scope=?2 AND old.credential_scope!=?2").map_err(AppError::Queue)?;
-        let owners = statement
-            .query_map(params![current.destination, current.owner], |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(AppError::Queue)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(AppError::Queue)?;
-        let scope = owners
-            .into_iter()
-            .map(|owner| QueueScope {
-                destination: current.destination.clone(),
-                owner,
-            })
-            .find(|scope| crate::editor_health::scope_id(scope) == requested_scope_id)
-            .ok_or_else(|| AppError::Validation("journal_scope_unconfirmed".into()))?;
+        let scope = Self::resolve_verified_journal_scope(&conn, current, requested_scope_id)?;
         let inspect = |scope: &QueueScope| -> Result<Vec<serde_json::Value>, AppError> {
             ids.iter().map(|id| {
                 let receipt: Option<(String, i64)> = conn.query_row("SELECT input_hash,accepted_at FROM editor_handoff_receipts WHERE destination=?1 AND owner_scope=?2 AND heartbeat_id=?3",params![scope.destination,scope.owner,id],|row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(AppError::Queue)?;
@@ -651,6 +636,33 @@ impl Queue {
             }
         }
         Ok(old)
+    }
+
+    fn resolve_verified_journal_scope(
+        conn: &Connection,
+        current: &QueueScope,
+        requested_scope_id: &str,
+    ) -> Result<QueueScope, AppError> {
+        if crate::editor_health::scope_id(current) == requested_scope_id {
+            return Ok(current.clone());
+        }
+        let mut statement = conn.prepare("SELECT old.credential_scope FROM credential_owner old JOIN credential_owner current ON old.destination=current.destination AND old.owner_id=current.owner_id WHERE current.destination=?1 AND current.credential_scope=?2 AND old.credential_scope!=?2").map_err(AppError::Queue)?;
+        let owners = statement
+            .query_map(params![current.destination, current.owner], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(AppError::Queue)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::Queue)?;
+        let scope = owners
+            .into_iter()
+            .map(|owner| QueueScope {
+                destination: current.destination.clone(),
+                owner,
+            })
+            .find(|scope| crate::editor_health::scope_id(scope) == requested_scope_id)
+            .ok_or_else(|| AppError::Validation("journal_scope_unconfirmed".into()))?;
+        Ok(scope)
     }
 
     /// ACK boundary for editor journals. Receipt and queue insertion commit together.
@@ -1169,6 +1181,29 @@ impl Queue {
         let table: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='server_handoff_receipts' AND type='table')",[],|r|r.get(0)).map_err(AppError::Queue)?;
         records.iter().map(|(id,revision)| {
             let accepted_at:Option<i64> = if table { conn.query_row("SELECT accepted_at FROM server_handoff_receipts WHERE destination=?1 AND owner_scope=?2 AND heartbeat_id=?3 AND revision=?4",params![scope.destination,scope.owner,id,revision],|r|r.get(0)).optional().map_err(AppError::Queue)? } else {None};
+            Ok(serde_json::json!({"heartbeat_id":id,"revision":revision,"server_ack":if accepted_at.is_some(){"ingress_accepted"}else{"unconfirmed"},"accepted_at":accepted_at,"canonical_readback":"unconfirmed"}))
+        }).collect()
+    }
+
+    /// An old-key receipt is readable only with recorded same-account and
+    /// same-origin proof. Querying it never rebinds or mutates the queue.
+    pub fn inspect_verified_server_receipts_at(
+        path: &std::path::Path,
+        current: &QueueScope,
+        requested_scope_id: &str,
+        records: &[(String, u32)],
+    ) -> Result<Vec<serde_json::Value>, AppError> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(AppError::Queue)?;
+        conn.busy_timeout(std::time::Duration::from_secs(2))
+            .map_err(AppError::Queue)?;
+        let _snapshot = conn.unchecked_transaction().map_err(AppError::Queue)?;
+        let scope = Self::resolve_verified_journal_scope(&conn, current, requested_scope_id)?;
+        let table: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='server_handoff_receipts' AND type='table')",[],|r|r.get(0)).map_err(AppError::Queue)?;
+        records.iter().map(|(id, revision)| {
+            let accepted_at: Option<i64> = if table {
+                conn.query_row("SELECT min(accepted_at) FROM server_handoff_receipts WHERE destination=?1 AND owner_scope IN (?2,?3) AND heartbeat_id=?4 AND revision=?5",params![scope.destination,scope.owner,current.owner,id,revision],|r|r.get(0)).map_err(AppError::Queue)?
+            } else { None };
             Ok(serde_json::json!({"heartbeat_id":id,"revision":revision,"server_ack":if accepted_at.is_some(){"ingress_accepted"}else{"unconfirmed"},"accepted_at":accepted_at,"canonical_readback":"unconfirmed"}))
         }).collect()
     }
@@ -2332,6 +2367,45 @@ mod tests {
                 [0]["server_ack"],
             "unconfirmed"
         );
+    }
+
+    #[test]
+    fn old_key_server_receipt_requires_readonly_same_owner_origin_proof() {
+        let path = std::env::temp_dir().join(format!("receipt-proof-{}.db", Uuid::new_v4()));
+        let queue = Queue::open_at(&path).unwrap();
+        let old = scope("https://server.test", "old");
+        let new = scope("https://server.test", "new");
+        let foreign = scope("https://server.test", "foreign");
+        queue.record_credential_owner(&old, "account").unwrap();
+        queue.record_credential_owner(&new, "account").unwrap();
+        queue
+            .record_credential_owner(&foreign, "other-account")
+            .unwrap();
+        let payload = serde_json::json!({"heartbeat_id":"original-id","revision":2,"time":1000.0});
+        queue.push_scoped(&payload, &old).unwrap();
+        let id = queue.claim_batch_scoped(&old, "request").unwrap()[0].0;
+        assert!(queue
+            .acknowledge_server_and_remove(id, "request", &payload)
+            .unwrap());
+        let scope_id = crate::editor_health::scope_id(&old);
+        let ids = vec![("original-id".into(), 2)];
+        let path = &path;
+        assert_eq!(
+            Queue::inspect_verified_server_receipts_at(path, &new, &scope_id, &ids).unwrap()[0]
+                ["server_ack"],
+            "ingress_accepted"
+        );
+        assert!(
+            Queue::inspect_verified_server_receipts_at(path, &foreign, &scope_id, &ids).is_err()
+        );
+        assert!(Queue::inspect_verified_server_receipts_at(
+            path,
+            &scope("https://other.test", "new"),
+            &scope_id,
+            &ids
+        )
+        .is_err());
+        assert_eq!(queue.len().unwrap(), 0);
     }
 
     #[test]
