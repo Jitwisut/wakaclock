@@ -5,7 +5,7 @@
 set -u
 
 INPUT="$(cat)"
-command -v jq >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || { printf '%s\n' 'AtoAxis: producer_capture_failure; jq required' >&2; exit 1; }
 
 TOOL_NAME="$(jq -r '.tool_name // empty' <<<"$INPUT" 2>/dev/null || true)"
 case "$TOOL_NAME" in
@@ -29,8 +29,13 @@ if [ -z "$CLI" ] && [ -f "${HOME}/.wakaclock/cli-path" ]; then
   CLI="$(tr -d '\r\n' < "${HOME}/.wakaclock/cli-path")"
 fi
 CLI="${CLI:-wakaclock}"
-command -v "$CLI" >/dev/null 2>&1 || exit 0
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PRODUCER="${WAKACLOCK_AGENT_COMMON_DIR:-${ROOT}/common}/tool-boundary-producer.py"
+if ! command -v python3 >/dev/null 2>&1 || [ ! -r "$PRODUCER" ]; then
+  printf '%s\n' 'AtoAxis: producer_capture_failure; durable boundary helper required' >&2
+  exit 1
+fi
 jq -cn \
   --arg tool_event_id "$TOOL_EVENT_ID" \
   --arg agent "kimi-code-cli" \
@@ -41,5 +46,5 @@ jq -cn \
   --arg transport "tool_snapshot" \
   --arg workspace_root "$CWD" \
   '{tool_event_id:$tool_event_id,agent:$agent,provider:(if $provider=="" then null else $provider end),model:(if $model=="" then null else $model end),session_id:(if $session_id=="" then null else $session_id end),tool:$tool,transport:$transport,workspace_root:$workspace_root}' \
-  | "$CLI" ai tool-before --json >/dev/null 2>&1 || true
+  | python3 "$PRODUCER" --phase before --cli "$CLI" --surface "${WAKACLOCK_PRODUCER_SURFACE:-cli}" || exit 1
 exit 0

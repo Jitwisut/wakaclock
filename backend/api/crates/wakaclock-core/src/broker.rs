@@ -26,6 +26,8 @@ use std::{
 };
 use uuid::Uuid;
 
+pub mod producer_boundary;
+
 pub const BROKER_SCHEMA_VERSION: u8 = 1;
 pub const MAX_EVENT_BYTES: usize = 64 * 1024;
 pub const MAX_BATCH_EVENTS: usize = 500;
@@ -1188,6 +1190,7 @@ impl BrokerStore {
             use std::os::unix::fs::PermissionsExt;
             let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
         }
+        producer_boundary::initialize(&conn)?;
         Ok(Self { conn })
     }
 

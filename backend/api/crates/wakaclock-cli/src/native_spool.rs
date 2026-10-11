@@ -238,11 +238,14 @@ async fn drain_scope(directory: &Path, config: &Config, api: &ApiClient, scope: 
                 .map(str::to_owned);
             for file in paths.into_iter().take(100) {
                 let result = async {
-                    if file.is_symlink() || fs::metadata(&file)?.len() > 128 * 1024 {
+                    if file.is_symlink() || fs::metadata(&file)?.len() > 8 * 1024 * 1024 + 64 * 1024 {
                         return Err("producer_spool_invalid".into());
                     }
                     let bytes = fs::read(&file)?;
                     let raw: Value = serde_json::from_slice(&bytes)?;
+                    if raw["kind"] != "tool_boundary" && bytes.len() > 128 * 1024 {
+                        return Err("producer_spool_invalid".into());
+                    }
                     if raw["schema_version"] == 2 {
                         let observation: crate::producer_handoff::Observation = serde_json::from_value(raw)?;
                         if observation.scope_id != scope || file.file_stem().and_then(|s| s.to_str()) != Some(observation.observation_id.as_str()) {

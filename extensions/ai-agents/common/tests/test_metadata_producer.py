@@ -21,6 +21,17 @@ class MetadataTests(unittest.TestCase):
             record=json.loads(next((home/'.wakaclock/native-producer-spool').rglob('*.json')).read_text())
             self.assertEqual(record['metadata']['occurred_at'],self.input()['occurred_at'])
             self.assertEqual(record['payload_hash'],hashlib.sha256(json.dumps(record['metadata'],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest())
+    def test_fixed_owner_is_not_rebound_by_a_foreign_cli(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home=Path(temp);self.setup_scope(home)
+            binding=home/'.wakaclock/native-producer-bindings/claude-code-cli.json'
+            binding.write_text(json.dumps({'scope_id':'a'*64,'owner_fixed':True}))
+            with patch.object(producer.subprocess,'run') as cli:
+                _,record=producer.retain('session_end',self.input(),'/foreign/cli','cli',home)
+                cli.assert_not_called()
+            self.assertEqual(record['scope_id'],'a'*64)
+            self.assertTrue(json.loads(binding.read_text())['owner_fixed'])
+            self.assertEqual(json.loads(binding.read_text())['scope_id'],'a'*64)
     def test_unknown_owner_is_parked(self):
         with tempfile.TemporaryDirectory() as temp:
             home=Path(temp)

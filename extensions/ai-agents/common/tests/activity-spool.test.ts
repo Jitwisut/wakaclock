@@ -47,3 +47,26 @@ test("legacy metadata is spooled with immutable hash/time; contents cannot cross
   assert.equal(readdirSync(join(home,".wakaclock/native-producer-spool", "a".repeat(64))).length,1);
  } finally {rmSync(home,{recursive:true,force:true});}
 });
+
+
+test("fixed owner binding cannot be overwritten by the currently configured foreign account", async () => {
+ const { retainMetadata } = await import("../activity-spool.ts");
+ const home = mkdtempSync(join(tmpdir(), "producer-owner-"));
+ try {
+  const bindings = join(home, ".wakaclock/native-producer-bindings");
+  mkdirSync(bindings, {recursive:true});
+  const binding = join(bindings, "kilo-code-ide.json");
+  writeFileSync(binding, JSON.stringify({scope_id:"a".repeat(64),owner_fixed:true}));
+  const calls = join(home, "calls");
+  const cli = join(home, "foreign-cli");
+  writeFileSync(cli, `#!/bin/sh\nprintf '%s\n' "$*" >> '${calls}'\nif [ "$1" = journal-scope ]; then printf '{"schema_version":1,"owner_confirmed":true,"scope_id":"${"b".repeat(64)}","capabilities":["activity_envelope_v3"]}'; fi\n`);
+  chmodSync(cli, 0o700);
+  const marker = await retainToolMarker(cli, input, home);
+  const metadata = await retainMetadata(cli, {adapter:"kilo-code",surface:"ide",kind:"session_end",metadata:{session_id:"fixture",agent:"kilo-code"}}, home);
+  assert.equal(marker?.observation.scope_id,"a".repeat(64));
+  assert.equal(metadata?.record.scope_id,"a".repeat(64));
+  assert.equal(JSON.parse(readFileSync(binding,"utf8")).scope_id,"a".repeat(64));
+  assert.ok(!readFileSync(calls,"utf8").includes("journal-scope"));
+  assert.equal(readdirSync(join(home,".wakaclock/native-producer-spool","a".repeat(64))).length,2);
+ } finally {rmSync(home,{recursive:true,force:true});}
+});

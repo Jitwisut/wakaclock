@@ -57,7 +57,13 @@ export async function retainToolMarker(cli: string, input: { adapter: "kilo-code
   const bindings = path.join(base, "native-producer-bindings"); safe(bindings); fs.mkdirSync(bindings, { recursive: true, mode: 0o700 });
   const binding = path.join(bindings, `${input.adapter}-${input.surface}.json`); safe(binding);
   let scope: string | undefined;
-  try {
+  let fixed = false;
+  if (fs.existsSync(binding)) {
+    const existing = JSON.parse(fs.readFileSync(binding, "utf8"));
+    if (!/^[a-f0-9]{64}$/.test(existing.scope_id ?? "")) throw new Error("producer_scope_unconfirmed");
+    scope = existing.scope_id; fixed = existing.owner_fixed === true;
+  }
+  if (!fixed) try {
     const handshake = await runProducerCli(cli, ["journal-scope"]);
     if (handshake.schema_version !== 1 || handshake.owner_confirmed !== true || !/^[a-f0-9]{64}$/.test(handshake.scope_id ?? "") || !handshake.capabilities?.includes("activity_envelope_v3")) throw new Error();
     scope = handshake.scope_id;
@@ -103,7 +109,13 @@ export async function retainMetadata(cli: string, input: { adapter: string; surf
   const bindings = path.join(base, "native-producer-bindings"); safe(bindings); fs.mkdirSync(bindings, { recursive: true, mode: 0o700 });
   const binding = path.join(bindings, `${input.adapter}-${input.surface}.json`); safe(binding);
   let scope: string | undefined;
-  try {
+  let fixed = false;
+  if (fs.existsSync(binding)) {
+    const existing = JSON.parse(fs.readFileSync(binding, "utf8"));
+    if (!/^[a-f0-9]{64}$/.test(existing.scope_id ?? "")) throw new Error("producer_scope_unconfirmed");
+    scope = existing.scope_id; fixed = existing.owner_fixed === true;
+  }
+  if (!fixed) try {
     const handshake = await runProducerCli(cli, ["journal-scope"]);
     if (handshake.schema_version !== 1 || handshake.owner_confirmed !== true || !/^[a-f0-9]{64}$/.test(handshake.scope_id ?? "")) throw new Error();
     scope = handshake.scope_id;

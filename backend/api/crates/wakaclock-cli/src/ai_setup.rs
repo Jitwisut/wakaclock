@@ -121,6 +121,8 @@ pub(crate) fn run(
     all: bool,
     json: bool,
     yes: bool,
+    scope: &wakaclock_core::queue::QueueScope,
+    owner_confirmed: bool,
 ) -> Result<(), Box<dyn Error>> {
     if !all && requested_agent.is_none() {
         return Err("choose an adapter id or pass --all".into());
@@ -257,6 +259,20 @@ pub(crate) fn run(
             continue;
         }
         set_hook_consent(&home, &id, HookConsent::Enabled)?;
+        // Bind at explicit setup, never when a later hook/replay happens to find
+        // another account online. Old unconfirmed observations remain parked.
+        if [
+            "codex",
+            "claude-code",
+            "gemini-cli",
+            "kimi-code-cli",
+            "cursor",
+            "kilo-code",
+        ]
+        .contains(&id.as_str())
+        {
+            bind_tool_producer(&home, &id, scope, owner_confirmed)?;
+        }
         let runtime = catalog
             .adapters
             .iter()
@@ -315,6 +331,78 @@ pub(crate) fn run(
     }
     if matches!(report.overall.as_str(), "failed" | "partial") {
         return Err(format!("AI adapter setup completed with {} outcome", report.overall).into());
+    }
+    Ok(())
+}
+
+fn bind_tool_producer(
+    home: &Path,
+    adapter: &str,
+    scope: &wakaclock_core::queue::QueueScope,
+    owner_confirmed: bool,
+) -> Result<(), Box<dyn Error>> {
+    if !owner_confirmed {
+        return Err("producer_owner_unconfirmed; configure an account before hook setup".into());
+    }
+    let scope_id = wakaclock_core::editor_health::scope_id(scope);
+    let verified_aliases = wakaclock_core::queue::Queue::open()?
+        .verified_editor_journal_scopes(scope)?
+        .iter()
+        .map(wakaclock_core::editor_health::scope_id)
+        .collect::<Vec<_>>();
+    let directory = home.join(".wakaclock/native-producer-bindings");
+    for path in directory.ancestors() {
+        if path.is_symlink()
+            && !(cfg!(target_os = "macos")
+                && ["/var", "/tmp", "/etc"].contains(&path.to_string_lossy().as_ref()))
+        {
+            return Err("producer_binding_symlink".into());
+        }
+    }
+    fs::create_dir_all(&directory)?;
+    for surface in ["cli", "ide", "unknown"] {
+        let file = directory.join(format!("{adapter}-{surface}.json"));
+        if file.is_symlink() {
+            return Err("producer_binding_symlink".into());
+        }
+        let mut bound_scope = scope_id.clone();
+        if file.exists() {
+            let existing: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
+            if existing["scope_id"].as_str() != Some(&scope_id)
+                && !existing["scope_id"]
+                    .as_str()
+                    .is_some_and(|old| verified_aliases.iter().any(|proof| proof == old))
+            {
+                return Err("producer_binding_owner_changed; preserve old scope and resolve ownership before reinstall".into());
+            }
+            bound_scope = existing["scope_id"]
+                .as_str()
+                .ok_or("producer_binding_invalid")?
+                .to_owned();
+            if existing["owner_fixed"] == true {
+                continue;
+            }
+        }
+        let stage = directory.join(format!("{}.binding-stage", uuid::Uuid::new_v4()));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut writer = options.open(&stage)?;
+        use std::io::Write;
+        writer.write_all(
+            serde_json::to_string(
+                &serde_json::json!({"schema_version":1,"scope_id":bound_scope,"owner_fixed":true}),
+            )?
+            .as_bytes(),
+        )?;
+        writer.sync_all()?;
+        fs::rename(&stage, &file)?;
+        #[cfg(unix)]
+        fs::File::open(&directory)?.sync_all()?;
     }
     Ok(())
 }

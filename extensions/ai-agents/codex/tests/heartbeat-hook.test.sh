@@ -13,7 +13,7 @@ CAPTURE="$TMP/capture.log"
 cat >"$MOCK" <<'MOCK'
 #!/usr/bin/env bash
 if [ "${1:-}" = journal-scope ]; then
-  printf '%s\n' '{"schema_version":1,"owner_confirmed":true,"scope_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  printf '%s\n' '{"schema_version":1,"owner_confirmed":true,"capabilities":["tool_boundary_durable_v1"],"scope_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
   exit 0
 fi
 printf 'ARGS:' >>"$ATOAXIS_CAPTURE"
@@ -64,7 +64,8 @@ grep -q '"change_kind":"rename"' "$CAPTURE"
 grep -q '"previous_entity":"'$PWD'/src/old.ts"' "$CAPTURE"
 printf '%s' '{"session_id":"s1","tool_use_id":"failed-shell","tool_input":{"command":"secret command"}}' \
   | ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/tool-abort.sh"
-grep -q 'ai tool-abort --json' "$CAPTURE"
+grep -q 'ai producer-batch --json' "$CAPTURE"
+grep -q '"phase":"abort"' "$CAPTURE"
 if grep -q '"tool_event_id":"failed-shell"' "$CAPTURE"; then
   echo "cleanup failure: raw Codex call ID was sent instead of the snapshot identity" >&2
   exit 1

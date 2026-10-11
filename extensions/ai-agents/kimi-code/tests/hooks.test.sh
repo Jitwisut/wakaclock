@@ -11,7 +11,7 @@ CAPTURE="$TMP/capture.json"
 cat >"$MOCK" <<'MOCK'
 #!/usr/bin/env bash
 if [ "${1:-}" = journal-scope ]; then
-  printf '%s\n' '{"schema_version":1,"owner_confirmed":true,"scope_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+  printf '%s\n' '{"schema_version":1,"owner_confirmed":true,"capabilities":["tool_boundary_durable_v1"],"scope_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
   exit 0
 fi
 cat >"$ATOAXIS_CAPTURE"

@@ -18,7 +18,7 @@
 | Metadata producer batch + per-ID/hash durable ACK | เสร็จใน contract v2 | ผ่าน mixed good/bad, conflict, response loss, restart | ยังไม่สร้าง candidate ใหม่ | pending | `producer_handoff.rs`; ACK หลัง inbox commit ไม่ใช่ HTTP | ขยาย legacy tool boundary ให้ครบ |
 | Shared shell file/session, Kilo lifecycle/file/tool metadata | ต่อแล้ว | ผ่าน; CLI หายยังเก็บ original metadata | pending | pending | Python/TS spool ใช้ collector เดิม; owner ไม่ยืนยัน parked | ตรวจ native runtime และ tool baselines |
 | Legacy Codex/Claude/Gemini/Kimi file hooks | ต่อแล้ว | ผ่าน CLI หาย + privacy fixtures; hook tests ผ่าน | pending | pending | เอา CLI early exit/direct emit fallback ออก; Python/jq/shared resources เป็น prerequisites | ตรวจ installed bundle หลัง upgrade |
-| Legacy shell tool-before/after/abort | **ยังไม่ครบ** | direct snapshot regression เดิมยังอยู่ | pending | pending | หลาย scripts ยังเรียก CLI โดยตรง; ห้าม replay snapshot จากไฟล์ปัจจุบัน | spool marker และ snapshot ณ boundary จริงโดยไม่เปลี่ยน measurement |
+| Legacy shell tool-before/after/abort | **ปิด source/local regression แล้วในรอบต่อ** | frozen boundary, ID/hash ACK, lost response และ idle restart ผ่าน | pending | pending | [รายงานต่อจาก cd9286e](tool-boundary-durability-2026-10-11.md); ยังไม่ติดตั้ง hook จริง | candidate และ native installed lifecycle tests |
 | Collector fairness/budget | เพิ่มแล้ว | ผ่าน bounded cursor restart; idle backlog regression ผ่าน | pending | pending | Live parser 100 input records/batch, spool+parser รวม 5 slots, สลับ reserved slots 2/3; ไม่เริ่ม batch ใหม่หลัง 10s; checkpoints ถาวร | ตรวจ latency/performance ของทุก source จริง |
 | Broker ownership / retained dead letter / sidecar | เพิ่มแล้ว | ผ่าน scope, editor collision, 90-day dead letter retention | pending | pending | sidecar ใช้ fingerprint ที่ producer ให้เท่านั้น; scoped cursor; ไม่มี late file reread | ปิด legacy global attribution state ที่ยังเหลือ |
 | Server ingress ACK ledger + ID/revision readback | ต่อแล้ว | ผ่าน atomic ACK/lease/payload races + targeted readback DTO/status | pending | pending | SQL guard ใช้ original payload; ClickHouse authenticated lookup ยังไม่ได้ DB integration | deploy receiver ก่อน client แล้วตรวจ canonical จริง |
@@ -66,7 +66,7 @@
 
 ## งานถัดไปเรียงลำดับ
 
-1. ปิด durable legacy tool boundary และ producer-side frozen Git context พร้อม pending dependency/scoped identity
+1. Durable legacy tool boundary ปิด source/local tests แล้วตาม [รายงานรอบต่อ](tool-boundary-durability-2026-10-11.md); ทำ producer-side frozen Git context พร้อม pending dependency/scoped identity ต่อ
 2. ทำ user-confirmed mapping และ health per adapter/surface/stage ให้ครบ VS Code/Overview/Heartbeats
 3. ต่อ Copilot daily connector และ Roo bridge; ตรวจ Cline Windows contract; Deep Code/Windsurf คง owner-pending แยก
 4. ทำ native artifact lifecycle smoke แล้วสร้างแปด artifacts จาก clean SHA เดียวผ่าน Actions; ไม่มีการนับ cross compilation เป็น native pass

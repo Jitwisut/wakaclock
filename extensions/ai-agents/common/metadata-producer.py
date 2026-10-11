@@ -39,20 +39,25 @@ def retain(kind, metadata, cli, surface, home, scope_hint=None):
     bindings.mkdir(parents=True, exist_ok=True, mode=0o700)
     binding = common.safe_path(bindings / (adapter + "-" + surface + ".json"))
     scope = None
-    try:
-        result = subprocess.run([cli, "journal-scope"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8, check=False)
-        proof = json.loads(result.stdout) if result.returncode == 0 and len(result.stdout) < 16384 else {}
-        value = proof.get("scope_id", "")
-        if proof.get("schema_version") == 1 and proof.get("owner_confirmed") is True and len(value) == 64 and all(c in "0123456789abcdef" for c in value):
-            scope = value
-            stage = bindings / (str(uuid.uuid4()) + ".metadata")
-            common.durable_file(stage, json.dumps({"scope_id":scope}).encode())
-            os.replace(stage, binding)
-            common.sync_dir(bindings)
-    except (OSError, ValueError, subprocess.TimeoutExpired): pass
-    if scope is None and binding.exists():
-        value = json.loads(binding.read_text()).get("scope_id", "")
-        if len(value) == 64 and all(c in "0123456789abcdef" for c in value): scope = value
+    fixed = False
+    if binding.exists():
+        cached = json.loads(binding.read_text())
+        value = cached.get("scope_id", "")
+        if len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError("producer_scope_unconfirmed")
+        scope, fixed = value, cached.get("owner_fixed") is True
+    if not fixed:
+        try:
+            result = subprocess.run([cli, "journal-scope"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8, check=False)
+            proof = json.loads(result.stdout) if result.returncode == 0 and len(result.stdout) < 16384 else {}
+            value = proof.get("scope_id", "")
+            if proof.get("schema_version") == 1 and proof.get("owner_confirmed") is True and len(value) == 64 and all(c in "0123456789abcdef" for c in value):
+                scope = value
+                stage = bindings / (str(uuid.uuid4()) + ".metadata")
+                common.durable_file(stage, json.dumps({"scope_id":scope}).encode())
+                os.replace(stage, binding)
+                common.sync_dir(bindings)
+        except (OSError, ValueError, subprocess.TimeoutExpired): pass
     # An installer-owned profile always retains its original verified owner.
     # A changed CLI account must not silently reassign an old installed producer.
     if scope_hint is not None:
