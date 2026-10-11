@@ -68,31 +68,92 @@ export function deliveryHealth(
     const capture = devices.map((device) => device.capture);
     if (capture.some((c) => c && (c.parser_errors > 0 || c.status === 'parser_failure'))) {
       state = 'critical';
-      message = 'Capture failed to parse activity. Delivery may be complete while events remain uncaptured.';
+      message =
+        'Capture failed to parse activity. Delivery may be complete while events remain uncaptured.';
     } else if (capture.some((c) => c && now - Date.parse(c.captured_at) > 300_000)) {
       state = 'stale';
       message = 'Capture status is stale. Data completeness is unconfirmed.';
-    } else if (capture.some((c) => c && (c.status !== 'fresh' || !c.last_scan_success_at || c.pending > 0))) {
+    } else if (
+      capture.some((c) => c && (c.status !== 'fresh' || !c.last_scan_success_at || c.pending > 0))
+    ) {
       state = 'unavailable';
       message = 'Capture is unavailable or events await processing. Data remains incomplete.';
     } else if (capture.some((c) => !c || !c.enabled)) {
       state = 'unknown';
-      message = 'Capture details not available or capture is disabled. Update/check the local collector.';
+      message =
+        'Capture details not available or capture is disabled. Update/check the local collector.';
     }
   }
   const journals = devices.map((device) => device.capture?.editor_journal);
-  if (journals.some((journal) => journal && (journal.dead_letter > 0 || ['corrupt', 'write_failure', 'locked'].includes(journal.status)))) {
+  if (
+    journals.some(
+      (journal) =>
+        journal &&
+        (journal.dead_letter > 0 || ['corrupt', 'write_failure', 'locked'].includes(journal.status))
+    )
+  ) {
     state = 'critical';
-    message = 'Editor capture needs attention. Durable journal or handoff failed; queued data is retained.';
+    message =
+      'Editor capture needs attention. Durable journal or handoff failed; queued data is retained.';
   } else if (state === 'complete') {
     if (journals.some((journal) => !journal || journal.pending == null)) {
-      state = 'unknown'; message = 'Editor journal details not available. Completion remains unconfirmed.';
-    } else if (journals.some((journal) => journal && (journal.status === 'stale' || now - Date.parse(journal.last_observed_at) > 300_000))) {
-      state = 'stale'; message = 'Editor journal status is stale. Check the local client.';
+      state = 'unknown';
+      message = 'Editor journal details not available. Completion remains unconfirmed.';
+    } else if (
+      journals.some(
+        (journal) =>
+          journal &&
+          (journal.status === 'stale' || now - Date.parse(journal.last_observed_at) > 300_000)
+      )
+    ) {
+      state = 'stale';
+      message = 'Editor journal status is stale. Check the local client.';
     } else if (journals.some((journal) => journal && journal.status !== 'ready')) {
-      state = 'unavailable'; message = 'Editor capture is paused or unavailable. Existing data is retained.';
+      state = 'unavailable';
+      message = 'Editor capture is paused or unavailable. Existing data is retained.';
     } else if (journals.some((journal) => (journal?.pending ?? 0) > 0)) {
-      state = 'pending'; message = 'Editor activity awaits durable CLI handoff. An empty server queue does not confirm completeness.';
+      state = 'pending';
+      message =
+        'Editor activity awaits durable CLI handoff. An empty server queue does not confirm completeness.';
+    }
+  }
+  const spools = devices.map((device) => device.capture?.producer_spool);
+  if (
+    spools.some((spool) => spool && (spool.status === 'capture_failure' || spool.failure_count > 0))
+  ) {
+    state = 'critical';
+    message =
+      'Producer spool needs attention. Retained metadata has not completed durable handoff.';
+  } else if (
+    journals.some((journal) => journal?.status === 'historical_incomplete') &&
+    ['complete', 'unavailable'].includes(state)
+  ) {
+    state = 'warning';
+    message = 'Journal can accept new activity, but recovered history remains incomplete.';
+  } else if (state === 'complete') {
+    if (
+      spools.some(
+        (spool) =>
+          !spool ||
+          spool.pending == null ||
+          !spool.last_scan_success_at ||
+          spool.status === 'unconfirmed'
+      )
+    ) {
+      state = 'unknown';
+      message =
+        'Producer capture details are unconfirmed. An empty queue does not establish complete capture.';
+    } else if (
+      spools.some((spool) => spool && now - Date.parse(spool.last_scan_success_at!) > 300_000)
+    ) {
+      state = 'stale';
+      message = 'Producer spool observation is stale. Data completeness is unconfirmed.';
+    } else if (
+      spools.some((spool) => spool && (spool.pending! > 0 || spool.status !== 'observed'))
+    ) {
+      state = 'pending';
+      message =
+        'Producer metadata awaits durable handoff. Keep retained data and check the local collector.';
     }
   }
   return { incomplete: state !== 'complete', state, pending, deadLetter, message };

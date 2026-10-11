@@ -25,6 +25,7 @@ import {
 } from "./secrets";
 import { StatusBarController } from "./statusBar";
 import { SingleFlight } from "./singleFlight";
+import { registerJournalRecoveryCommands } from "./journalRecoveryCommands";
 
 let activeBufferManager: HeartbeatBufferManager | undefined;
 
@@ -111,7 +112,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (journalPublication) return;
     const health = bufferManager.getJournalHealth();
     if (health) {
-      const fault = health.status !== "ready" ? `${health.status}:${health.errorCode ?? ""}` : health.deadLetter ? "journal_dead_letter" : undefined;
+      const fault = health.status !== "ready" ? `${health.status}:${health.errorCode ?? ""}` : health.deadLetter ? "journal_dead_letter" : health.historicalIncomplete ? "journal_historical_incomplete" : undefined;
       if (fault !== journalFault) {
         if (fault) void vscode.window.showWarningMessage("AtoAxis: activity journal needs attention. Capture cannot confirm complete data; open runtime diagnostics. Retained records are preserved.");
         else if (journalFault) void vscode.window.showInformationMessage("AtoAxis: activity journal recovered. Delivery completeness is checked separately.");
@@ -130,7 +131,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await journalPublication;
     const health = bufferManager.getJournalHealth();
     if (health) await cliService.publishJournalHealth(journalScope, journalCollectorId,
-      { ...health, status: health.status === "ready" && health.pending === 0 ? "stopped" : health.status });
+      { ...health, status: health.status === "ready" && health.pending === 0 && !health.historicalIncomplete ? "stopped" : health.status });
   };
   publishJournal();
   try {
@@ -141,6 +142,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.warn("Runtime desired state is unavailable; capture is parked until intent can be verified.");
   }
   let identityChanged = false;
+  registerJournalRecoveryCommands(context, path.join(context.globalStorageUri.fsPath, "editor-journals", journalScope, workspaceId), journalScope, cliService, bufferManager, () => identityChanged, verifiedJournalScopes.map(scope => ({scope, directory:path.join(context.globalStorageUri.fsPath, "editor-journals", scope, workspaceId)})));
   const parkChangedIdentity = () => {
     if (identityChanged) return;
     identityChanged = true;
@@ -192,10 +194,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch { void vscode.window.showErrorMessage("AtoAxis: journal retry was not confirmed; the original ID and record remain retained."); }
   }));
   context.subscriptions.push(vscode.commands.registerCommand("wakaclock.setupNativeActivity", async () => {
-    const adapter = await vscode.window.showQuickPick(["claude-code", "gemini-cli", "cursor", "copilot", "cline"], { title: "AtoAxis: Enable native metadata activity hooks (live certification pending)" });
+    const adapter = await vscode.window.showQuickPick(["claude-code", "gemini-cli", "cursor", "copilot", "cline", "kimi-code-cli", "opencode", "antigravity"], { title: "AtoAxis: Enable native metadata activity hooks (live certification pending)" });
     if (!adapter) return;
     try {
-      const result = await cliService.setupNativeActivity(adapter);
+      let contract: string | undefined;
+      if (adapter === "opencode") {
+        contract = await vscode.window.showQuickPick(["opencode-v1-1.19.0", "opencode-v2-2.0.26"], { title: "AtoAxis: Choose the installed OpenCode contract; CLI verifies the exact version" });
+        if (!contract) return;
+      } else if (adapter === "copilot") {
+        const surface = await vscode.window.showQuickPick(["VS Code", "Copilot CLI"], { title: "AtoAxis: Choose Copilot surface (daily metrics and inline are separate)" });
+        if (!surface) return;
+        if (surface === "Copilot CLI") contract = "copilot-cli-vscode-compatible-v1";
+      }
+      const result = await cliService.setupNativeActivity(adapter, false, contract);
       if (result.status !== "configured") throw new Error("Native hook setup was not confirmed.");
       if (adapter === "copilot" && result.hook_location) {
         const hooks = vscode.workspace.getConfiguration("chat").get<Record<string, boolean>>("hookFilesLocations", {});

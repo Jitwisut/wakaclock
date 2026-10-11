@@ -1803,8 +1803,22 @@ pub(crate) fn native_activity_setup(
     adapter: &str,
     yes: bool,
     uninstall: bool,
+    scope: &wakaclock_core::queue::QueueScope,
+    owner_confirmed: bool,
+    contract: Option<&str>,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
-    if !["claude-code", "gemini-cli", "cursor", "copilot", "cline"].contains(&adapter) {
+    if ![
+        "claude-code",
+        "gemini-cli",
+        "cursor",
+        "copilot",
+        "cline",
+        "kimi-code-cli",
+        "opencode",
+        "antigravity",
+    ]
+    .contains(&adapter)
+    {
         return Err("activity_native_hook_contract_evidence_pending".into());
     }
     if adapter == "cline" && cfg!(windows) {
@@ -1826,6 +1840,50 @@ pub(crate) fn native_activity_setup(
     } else {
         crate::runtime_service::stage_binary()?
     };
+    if adapter == "opencode" {
+        if !uninstall {
+            if !owner_confirmed {
+                return Err("activity_producer_scope_unconfirmed".into());
+            }
+            let expected = match contract {
+                Some("opencode-v1-1.19.0") => "1.19.0",
+                Some("opencode-v2-2.0.26") => "2.0.26",
+                _ => return Err("opencode_contract_version_required".into()),
+            };
+            let runtime = std::process::Command::new("opencode")
+                .arg("--version")
+                .output()
+                .map_err(|_| "opencode_runtime_evidence_pending")?;
+            if !runtime.status.success()
+                || String::from_utf8_lossy(&runtime.stdout).trim() != expected
+            {
+                return Err("opencode_runtime_version_mismatch".into());
+            }
+        }
+        return crate::opencode_plugin::configure(
+            &home,
+            contract,
+            uninstall,
+            &executable,
+            &wakaclock_core::editor_health::scope_id(scope),
+        );
+    }
+    if !uninstall {
+        if !owner_confirmed {
+            return Err("activity_producer_scope_unconfirmed".into());
+        }
+        crate::native_hooks::install_producer(
+            &home,
+            adapter,
+            &executable,
+            scope,
+            (adapter == "copilot" && contract == Some("copilot-cli-vscode-compatible-v1"))
+                .then_some("cli"),
+        )?;
+    }
+    if adapter == "copilot" && contract == Some("copilot-cli-vscode-compatible-v1") {
+        return crate::native_hooks::configure_copilot_cli(&home, &executable, uninstall);
+    }
     crate::native_hooks::configure(&home, adapter, &executable, uninstall)
 }
 

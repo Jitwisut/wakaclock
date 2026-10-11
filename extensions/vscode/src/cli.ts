@@ -113,6 +113,21 @@ export class WakaclockCliService {
         return response;
     }
 
+    public async journalReceipts(scopeId: string, ids: string[]): Promise<{ heartbeat_id: string; status: "accepted" | "missing"; input_hash?: string }[]> {
+        const all: { heartbeat_id: string; status: "accepted" | "missing"; input_hash?: string }[] = [];
+        for (let start = 0; start < ids.length; start += 100) {
+            const chunk = ids.slice(start, start + 100);
+            const response = JSON.parse((await this.runCli(["journal-receipts"], JSON.stringify({ schema_version: 1, scope_id: scopeId, ids: chunk }))).stdout);
+            const expected = new Set(chunk);
+            if (response.schema_version !== 1 || response.scope_id !== scopeId || !Array.isArray(response.results) || response.results.length !== chunk.length) throw new Error("journal_receipt_response_invalid");
+            for (const item of response.results) {
+                if (!expected.delete(item.heartbeat_id) || !["accepted", "missing"].includes(item.status) || (item.status === "accepted" && !/^[a-f0-9]{64}$/.test(item.input_hash ?? ""))) throw new Error("journal_receipt_response_invalid");
+            }
+            all.push(...response.results);
+        }
+        return all;
+    }
+
     public async runtime(action: "status" | "pause" | "resume", component = "all"): Promise<{ desired: { desired: Record<string, boolean> }; capture: unknown; delivery: unknown }> {
         const args = ["runtime", action, "--json"];
         if (action !== "status") args.push("--component", component);
@@ -121,14 +136,15 @@ export class WakaclockCliService {
     public async manageRuntime(action: "install" | "upgrade" | "rollback" | "uninstall", component: "capture" | "delivery"): Promise<unknown> {
         return JSON.parse((await this.runCli(["runtime", action, "--component", component])).stdout);
     }
-    public async setupNativeActivity(adapter: string, uninstall = false): Promise<{ status: string; hook_location?: string | null; next_step?: string | null }> {
+    public async setupNativeActivity(adapter: string, uninstall = false, contract?: string): Promise<{ status: string; hook_location?: string | null; next_step?: string | null }> {
         const args = ["ai", "activity-setup", "--adapter", adapter, "--yes"];
         if (uninstall) args.push("--uninstall");
+        if (contract) args.push("--contract", contract);
         return JSON.parse((await this.runCli(args)).stdout);
     }
-    public async publishJournalHealth(scopeId: string, collectorId: string, health: { status: string; pending: number; deadLetter?: number }): Promise<void> {
+    public async publishJournalHealth(scopeId: string, collectorId: string, health: { status: string; pending: number; deadLetter?: number; historicalIncomplete?: boolean }): Promise<void> {
         await this.runCli(["journal-health"], JSON.stringify({ schema_version: 1, scope_id: scopeId, collector_id: collectorId,
-            health: { status: health.status, pending: health.pending, dead_letter: health.deadLetter ?? 0, last_observed_at: new Date().toISOString() } }));
+            health: { status: health.status === "ready" && health.historicalIncomplete ? "historical_incomplete" : health.status, pending: health.pending, dead_letter: health.deadLetter ?? 0, last_observed_at: new Date().toISOString() } }));
     }
 
     public async acceptJournalBatch(scopeId: string, payloads: ExtraHeartbeatPayload[]): Promise<{ heartbeat_id: string; status: string; error_code?: string }[]> {

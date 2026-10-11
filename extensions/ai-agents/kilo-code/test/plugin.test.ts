@@ -14,9 +14,11 @@ async function withMockCli(run: (capture: string, argsCapture: string) => Promis
     cli,
     "#!/usr/bin/env node\n" +
       "let data = ''; process.stdin.on('data', chunk => data += chunk);\n" +
-      "process.stdin.on('end', () => { const fs = require('node:fs'); fs.appendFileSync(process.env.ATOAXIS_CAPTURE, data + '\\n'); fs.appendFileSync(process.env.ATOAXIS_ARGS, process.argv.slice(2).join(' ') + '\\n'); if(process.argv[3] === 'activity-hook') { const x=JSON.parse(data); const hash=x=>require('node:crypto').createHash('sha256').update(x).digest('hex'); const op=hash(x.sessionID+'\\0'+x.callID); const kind=x.hook_event_name.endsWith('before')?'ToolStart':'ToolEnd'; const id=hash('activity-v3\\0kilo-code\\0'+x.sessionID+'\\0'+op+'\\0'+kind); console.log(JSON.stringify({acknowledgement:{schema_version:3,event_id:id,durable:true,status:'accepted'}})); } });\n"
+      "process.stdin.on('end', () => { const fs = require('node:fs'); if(process.argv[2] === 'journal-scope') {console.log(JSON.stringify({schema_version:1,scope_id:'a'.repeat(64),owner_confirmed:true,capabilities:['activity_envelope_v3']}));return;} fs.appendFileSync(process.env.ATOAXIS_CAPTURE, data + '\\n'); fs.appendFileSync(process.env.ATOAXIS_ARGS, process.argv.slice(2).join(' ') + '\\n'); if(process.argv[3] === 'activity-hook') { const x=JSON.parse(data); const hash=x=>require('node:crypto').createHash('sha256').update(x).digest('hex'); const op=hash(x.sessionID+'\\0'+x.callID); const kind=x.hook_event_name.endsWith('before')?'ToolStart':'ToolEnd'; const id=hash('activity-v3\\0kilo-code\\0'+x.sessionID+'\\0'+op+'\\0'+kind); console.log(JSON.stringify({acknowledgement:{schema_version:3,event_id:id,durable:true,status:'accepted'}})); } });\n"
   );
   await chmod(cli, 0o755);
+  const previousHome = process.env.ATOAXIS_PRODUCER_HOME;
+  process.env.ATOAXIS_PRODUCER_HOME = root;
   const previous = process.env.WAKACLOCK_CLI_PATH;
   const previousCapture = process.env.ATOAXIS_CAPTURE;
   const previousArgs = process.env.ATOAXIS_ARGS;
@@ -26,6 +28,7 @@ async function withMockCli(run: (capture: string, argsCapture: string) => Promis
   try {
     await run(capture, argsCapture);
   } finally {
+    if (previousHome === undefined) delete process.env.ATOAXIS_PRODUCER_HOME; else process.env.ATOAXIS_PRODUCER_HOME = previousHome;
     if (previous === undefined) delete process.env.WAKACLOCK_CLI_PATH;
     else process.env.WAKACLOCK_CLI_PATH = previous;
     if (previousCapture === undefined) delete process.env.ATOAXIS_CAPTURE;
@@ -75,7 +78,7 @@ test("Kilo captures read/search and failed tool markers without edits or tool co
     assert.equal(events.length, 4);
     assert.deepEqual(events.map(event => event.hook_event_name), ["tool.execute.before", "tool.execute.after", "tool.execute.before", "tool.execute.failure"]);
     assert.ok(events.every(event => !event.active_seconds && !event.entity && !event.started_at));
-    assert.ok((await readFile(argsCapture, "utf8")).split("\n").filter(Boolean).every(args => args === "ai activity-hook --adapter kilo-code --surface ide"));
+    assert.ok((await readFile(argsCapture, "utf8")).split("\n").filter(Boolean).every(args => args.startsWith("ai activity-hook --adapter kilo-code --surface ide --scope-id ")));
   });
 });
 

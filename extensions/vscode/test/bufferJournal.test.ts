@@ -17,6 +17,18 @@ vi.mock("node:fs",async importOriginal=>{
 const config=():WakaclockConfigSnapshot=>({cliPath:"",flushIntervalMs:30000,heartbeatRateLimitMs:120000,sameFileHeartbeatMs:120000,idleMs:900000,statusBarEnabled:true,debugLogging:false,trackDebugSessions:true,trackBuildTasks:true,trackClipboardActions:true});
 afterEach(async()=>{faults.write=false;await Promise.all(directories.splice(0).map(dir=>fs.rm(dir,{recursive:true,force:true})));});
 describe("editor durable recovery",()=>{
+  it("never adopts or sends a damaged checkpoint before explicit Apply",async()=>{
+    const directory=await fs.mkdtemp(path.join(os.tmpdir(),"editor-explicit-repair-"));directories.push(directory);
+    const failed=vi.fn().mockRejectedValue(new Error("offline"));
+    const first=new HeartbeatBufferManager(config,{sendHeartbeat:vi.fn(),acceptJournalBatch:failed},new Logger(()=>false));first.enableJournal(directory,"scope");
+    await first.recordExternalFileChange("/historical/file.ts",{event_id:"original",change_kind:"modify",lines_added:1},10000);first.closeJournal();
+    const folders=await fs.readdir(directory); const source=path.join(directory,folders[0],"metadata.jsonl");
+    await fs.appendFile(source,'{"torn":'); const original=await fs.readFile(source);
+    const accept=vi.fn(); const recovered=new HeartbeatBufferManager(config,{sendHeartbeat:vi.fn(),acceptJournalBatch:accept},new Logger(()=>false));recovered.enableJournal(directory,"scope");
+    await recovered.flushAllBuffers("shutdown",900000);
+    expect(accept).not.toHaveBeenCalled(); expect(recovered.getJournalHealth()?.errorCode).toBe("journal_corrupt_recovery_source");
+    expect(await fs.readFile(source)).toEqual(original); recovered.closeJournal();
+  });
   it("does not report a redrive success if its journal checkpoint fails, and replays the retained ID after restart",async()=>{
     const directory=await fs.mkdtemp(path.join(os.tmpdir(),"editor-redrive-disk-"));directories.push(directory);
     const accept=vi.fn().mockImplementation(async(_scope,payloads)=>payloads.map((payload:any)=>({heartbeat_id:payload.heartbeat_id,status:"permanent_rejection",error_code:"invalid_metadata"})));

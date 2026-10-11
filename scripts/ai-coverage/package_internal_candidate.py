@@ -20,7 +20,7 @@ from pathlib import Path
 from verify_release_artifacts import ArtifactError, verify_vsix, _safe_member
 
 TARGETS = {"darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"}
-REQUIRED_CAPABILITIES = {"editor_durable_ack_v1", "activity_envelope_v3", "persistent_runtime_intent_v1"}
+REQUIRED_CAPABILITIES = {"editor_durable_ack_v1", "activity_envelope_v3", "persistent_runtime_intent_v1", "editor_receipts_read_v1", "native_producer_spool_v1"}
 SECRET_PATTERNS = [rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", rb"gh[pousr]_[A-Za-z0-9]{30,}", rb"github_pat_[A-Za-z0-9_]{40,}", rb"sk-(?:proj-|ant-)?[A-Za-z0-9_-]{40,}"]
 
 
@@ -69,6 +69,10 @@ def inspect_members(package: Path, commit: str) -> tuple[dict, dict[str, bytes]]
             or b"acceptJournalBatch" not in compiled_cli or b"heartbeat-batch" not in compiled_cli
             or not {"wakaclock.runtimePause", "wakaclock.runtimeResume"}.issubset(commands)):
         raise ArtifactError("candidate_compiled_extension_incompatible")
+    recovery_commands = {"wakaclock.inspectJournal", "wakaclock.prepareJournalRecovery", "wakaclock.applyJournalRecovery", "wakaclock.journalRecoveryHistory"}
+    if (not recovery_commands.issubset(commands) or b"registerJournalRecoveryCommands" not in compiled
+            or b"applyJournalRecovery" not in members.get("extension/out/src/journalRecovery.js", b"")):
+        raise ArtifactError("candidate_journal_recovery_incompatible")
     if not re.fullmatch(r"[a-f0-9]{64}", manifest.get("sourceTreeDigest", "")):
         raise ArtifactError("candidate_source_inventory_missing")
     compiled_hashes = manifest.get("compiledSha256")
@@ -81,7 +85,7 @@ def inspect_members(package: Path, commit: str) -> tuple[dict, dict[str, bytes]]
     verify_native_target(binary, manifest["target"])
     if commit.encode() not in binary or (commit + "-dirty").encode() in binary:
         raise ArtifactError("candidate_embedded_source_commit_mismatch")
-    if b"editor_durable_ack_v1" not in binary:
+    if any(capability.encode() not in binary for capability in REQUIRED_CAPABILITIES):
         raise ArtifactError("candidate_embedded_cli_incompatible")
     return {**verification, "source_commit": commit, "manifest": manifest}, members
 

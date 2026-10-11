@@ -62,10 +62,18 @@ export function DeliveryStatusNotice() {
           {device.capture?.last_scan_success_at
             ? new Date(device.capture.last_scan_success_at).toLocaleString()
             : 'unknown'}
-          {' · parser failures '}{device.capture?.parser_errors ?? 'unknown'}
-          {' · capture pending '}{device.capture?.pending ?? 'unknown'}
-          {' · editor journal '}{device.capture?.editor_journal?.status ?? 'unknown'}
-          {' · editor handoff pending '}{device.capture?.editor_journal?.pending ?? 'unknown'}
+          {' · parser failures '}
+          {device.capture?.parser_errors ?? 'unknown'}
+          {' · capture pending '}
+          {device.capture?.pending ?? 'unknown'}
+          {' · producer spool '}
+          {device.capture?.producer_spool?.status ?? 'unknown'}
+          {' · producer pending '}
+          {device.capture?.producer_spool?.pending ?? 'unknown'}
+          {' · editor journal '}
+          {device.capture?.editor_journal?.status ?? 'unknown'}
+          {' · editor handoff pending '}
+          {device.capture?.editor_journal?.pending ?? 'unknown'}
           {' · ready '} {device.details?.eligible ?? 'unknown'} · leased{' '}
           {device.details?.leased ?? 'unknown'}
           {' · accepted '}

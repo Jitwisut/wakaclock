@@ -23,7 +23,7 @@ describe("durable editor journal", () => {
   it("recovers a durably acknowledged record after the writer is killed", async () => {
     const dir = directory();
     const module = pathToFileURL(path.resolve("src/heartbeatJournal.ts")).href;
-    const script = `import(${JSON.stringify(module)}).then(({HeartbeatJournal})=>{const journal=new HeartbeatJournal(${JSON.stringify(dir)});journal.append({id:'kill-original',time:1234},1);process.stdout.write('durable\\n');setInterval(()=>{},1000);})`;
+    const script = `require("module").registerHooks({resolve(specifier, context, next) {try {return next(specifier, context);} catch (error) {if(specifier === "./journalScanner") return next(specifier+".ts", context); throw error;}}});import(${JSON.stringify(module)}).then(({HeartbeatJournal})=>{const journal=new HeartbeatJournal(${JSON.stringify(dir)});journal.append({id:'kill-original',time:1234},1);process.stdout.write('durable\\n');setInterval(()=>{},1000);})`;
     const child = spawn(process.execPath, ["--experimental-strip-types", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
     const closed = once(child, "close");
     const timer = setTimeout(() => child.kill("SIGKILL"), 3_000);
