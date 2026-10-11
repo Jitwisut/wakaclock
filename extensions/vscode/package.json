@@ -132,6 +132,14 @@
         "title": "AtoAxis: Apply Journal Recovery"
       },
       {
+        "command": "wakaclock.acknowledgeJournalHistory",
+        "title": "AtoAxis: Acknowledge Incomplete Journal History"
+      },
+      {
+        "command": "wakaclock.refreshJournalRecovery",
+        "title": "AtoAxis: Refresh Journal Recovery Evidence"
+      },
+      {
         "command": "wakaclock.journalRecoveryHistory",
         "title": "AtoAxis: Journal Recovery History"
       }

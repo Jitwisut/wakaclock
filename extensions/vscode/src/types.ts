@@ -149,6 +149,7 @@ export interface ExtraHeartbeatPayload {
     chars_deleted?: number;
     active_seconds?: number;
     heartbeat_id?: string;
+    revision?: number;
     activity_segments?: ActivitySegment[];
     actor_type?: ActorType;
     actor_confidence?: number;

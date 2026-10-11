@@ -262,7 +262,7 @@ export class StatusBarController implements vscode.Disposable {
       const captureState = !capture ? "unknown" : captureAge > 300 ? "stale" : capture.parser_errors || capture.status === "parser_failure" ? "critical" : capture.status !== "fresh" || capture.pending ? "warning" : "complete";
       const deliveryHealth = !details ? "unknown" : snapshot.deadLetter || ["auth_401", "payment_402"].includes(details.backlog_error?.kind ?? "") || (backlog > 0 && age > 1800)
         ? "critical" : backlog > 0 && age > 300 ? "warning" : backlog > 0 ? "pending" : "complete";
-      const health = journal && (journal.status !== "ready" || journal.deadLetter || journal.historicalIncomplete) ? "critical" : journal?.pending ? "pending" : deliveryHealth === "complete" ? captureState : deliveryHealth;
+      const health = journal && (journal.status !== "ready" || journal.deadLetter || (journal.unacknowledgedIncidents ?? (journal.historicalIncomplete ? 1 : 0)) > 0) ? "critical" : journal?.pending ? "pending" : deliveryHealth === "complete" ? captureState : deliveryHealth;
       if (this.deliveryHealthState !== health) {
         const previous = this.deliveryHealthState;
         this.deliveryHealthState = health;

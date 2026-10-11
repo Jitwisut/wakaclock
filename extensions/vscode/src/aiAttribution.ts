@@ -37,6 +37,7 @@ export interface AiEditEvent {
   schema_version?: number;
   stream_id?: string;
   sequence?: number;
+  owner_scope_id?: string;
   event_id: string;
   entity: string;
   time: number;
@@ -112,7 +113,8 @@ interface PersistedSidecarCursor {
  */
 export class AiAttributionStore {
   private readonly logPath: string;
-  private readonly cursorPath: string;
+  private cursorPath: string;
+  private ownerScopes?: readonly string[];
   private readonly events = new Map<string, AiEditEvent>();
   private readonly pendingObservations = new Map<string, PendingEditorObservation>();
   private consumed = new Set<string>();
@@ -132,6 +134,17 @@ export class AiAttributionStore {
   public constructor(homeDir = os.homedir()) {
     this.logPath = path.join(homeDir, ".wakaclock", "ai-events.jsonl");
     this.cursorPath = path.join(homeDir, ".wakaclock", "ai-events.cursor.json");
+  }
+
+  /** Production reads are owner-bound. Legacy unit callers retain legacy behavior. */
+  public setOwnerScopes(scopes: readonly string[]): void {
+    if (scopes.some(scope => !/^[a-f0-9]{64}$/.test(scope))) throw new Error("sidecar_scope_invalid");
+    this.ownerScopes = [...scopes];
+    this.cursorPath = path.join(path.dirname(this.logPath), `ai-events-${createHash("sha256").update(scopes.join("\0")).digest("hex")}.cursor.json`);
+    this.events.clear(); this.pendingObservations.clear(); this.consumed.clear();
+    this.seenTransportKeys.clear(); this.seenOperationKeys.clear();
+    this.readOffset=0; this.partialLine=Buffer.alloc(0); this.fileIdentity=undefined;
+    this.streamId=undefined; this.lastSequence=undefined; this.cursorLoaded=false;
   }
 
   /**
@@ -448,6 +461,7 @@ export class AiAttributionStore {
     ) {
       return;
     }
+    if (this.ownerScopes !== undefined && (!candidate.owner_scope_id || !this.ownerScopes.includes(candidate.owner_scope_id))) return;
     if (candidate.sequence !== undefined &&
         (!Number.isSafeInteger(candidate.sequence) || candidate.sequence < 1)) {
       return;
@@ -554,6 +568,7 @@ export class AiAttributionStore {
     }
     for (const event of Array.isArray(snapshot.events) ? snapshot.events : []) {
       if (this.isValidEvent(event)) {
+        if (this.ownerScopes !== undefined && (!event.owner_scope_id || !this.ownerScopes.includes(event.owner_scope_id))) continue;
         this.events.set(event.event_id, event);
         const operationKey = proofOperationKey(event);
         if (operationKey !== undefined) {

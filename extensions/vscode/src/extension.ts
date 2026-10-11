@@ -92,10 +92,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const journalKey = (await getStoredApiKey(context.secrets)) ?? (await getPendingApiKey(context.secrets));
   let journalScope: string;
   let verifiedJournalScopes: string[] = [];
+  let sidecarScopes: string[] = [];
   try {
     const scope = await cliService.journalScope();
     journalScope = scope.scope_id;
     verifiedJournalScopes = scope.recoverable_scope_ids ?? [];
+    if (scope.owner_confirmed) sidecarScopes=[journalScope,...verifiedJournalScopes];
   } catch {
     const server = (configService.getSnapshot().serverUrl ?? "").replace(/\/$/, "");
     const owner = journalKey ? `key:${createHash("sha256").update(journalKey).digest("hex")}` : "unconfirmed";
@@ -103,6 +105,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showWarningMessage("AtoAxis: CLI durable ACK is unavailable. Activity stays in the private journal until the CLI is updated and identity verified.");
   }
   const workspaceId = createHash("sha256").update(context.storageUri?.fsPath ?? "no-workspace").digest("hex");
+  bufferManager.setAttributionOwnerScopes(sidecarScopes);
   bufferManager.enableJournal(path.join(context.globalStorageUri.fsPath, "editor-journals", journalScope, workspaceId), journalScope, verifiedJournalScopes.filter(scope => scope !== journalScope).map(scope => path.join(context.globalStorageUri.fsPath, "editor-journals", scope, workspaceId)));
   const journalCollectorId = randomUUID();
   let journalPublication: Promise<void> | undefined;
@@ -112,10 +115,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (journalPublication) return;
     const health = bufferManager.getJournalHealth();
     if (health) {
-      const fault = health.status !== "ready" ? `${health.status}:${health.errorCode ?? ""}` : health.deadLetter ? "journal_dead_letter" : health.historicalIncomplete ? "journal_historical_incomplete" : undefined;
+      const fault = health.status !== "ready" ? `${health.status}:${health.errorCode ?? ""}` : health.deadLetter ? "journal_dead_letter" : health.historicalIncomplete && (health.unacknowledgedIncidents ?? 1)>0 ? "journal_historical_incomplete" : undefined;
       if (fault !== journalFault) {
         if (fault) void vscode.window.showWarningMessage("AtoAxis: activity journal needs attention. Capture cannot confirm complete data; open runtime diagnostics. Retained records are preserved.");
-        else if (journalFault) void vscode.window.showInformationMessage("AtoAxis: activity journal recovered. Delivery completeness is checked separately.");
+        else if (journalFault && journalFault !== "journal_historical_incomplete") void vscode.window.showInformationMessage(health.historicalIncomplete ? "AtoAxis: journal writer recovered; historical data remains incomplete. Delivery evidence is checked separately." : "AtoAxis: activity journal recovered. Delivery completeness is checked separately.");
         journalFault = fault;
       }
       journalPublication = cliService.publishJournalHealth(journalScope, journalCollectorId, health)

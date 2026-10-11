@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {validRecoveryEvidence, mergeRecoveryEvidence, type RecoveryEvidence} from "./journalEvidence";
 import { randomUUID } from "node:crypto";
 import { encodeJournalCheckpoint, journalHash, scanJournal } from "./journalScanner";
 
@@ -22,6 +23,12 @@ export interface RecoveryManifest extends RecoveryPlan {
   cliHandoff: "unconfirmed";
   serverDelivery: "unconfirmed";
   handoffObservation?: JournalHandoffObservation;
+  acknowledgement?: { actorScope: string; acknowledgedAt: string; reason: "historical_evidence_unavailable"; recoveryId: string };
+  runtimeDisposition?: "resume_required" | "writer_resumed";
+  reconciliation?: { observedAt: string; journalWritable: boolean; cliAccepted: number | null; serverAccepted: number | null; canonicalFound: number | null; unconfirmed: number; conflicts: number };
+  evidenceCursor?: number;
+  recordEvidence?: RecoveryEvidence[];
+  recordMappings?: { heartbeatId: string; revision: number; inputHash: string }[];
 }
 export interface JournalHandoffObservation {
   observedAt: string;
@@ -39,7 +46,22 @@ const phases = ["prepared", "backed_up", "candidate_written", "activated"];
 function checkedManifest(value: unknown, recoveryId: string): RecoveryManifest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("journal_recovery_manifest_invalid");
   const m = value as Record<string, unknown>;
-  const allowed = ["version", "recoveryId", "scope", "sourceHash", "ownershipHash", "verifiedSequence", "verifiedPending", "unknownRecords", "errorCode", "createdAt", "phase", "candidateHash", "historicalIncomplete", "cliHandoff", "serverDelivery", "handoffObservation"];
+  const allowed = ["version", "recoveryId", "scope", "sourceHash", "ownershipHash", "verifiedSequence", "verifiedPending", "unknownRecords", "errorCode", "createdAt", "phase", "candidateHash", "historicalIncomplete", "cliHandoff", "serverDelivery", "handoffObservation", "acknowledgement", "runtimeDisposition", "reconciliation", "recordMappings", "evidenceCursor", "recordEvidence"];
+  if (m.acknowledgement !== undefined) {
+    const a = m.acknowledgement as RecoveryManifest["acknowledgement"];
+    if (!a || Object.keys(a).some(k=>!["actorScope","acknowledgedAt","reason","recoveryId"].includes(k)) || typeof a.actorScope !== "string" || !/^[a-f0-9]{64}$/.test(a.actorScope) || typeof a.acknowledgedAt !== "string" || !Number.isFinite(Date.parse(a.acknowledgedAt)) || a.recoveryId !== recoveryId || a.reason !== "historical_evidence_unavailable") throw new Error("journal_recovery_manifest_invalid");
+  }
+  if (m.evidenceCursor !== undefined && (!Number.isSafeInteger(m.evidenceCursor) || (m.evidenceCursor as number)<0 || (m.evidenceCursor as number)>10000)) throw new Error("journal_recovery_manifest_invalid");
+  if (m.recordEvidence !== undefined && (!Array.isArray(m.recordEvidence)||m.recordEvidence.length>10000||!m.recordEvidence.every(validRecoveryEvidence))) throw new Error("journal_recovery_manifest_invalid");
+  if (m.runtimeDisposition !== undefined && !["resume_required","writer_resumed"].includes(String(m.runtimeDisposition))) throw new Error("journal_recovery_manifest_invalid");
+  if (m.recordMappings !== undefined && (!Array.isArray(m.recordMappings) || m.recordMappings.length > 10000 || m.recordMappings.some((value: unknown) => {
+    const r = value as RecoveryManifest["recordMappings"] extends (infer T)[] | undefined ? T : never;
+    return !r || Object.keys(r).some(k=>!["heartbeatId","revision","inputHash"].includes(k)) || typeof r.heartbeatId !== "string" || !/^[a-zA-Z0-9_.:-]{1,256}$/.test(r.heartbeatId) || !Number.isSafeInteger(r.revision) || r.revision < 0 || !/^[a-f0-9]{64}$/.test(r.inputHash);
+  }))) throw new Error("journal_recovery_manifest_invalid");
+  if (m.reconciliation !== undefined) {
+    const r = m.reconciliation as NonNullable<RecoveryManifest["reconciliation"]>;
+    if (!r || Object.keys(r).some(k=>!["observedAt","journalWritable","cliAccepted","serverAccepted","canonicalFound","unconfirmed","conflicts"].includes(k)) || !Number.isFinite(Date.parse(r.observedAt)) || typeof r.journalWritable !== "boolean" || [r.cliAccepted,r.serverAccepted,r.canonicalFound].some(n=>n!==null && (!Number.isSafeInteger(n)||n<0)) || [r.unconfirmed,r.conflicts].some(n=>!Number.isSafeInteger(n)||n<0)) throw new Error("journal_recovery_manifest_invalid");
+  }
   if (m.handoffObservation !== undefined && !validHandoff(m.handoffObservation)) throw new Error("journal_recovery_manifest_invalid");
   if (m.ownershipHash !== undefined && (typeof m.ownershipHash !== "string" || !/^[a-f0-9]{64}$/.test(m.ownershipHash))) throw new Error("journal_recovery_manifest_invalid");
   if (Object.keys(m).some(k => !allowed.includes(k)) || m.version !== 1 || m.recoveryId !== recoveryId || typeof m.scope !== "string" || !m.scope || typeof m.sourceHash !== "string" || !/^[a-f0-9]{64}$/.test(m.sourceHash) || !Number.isSafeInteger(m.verifiedSequence) || (m.verifiedSequence as number) < 1 || !Number.isSafeInteger(m.verifiedPending) || (m.verifiedPending as number) < 0 || m.unknownRecords !== null || (m.errorCode !== undefined && (typeof m.errorCode !== "string" || !/^[a-z0-9_]+$/.test(m.errorCode))) || typeof m.createdAt !== "string" || !Number.isFinite(Date.parse(m.createdAt)) || typeof m.phase !== "string" || !phases.includes(m.phase) || (m.candidateHash !== undefined && (typeof m.candidateHash !== "string" || !/^[a-f0-9]{64}$/.test(m.candidateHash))) || m.historicalIncomplete !== true || m.cliHandoff !== "unconfirmed" || m.serverDelivery !== "unconfirmed") throw new Error("journal_recovery_manifest_invalid");
@@ -83,7 +105,7 @@ function writeManifest(directory: string, manifest: RecoveryManifest): void {
 export function inspectJournal(directory: string, validate: (state: unknown) => boolean) {
   const scan = scanJournal(fs.readFileSync(regular(directory, "metadata.jsonl")), validate);
   const { state: _state, ...metadata } = scan;
-  return { ...metadata, writerPresent: fs.existsSync(regular(directory, "writer.lock")), ownershipGuardPresent: fs.existsSync(regular(directory, "ownership.guard")), historicalIncomplete: journalHistory(directory).some(m => m.historicalIncomplete) };
+  return { ...metadata, writerPresent: fs.existsSync(regular(directory, "writer.lock")), ownershipGuardPresent: fs.existsSync(regular(directory, "ownership.guard")), historicalIncomplete: journalHistory(directory).some(m => m.historicalIncomplete), unacknowledgedIncidents: journalHistory(directory).filter(m => m.historicalIncomplete && !m.acknowledgement).length };
 }
 export function prepareJournalRecovery(directory: string, scope: string, validate: (state: unknown) => boolean): RecoveryPlan {
   const scan = scanJournal(fs.readFileSync(regular(directory, "metadata.jsonl")), validate);
@@ -107,7 +129,7 @@ export function journalHistory(directory: string): RecoveryManifest[] {
   });
 }
 /** Observed receipt counts do not certify unsnapshotted or server delivery. */
-export function recordJournalHandoffObservation(directory: string, recoveryId: string, observation: JournalHandoffObservation): RecoveryManifest {
+function recordJournalHandoffObservationUnlocked(directory: string, recoveryId: string, observation: JournalHandoffObservation): RecoveryManifest {
   if (!/^[a-f0-9-]{36}$/.test(recoveryId) || !validHandoff(observation)) throw new Error("journal_recovery_receipt_observation_invalid");
   const transaction = regular(directory, `recovery/${recoveryId}`);
   const manifest = checkedManifest(JSON.parse(fs.readFileSync(regular(transaction, "manifest.json"), "utf8")), recoveryId);
@@ -117,6 +139,52 @@ export function recordJournalHandoffObservation(directory: string, recoveryId: s
     writeManifest(transaction, manifest);
   }
   return manifest;
+}
+/** Explicit acknowledgement silences this incident only; original evidence and
+ * historical incompleteness remain immutable and never authorize disputed data. */
+function acknowledgeJournalHistoryUnlocked(directory: string, recoveryId: string, selectedScope: string, actorScope: string): RecoveryManifest {
+  if (!/^[a-f0-9-]{36}$/.test(recoveryId) || !/^[a-f0-9]{64}$/.test(actorScope)) throw new Error("journal_acknowledgement_identity_invalid");
+  const transaction = regular(directory, `recovery/${recoveryId}`);
+  const manifest = checkedManifest(JSON.parse(fs.readFileSync(regular(transaction,"manifest.json"),"utf8")), recoveryId);
+  if (manifest.scope !== selectedScope || manifest.phase !== "activated") throw new Error("journal_acknowledgement_scope_unconfirmed");
+  if (!manifest.acknowledgement) {
+    manifest.acknowledgement = {actorScope,acknowledgedAt:new Date().toISOString(),reason:"historical_evidence_unavailable",recoveryId};
+    writeManifest(transaction,manifest);
+  }
+  return manifest;
+}
+function updateJournalReconciliationUnlocked(directory: string, recoveryId: string, selectedScope: string, update: Pick<RecoveryManifest,"runtimeDisposition"|"reconciliation"|"recordMappings"|"recordEvidence"|"evidenceCursor">): RecoveryManifest {
+  if (!/^[a-f0-9-]{36}$/.test(recoveryId)) throw new Error("journal_recovery_identity_invalid");
+  const transaction = regular(directory,`recovery/${recoveryId}`);
+  const manifest = checkedManifest(JSON.parse(fs.readFileSync(regular(transaction,"manifest.json"),"utf8")),recoveryId);
+  if (manifest.scope !== selectedScope || manifest.phase !== "activated") throw new Error("journal_recovery_scope_unconfirmed");
+  if (update.recordMappings && manifest.recordMappings) {
+    const next = new Map(update.recordMappings.map(record=>[record.heartbeatId,record]));
+    if (manifest.recordMappings.some(record=>JSON.stringify(next.get(record.heartbeatId))!==JSON.stringify(record))) throw new Error("journal_recovery_mapping_conflict");
+  }
+  const next = checkedManifest({...manifest,...update,...(update.recordEvidence?{recordEvidence:mergeRecoveryEvidence(manifest.recordEvidence ?? [],update.recordEvidence)}:{})},recoveryId);
+  if (next.recordEvidence?.some(row=>!next.recordMappings?.some(mapping=>mapping.heartbeatId===row.heartbeatId&&mapping.revision===row.revision))) throw new Error("journal_recovery_evidence_identity_conflict");
+  if (!manifest.reconciliation || !next.reconciliation || Date.parse(next.reconciliation.observedAt)>=Date.parse(manifest.reconciliation.observedAt)) writeManifest(transaction,next);
+  return next;
+}
+/** Serialize incident updates across windows. A crashed lock can be reclaimed
+ * only through the recovery identity/hash/scope proof and a dead-process check. */
+function withManifestGuard<T>(directory: string, recoveryId: string, mutation: () => T): T {
+  if (!/^[a-f0-9-]{36}$/.test(recoveryId)) throw new Error("journal_recovery_identity_invalid");
+  const transaction = regular(directory,`recovery/${recoveryId}`);
+  const manifest = checkedManifest(JSON.parse(fs.readFileSync(regular(transaction,"manifest.json"),"utf8")),recoveryId);
+  const guard = acquireRecoveryGuard(transaction,manifest);
+  try { return mutation(); }
+  finally { fs.rmSync(guard,{recursive:true}); syncDirectory(transaction); }
+}
+export function recordJournalHandoffObservation(directory: string, recoveryId: string, observation: JournalHandoffObservation): RecoveryManifest {
+  return withManifestGuard(directory,recoveryId,()=>recordJournalHandoffObservationUnlocked(directory,recoveryId,observation));
+}
+export function acknowledgeJournalHistory(directory: string, recoveryId: string, selectedScope: string, actorScope: string): RecoveryManifest {
+  return withManifestGuard(directory,recoveryId,()=>acknowledgeJournalHistoryUnlocked(directory,recoveryId,selectedScope,actorScope));
+}
+export function updateJournalReconciliation(directory: string, recoveryId: string, selectedScope: string, update: Pick<RecoveryManifest,"runtimeDisposition"|"reconciliation"|"recordMappings"|"recordEvidence"|"evidenceCursor">): RecoveryManifest {
+  return withManifestGuard(directory,recoveryId,()=>updateJournalReconciliationUnlocked(directory,recoveryId,selectedScope,update));
 }
 /** Explicit apply, offline: the caller must prove the account/scope and park writers.
  * A kernel PID probe is deliberately insufficient authority to reclaim a writer.

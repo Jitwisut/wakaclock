@@ -32,6 +32,23 @@ describe("AiAttributionStore.classify — correlation window", () => {
     );
   }
 
+  it("rejects foreign and legacy evidence after owner proof, including cached records", async () => {
+    await writeSidecar("/project/a.ts",100);
+    const store=new AiAttributionStore(homeDir);
+    store.setOwnerScopes(["a".repeat(64)]);
+    expect((await store.classify("/project/a.ts",100000,3,1,contentFingerprint)).attribution).toBe("unattributed");
+    const log=path.join(homeDir,".wakaclock","ai-events.jsonl");
+    const row={event_id:"foreign",entity:"/project/a.ts",time:100,lines_added:3,lines_deleted:1,content_fingerprint:contentFingerprint,owner_scope_id:"b".repeat(64)};
+    await fs.appendFile(log,JSON.stringify(row)+"\n");
+    expect((await store.classify("/project/a.ts",100000,3,1,contentFingerprint)).attribution).toBe("unattributed");
+    await fs.appendFile(log,JSON.stringify({...row,event_id:"owned",owner_scope_id:"a".repeat(64)})+"\n");
+    expect((await store.classify("/project/a.ts",100000,3,1,contentFingerprint)).attribution).toBe("ai");
+    store.setOwnerScopes(["c".repeat(64)]);
+    expect((await store.classify("/project/a.ts",100000,3,1,contentFingerprint)).attribution).toBe("unattributed");
+    const reopened=new AiAttributionStore(homeDir);reopened.setOwnerScopes(["c".repeat(64)]);
+    expect((await reopened.classify("/project/a.ts",100000,3,1,contentFingerprint)).attribution).toBe("unattributed");
+  });
+
   // Pins CORRELATION_WINDOW_SECONDS's actual value (15s), the same way
   // correlation.rs's `pins_exact_match_window_at_five_seconds_past_the_window_edge`
   // pins EXACT_MATCH_WINDOW on the Rust side — a change to the constant should make
