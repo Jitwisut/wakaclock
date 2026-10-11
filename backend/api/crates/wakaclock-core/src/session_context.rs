@@ -162,7 +162,7 @@ impl ContextQueue {
         org: Uuid,
         event: &SessionContext,
     ) -> Result<bool> {
-        self.conn.execute_batch("CREATE TABLE IF NOT EXISTS session_context_observations(origin TEXT NOT NULL,owner TEXT NOT NULL,organization TEXT NOT NULL,session TEXT NOT NULL,repository TEXT NOT NULL,state_hash TEXT NOT NULL,observed_at TEXT NOT NULL,PRIMARY KEY(origin,owner,organization,session,repository))")?;
+        self.conn.execute_batch("CREATE TABLE IF NOT EXISTS session_context_observations(origin TEXT NOT NULL,owner TEXT NOT NULL,organization TEXT NOT NULL,session TEXT NOT NULL,repository TEXT NOT NULL,state_hash TEXT NOT NULL,observed_at TEXT NOT NULL,PRIMARY KEY(origin,owner,organization,session,repository)); CREATE TABLE IF NOT EXISTS session_context_observation_receipts(origin TEXT NOT NULL,owner TEXT NOT NULL,organization TEXT NOT NULL,event_id TEXT NOT NULL,payload_hash TEXT NOT NULL,PRIMARY KEY(origin,owner,organization,event_id))")?;
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -180,23 +180,36 @@ impl ContextQueue {
         let at = event
             .occurred_at
             .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
-        let prior=tx.query_row("SELECT state_hash,observed_at FROM session_context_observations WHERE origin=?1 AND owner=?2 AND organization=?3 AND session=?4 AND repository=?5",params![origin,owner,org,event.session_id,repository],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional()?;
-        if prior.as_ref().is_some_and(|(_, old)| old >= &at) {
+        // Accepted identity evidence survives ACK and restart.
+        let payload = serde_json::to_string(event)?;
+        let hash = format!("{:x}", Sha256::digest(payload.as_bytes()));
+        let receipt: Option<String> = tx.query_row(
+            "SELECT payload_hash FROM session_context_observation_receipts WHERE origin=?1 AND owner=?2 AND organization=?3 AND event_id=?4",
+            params![origin, owner, org, event.event_id], |r| r.get(0),
+        ).optional()?;
+        if let Some(existing) = receipt {
+            if existing != hash {
+                return Err("context identity conflict".into());
+            }
             tx.commit()?;
             return Ok(false);
         }
-        if prior.as_ref().is_some_and(|(hash, _)| hash == &state) {
+        tx.execute("INSERT INTO session_context_observation_receipts(origin,owner,organization,event_id,payload_hash) VALUES(?1,?2,?3,?4,?5)", params![origin,owner,org,event.event_id,hash])?;
+        let prior=tx.query_row("SELECT state_hash,observed_at FROM session_context_observations WHERE origin=?1 AND owner=?2 AND organization=?3 AND session=?4 AND repository=?5",params![origin,owner,org,event.session_id,repository],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional()?;
+        let delayed = prior.as_ref().is_some_and(|(_, old)| old >= &at);
+        // Preserve delayed historical evidence without rewinding current state.
+        if !delayed && prior.as_ref().is_some_and(|(hash, _)| hash == &state) {
             tx.execute("UPDATE session_context_observations SET observed_at=?6 WHERE origin=?1 AND owner=?2 AND organization=?3 AND session=?4 AND repository=?5",params![origin,owner,org,event.session_id,repository,at])?;
             tx.commit()?;
             return Ok(false);
         }
-        let payload = serde_json::to_string(event)?;
-        let hash = format!("{:x}", Sha256::digest(payload.as_bytes()));
         let n=tx.execute("INSERT INTO session_context_queue(origin,owner,organization,event_id,payload,payload_hash) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin,owner,organization,event_id) DO UPDATE SET event_id=excluded.event_id WHERE payload_hash=excluded.payload_hash",params![origin,owner,org,event.event_id,payload,hash])?;
         if n != 1 {
             return Err("context identity conflict".into());
         }
-        tx.execute("INSERT INTO session_context_observations(origin,owner,organization,session,repository,state_hash,observed_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(origin,owner,organization,session,repository) DO UPDATE SET state_hash=excluded.state_hash,observed_at=excluded.observed_at",params![origin,owner,org,event.session_id,repository,state,at])?;
+        if !delayed {
+            tx.execute("INSERT INTO session_context_observations(origin,owner,organization,session,repository,state_hash,observed_at) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(origin,owner,organization,session,repository) DO UPDATE SET state_hash=excluded.state_hash,observed_at=excluded.observed_at",params![origin,owner,org,event.session_id,repository,state,at])?;
+        }
         tx.commit()?;
         Ok(true)
     }
@@ -374,14 +387,39 @@ mod tests {
         }
         let mut q = ContextQueue::open(&path).unwrap();
         e.occurred_at = DateTime::from_timestamp(20, 0).unwrap();
+        e.event_id = "unchanged-new-observation".into();
         assert!(!q
             .observe_changed("https://stage.test", owner, org, &e)
             .unwrap());
         e.branch = Some("b".into());
         e.occurred_at = DateTime::from_timestamp(15, 0).unwrap();
+        e.event_id = "delayed-observation".into();
+        assert!(q
+            .observe_changed("https://stage.test", owner, org, &e)
+            .unwrap());
         assert!(!q
             .observe_changed("https://stage.test", owner, org, &e)
             .unwrap());
+        let delayed = q
+            .claim("https://stage.test", owner, org, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(delayed.event.occurred_at.timestamp(), 15);
+        assert!(q.acknowledge(&delayed).unwrap());
+        let mut conflict = e.clone();
+        conflict.branch = Some("conflict".into());
+        assert!(q
+            .observe_changed("https://stage.test", owner, org, &conflict)
+            .is_err());
+        let last: String = q
+            .conn
+            .query_row(
+                "SELECT observed_at FROM session_context_observations",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(last.starts_with("1970-01-01T00:00:20"));
         e.occurred_at = DateTime::from_timestamp(21, 0).unwrap();
         e.event_id = "changed".into();
         q.conn.execute_batch("PRAGMA query_only=ON").unwrap();

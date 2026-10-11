@@ -113,6 +113,18 @@ export class WakaclockCliService {
         return response;
     }
 
+    public async journalEvidence(scopeId:string,records:{heartbeat_id:string;revision:number}[]):Promise<{heartbeat_id:string;revision:number;server_ack:string;canonical_readback:string}[]> {
+        const results:{heartbeat_id:string;revision:number;server_ack:string;canonical_readback:string}[]=[];
+        for(let offset=0;offset<Math.min(records.length,500);offset+=100) {
+            const slice=records.slice(offset,offset+100);
+            const response=await this.runCli(["journal-evidence"],JSON.stringify({schema_version:1,scope_id:scopeId,records:slice}));
+            const parsed=JSON.parse(response.stdout);
+            if(parsed.schema_version!==1 || parsed.scope_id!==scopeId || !Array.isArray(parsed.results) || parsed.results.length!==slice.length || parsed.results.some((r:any,i:number)=>r.heartbeat_id!==slice[i].heartbeat_id || r.revision!==slice[i].revision || !["ingress_accepted","unconfirmed"].includes(r.server_ack) || !["found","missing","conflict","superseded","unavailable"].includes(r.canonical_readback))) throw new Error("journal_evidence_invalid");
+            results.push(...parsed.results);
+        }
+        return results;
+    }
+
     public async journalReceipts(scopeId: string, ids: string[]): Promise<{ heartbeat_id: string; status: "accepted" | "missing"; input_hash?: string }[]> {
         const all: { heartbeat_id: string; status: "accepted" | "missing"; input_hash?: string }[] = [];
         for (let start = 0; start < ids.length; start += 100) {

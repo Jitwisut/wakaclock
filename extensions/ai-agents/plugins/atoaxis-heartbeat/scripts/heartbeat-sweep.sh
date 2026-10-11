@@ -23,7 +23,6 @@ if [ -z "$WAKACLOCK_BIN" ] && [ -f "${HOME}/.wakaclock/cli-path" ]; then
   WAKACLOCK_BIN="$(tr -d '\r\n' < "${HOME}/.wakaclock/cli-path")"
 fi
 WAKACLOCK_BIN="${WAKACLOCK_BIN:-wakaclock}"
-command -v "$WAKACLOCK_BIN" >/dev/null 2>&1 || exit 0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
 COMMON_EMITTER="${WAKACLOCK_AGENT_COMMON_EMITTER:-${SCRIPT_DIR}/../../../common/emit-event.sh}"
@@ -31,8 +30,8 @@ emit_metadata() {
   if [ -x "$COMMON_EMITTER" ]; then
     "$COMMON_EMITTER"
   else
-    jq -c '{schema_version:1,producer_version:(.producer_version // 1),event_type:"file_change",event_id,occurred_at,entity,project_root:(.project_root // null),change_kind:(.change_kind // "modify"),previous_entity:(.previous_entity // null),agent:(.agent // .client_id),provider:(.provider // .provider_id // null),model:(.model // .model_id // null),source:(.source // "agent_hook"),confidence:(.confidence // "inferred"),lines_added:(.lines_added // null),lines_deleted:(.lines_deleted // null),transport:(.transport // "shell_hook"),tool:(.tool // null),tool_event_id:(.tool_event_id // .tool_call_id // null)}' \
-      | "$WAKACLOCK_BIN" ai emit --json >/dev/null 2>&1 || true
+    printf '%s\n' 'AtoAxis: producer_capture_failure; shared durable producer required' >&2
+    return 1
   fi
 }
 

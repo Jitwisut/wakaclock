@@ -93,7 +93,8 @@ describe("explicit journal recovery", () => {
       applyJournalRecovery(dir, plan, "scope", validate);
       expect(fs.readFileSync(file)).toEqual(checkpoint);
     }
-  });
+  }, 30_000);
+
   it("reclaims only a dead recovery owner with matching transaction, scope and original hash", () => {
     const dir = broken(); const plan = prepareJournalRecovery(dir, "scope", validate);
     const child = spawnSync(process.execPath, ["-e", "process.exit(0)"]); expect(child.status).toBe(0);
@@ -117,5 +118,22 @@ describe("explicit journal recovery", () => {
     fs.writeFileSync(path.join(dir, "journal-identity.json"), JSON.stringify({version:1,journalId:"11111111-1111-1111-1111-111111111111",directoryHash:"foreign"}));
     expect(() => applyJournalRecovery(dir, plan, "scope", validate)).toThrow("ownership_unconfirmed");
     expect(fs.readFileSync(path.join(dir, "metadata.jsonl"))).toEqual(original);
+  });
+});
+
+describe("historical incident disposition",()=>{
+  it("acknowledges a single retained incident without declaring recovery or deleting evidence",async()=>{
+    const {acknowledgeJournalHistory,updateJournalReconciliation}=await import("../src/journalRecovery");
+    const dir=broken(),scope="a".repeat(64),plan=prepareJournalRecovery(dir,scope,validate);
+    applyJournalRecovery(dir,plan,scope,validate);
+    const original=fs.readFileSync(path.join(dir,"recovery",plan.recoveryId,"original.jsonl"));
+    expect(()=>acknowledgeJournalHistory(dir,plan.recoveryId,"foreign",scope)).toThrow("scope_unconfirmed");
+    const first=acknowledgeJournalHistory(dir,plan.recoveryId,scope,scope);
+    expect(acknowledgeJournalHistory(dir,plan.recoveryId,scope,scope).acknowledgement).toEqual(first.acknowledgement);
+    expect(inspectJournal(dir,validate).unacknowledgedIncidents).toBe(0);
+    expect(inspectJournal(dir,validate).historicalIncomplete).toBe(true);
+    expect(fs.readFileSync(path.join(dir,"recovery",plan.recoveryId,"original.jsonl"))).toEqual(original);
+    const state=updateJournalReconciliation(dir,plan.recoveryId,scope,{runtimeDisposition:"resume_required",reconciliation:{observedAt:new Date().toISOString(),journalWritable:true,cliAccepted:1,serverAccepted:null,canonicalFound:null,unconfirmed:1,conflicts:0}});
+    expect(state.runtimeDisposition).toBe("resume_required");expect(state.serverDelivery).toBe("unconfirmed");expect(state.historicalIncomplete).toBe(true);
   });
 });

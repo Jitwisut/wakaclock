@@ -522,6 +522,34 @@ impl ApiClient {
         })
     }
 
+    /// Bounded authenticated read-only lookup. Never drains or synthesizes data.
+    pub async fn heartbeat_readback(
+        &self,
+        records: &[(String, u32)],
+    ) -> AppResult<serde_json::Value> {
+        if records.is_empty() || records.len() > 100 {
+            return Err(AppError::Validation("readback_bounds".into()));
+        }
+        if crate::runtime::paused("delivery") {
+            return Err(AppError::RuntimePaused);
+        }
+        let body = serde_json::json!({"records":records.iter().map(|(id,revision)|serde_json::json!({"heartbeat_id":id,"revision":revision})).collect::<Vec<_>>()});
+        let response = self
+            .client
+            .post(format!(
+                "{}/api/v2/me/heartbeats/readback",
+                self.config.server_url.trim_end_matches('/')
+            ))
+            .timeout(Duration::from_secs(5))
+            .json(&body)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(AppError::Protocol("readback_unavailable".into()));
+        }
+        Ok(response.json().await?)
+    }
+
     pub fn queue_scope(&self) -> QueueScope {
         let owner = self
             .config
@@ -588,7 +616,10 @@ impl ApiClient {
         self.send_heartbeats(vec![heartbeat]).await
     }
 
-    pub async fn send_heartbeats(&self, mut heartbeats: Vec<Heartbeat>) -> AppResult<SendReport> {
+    fn prepare_local_heartbeats(
+        &self,
+        mut heartbeats: Vec<Heartbeat>,
+    ) -> AppResult<(Queue, Vec<Heartbeat>)> {
         // Every transport payload gets an identity before it touches the dedup cache or
         // durable queue. This makes a retry/restart indistinguishable from the original
         // request at the backend even for older callers that did not know the field yet.
@@ -613,6 +644,31 @@ impl ApiClient {
                 heartbeat.machine = collector_id.clone();
             }
         }
+        Ok((queue, heartbeats))
+    }
+
+    /// Local handoff used by capture: delivery owns every network attempt.
+    pub fn queue_heartbeats(&self, heartbeats: Vec<Heartbeat>) -> AppResult<SendReport> {
+        let (queue, heartbeats) = self.prepare_local_heartbeats(heartbeats)?;
+        let filtered = self.filter_duplicates(heartbeats)?;
+        let payloads = filtered
+            .heartbeats
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        let owner = uuid::Uuid::new_v4().to_string();
+        queue.persist_and_claim_scoped(&payloads, &self.queue_scope(), &owner)?;
+        queue.release_claim(&owner)?;
+        Ok(SendReport::queued(
+            0,
+            filtered.deduped,
+            payloads.len(),
+            None,
+        ))
+    }
+
+    pub async fn send_heartbeats(&self, heartbeats: Vec<Heartbeat>) -> AppResult<SendReport> {
+        let (queue, heartbeats) = self.prepare_local_heartbeats(heartbeats)?;
         let filtered = self.filter_duplicates(heartbeats)?;
         let deduped = filtered.deduped;
 
@@ -713,8 +769,8 @@ impl ApiClient {
                 Some("paused_by_user".into()),
             )),
             Ok(()) => {
-                for (id, _) in &pending {
-                    queue.remove(*id)?;
+                for (id, source) in &pending {
+                    queue.acknowledge_server_and_remove(*id, &lease_owner, source)?;
                 }
                 queue.record_accepted(&self.queue_scope(), pending.len(), false)?;
                 self.clear_delivery_failure(&queue);
@@ -818,15 +874,16 @@ impl ApiClient {
                     // original payload (including revision/segments) in the outbox.
                     let mut sent = 0;
                     let mut queued = original_count;
-                    for (id, payload) in pending.iter().map(|(id, _)| id).zip(&wire_payloads) {
+                    for ((id, source), payload) in pending.iter().zip(&wire_payloads) {
                         match self
                             .post_json_leased(&queue, &lease_owner, "/api/v1/heartbeats", payload)
                             .await
                         {
                             Ok(()) => {
-                                queue.remove(*id)?;
-                                sent += 1;
-                                queued -= 1;
+                                if queue.acknowledge_server_and_remove(*id, &lease_owner, source)? {
+                                    sent += 1;
+                                    queued -= 1;
+                                }
                             }
                             Err(AppError::RuntimePaused) => break,
                             Err(item_error) => {
@@ -1226,9 +1283,9 @@ impl ApiClient {
         // Queue entries may have been written by a pre-policy client. Reapply the
         // boundary at the broker flush so an upgrade cannot publish a stale inferred
         // name simply because it was already offline when the client was upgraded.
-        let pending: Vec<_> = pending
-            .into_iter()
-            .map(|(id, payload)| (id, sanitize_queued_heartbeat_payload(payload)))
+        let sanitized_pending: Vec<_> = pending
+            .iter()
+            .map(|(id, payload)| (*id, sanitize_queued_heartbeat_payload(payload.clone())))
             .collect();
         let sidecar_count = queue.status_scoped(&scope)?.line_metrics_pending;
         let has_versioned_metrics = pending
@@ -1236,9 +1293,9 @@ impl ApiClient {
             .any(|(_, payload)| has_editor_line_metrics(payload));
         let supports_line_metrics = (has_versioned_metrics || sidecar_count > 0)
             && self.supports_editor_line_metrics().await;
-        let mut wire_pending = pending.clone();
+        let mut wire_pending = sanitized_pending.clone();
         if !supports_line_metrics {
-            for ((_, source), (_, wire)) in pending.iter().zip(wire_pending.iter_mut()) {
+            for ((_, source), (_, wire)) in sanitized_pending.iter().zip(wire_pending.iter_mut()) {
                 if has_editor_line_metrics(source) {
                     queue.retain_line_measurement_scoped(&scope, source)?;
                     strip_editor_line_metrics(wire);
@@ -1268,19 +1325,18 @@ impl ApiClient {
                 stopped_because = Some("paused_by_user".into());
             }
             Ok(()) => {
-                for (id, _) in &pending {
-                    queue.remove(*id)?;
-                }
-                for (_, payload) in &pending {
-                    if let Some(heartbeat_id) = payload
-                        .get("heartbeat_id")
-                        .and_then(Value::as_str)
-                        .filter(|_| has_editor_line_metrics(payload))
-                    {
-                        queue.mark_line_measurement_base_accepted(&scope, heartbeat_id)?;
+                for (id, source) in &pending {
+                    if queue.acknowledge_server_and_remove(*id, &lease_owner, source)? {
+                        flushed += 1;
+                        if let Some(heartbeat_id) = source
+                            .get("heartbeat_id")
+                            .and_then(Value::as_str)
+                            .filter(|_| has_editor_line_metrics(source))
+                        {
+                            queue.mark_line_measurement_base_accepted(&scope, heartbeat_id)?;
+                        }
                     }
                 }
-                flushed = pending.len();
             }
             Err(error)
                 if is_credential_delivery_error(&error)
@@ -1309,8 +1365,9 @@ impl ApiClient {
                         .await
                     {
                         Ok(()) => {
-                            queue.remove(*id)?;
-                            flushed += 1;
+                            if queue.acknowledge_server_and_remove(*id, &lease_owner, payload)? {
+                                flushed += 1;
+                            }
                         }
                         Err(AppError::RuntimePaused) => {
                             stopped_because = Some("paused_by_user".into());

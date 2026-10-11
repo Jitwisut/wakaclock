@@ -38,6 +38,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
+      - name: Verify actual native architecture and runtime prerequisites
+        shell: bash
+        run: python scripts/ai-coverage/internal_candidate_preflight.py --target "${{ matrix.target }}" --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/native-runner.json"
       - name: Verify source and build CLI before generating outputs
         env:
           SOURCE_COMMIT: ${{ github.sha }}
@@ -69,6 +72,7 @@ jobs:
         run: |
           python scripts/ai-coverage/package_internal_candidate.py --vsix extensions/vscode/atoaxis-vscode-${{ matrix.target }}.vsix --commit "$GITHUB_SHA" --output candidate
           python scripts/ai-coverage/verify_release_artifacts.py --vsix candidate/atoaxis-vscode-${{ matrix.target }}.vsix
+          cp "$RUNNER_TEMP/native-runner.json" "candidate/native-runner-${{ matrix.target }}.json"
       - uses: actions/upload-artifact@v4
         with:
           name: internal-client-${{ matrix.target }}-${{ github.sha }}

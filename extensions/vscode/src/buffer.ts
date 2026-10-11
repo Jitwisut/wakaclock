@@ -27,7 +27,7 @@ import { appendSegment, MAX_ACTIVITY_GAP_MS, unionSeconds } from "./activity";
 import { randomUUID } from "node:crypto";
 import { HeartbeatJournal, type JournalHealth } from "./heartbeatJournal";
 import { validateEditorCheckpoint } from "./journalCheckpoint";
-import { journalHistory } from "./journalRecovery";
+import { journalHistory, updateJournalReconciliation } from "./journalRecovery";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -120,16 +120,20 @@ export class HeartbeatBufferManager {
   private journalScope?: string;
   private journalError?: string;
   private historicalIncomplete = false;
+  private recoveryDirectories = new Set<string>();
   private readonly rejections = new Map<string, string>();
   private readonly external = new Map<string, { entity: string; metadata: ExternalFileChangeMetadata; now: number; project?: string; workspaceRoot?: string }>();
   private readonly externalPayloads = new Map<string, ExtraHeartbeatPayload>();
   private readonly externalInFlight = new Set<string>();
   private capturePaused = false;
+  private pauseBeforeRecovery?: boolean;
   public setCapturePaused(paused: boolean): void {
     this.capturePaused = paused;
     this.lastObservedActivityAt = undefined;
     this.lastObservedEntity = undefined;
   }
+
+  public setAttributionOwnerScopes(scopes: readonly string[]): void { this.aiAttributionStore.setOwnerScopes(scopes); }
 
   public enableJournal(directory: string, scope: string, verifiedRecoveryDirectories: readonly string[] = []): void {
     this.journalScope = scope;
@@ -142,6 +146,7 @@ export class HeartbeatBufferManager {
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
       this.journal = new HeartbeatJournal<JournalCheckpoint>(path.join(directory, randomUUID()), validateEditorCheckpoint);
       for (const recoveryDirectory of [directory, ...verifiedRecoveryDirectories]) {
+      this.recoveryDirectories.add(recoveryDirectory);
       if (!fs.existsSync(recoveryDirectory)) continue;
       for (const entry of fs.readdirSync(recoveryDirectory, { withFileTypes: true })) {
         if (!entry.isDirectory() || !fs.existsSync(path.join(recoveryDirectory, entry.name, "metadata.jsonl"))) continue;
@@ -164,16 +169,16 @@ export class HeartbeatBufferManager {
         for (const [id, value] of recovered.external ?? []) importVerified(this.external, id, value);
         for (const [id, value] of recovered.externalPayloads ?? []) importVerified(this.externalPayloads, id, value);
         for (const [id, code] of recovered.rejections ?? []) importVerified(this.rejections, id, code);
-        for (const [entity, retries] of recovered.retries) this.retrySnapshots.set(entity, [...(this.retrySnapshots.get(entity) ?? []), ...retries]);
+        for (const [entity, retries] of recovered.retries) for (const retry of retries) this.importRecoveredSnapshot(entity, retry);
         for (const original of [...recovered.states, ...recovered.detached]) {
-          const state = structuredClone(original);
+          const state = this.recoveryState(original, previous);
           if (!this.hasPendingActivity(state)) continue;
           this.getOrCreateState(state.entity);
           const snapshot = this.captureSnapshot(state, "coding", state.pendingWrite, {
             metricVersion: "editor-before-after-v1", boundary: "flush", status: "unavailable",
             reason: "baseline_missing", changeEvents: state.pendingEditorChanges.length, containsReplay: true,
           });
-          this.retrySnapshots.set(state.entity, [...(this.retrySnapshots.get(state.entity) ?? []), snapshot]);
+          this.importRecoveredSnapshot(state.entity, snapshot);
         }
         // Earned intervals survive; restart itself never closes a new interval.
         this.lastObservedActivityAt = undefined;
@@ -196,14 +201,99 @@ export class HeartbeatBufferManager {
   public getJournalHealth(): JournalHealth | undefined {
     const sidecarFailure = this.aiAttributionStore.checkpointHealth().errorCode;
     const health = this.journalError ? { status: "write_failure" as const, pending: this.states.size + this.retrySnapshots.size, errorCode: this.journalError } : this.journal?.health();
-    return health ? { ...health, historicalIncomplete: this.historicalIncomplete, ...(sidecarFailure ? { status: "write_failure" as const, errorCode: sidecarFailure } : {}), deadLetter: this.rejections.size, handoffErrorCode: this.rejections.size ? "journal_dead_letter" : undefined } : undefined;
+    let unacknowledgedIncidents = 0;
+    for (const root of this.recoveryDirectories) {
+      try { for (const entry of fs.readdirSync(root,{withFileTypes:true})) if (entry.isDirectory() && !entry.isSymbolicLink()) unacknowledgedIncidents += journalHistory(path.join(root,entry.name)).filter(m=>m.historicalIncomplete && !m.acknowledgement).length; }
+      catch { unacknowledgedIncidents++; }
+    }
+    return health ? { ...health, historicalIncomplete: this.historicalIncomplete, unacknowledgedIncidents, ...(sidecarFailure ? { status: "write_failure" as const, errorCode: sidecarFailure } : {}), deadLetter: this.rejections.size, handoffErrorCode: this.rejections.size ? "journal_dead_letter" : undefined } : undefined;
   }
 
   public closeJournal(): void { this.journal?.close(); }
   public async parkJournalForRecovery(directory: string): Promise<void> {
     if (!this.journal?.ownsDirectory(directory)) return;
+    this.pauseBeforeRecovery = this.capturePaused;
     this.setCapturePaused(true);
     await this.enqueueFlush(async () => { this.journal?.close(); this.journalError = "journal_recovery_parked"; });
+  }
+
+  /** Import an explicitly activated checkpoint through the same durable writer.
+   * New events are never reconstructed from current files or replayed pause time. */
+  public async resumeRecoveredJournal(directory: string): Promise<boolean> {
+    return this.enqueueFlush(async () => {
+      if (![...this.recoveryDirectories].some(root=>path.dirname(directory) === root)) throw new Error("journal_recovery_scope_unconfirmed");
+      const previous = new HeartbeatJournal<JournalCheckpoint>(directory, validateEditorCheckpoint);
+      try {
+        if (previous.health().status !== "ready" || !journalHistory(directory).some(m=>m.phase === "activated")) throw new Error("journal_recovery_not_activated");
+        const recovered = previous.read();
+        const recoveredPayloads: ExtraHeartbeatPayload[] = [];
+        if (!this.journal || this.journalError === "journal_recovery_parked") {
+          this.journal = previous;
+          // The damaged writer's memory is not evidence. Restore only the
+          // explicitly activated checkpoint, not an unverified in-memory tail.
+          this.states.clear(); this.detached.clear(); this.retrySnapshots.clear();
+          this.external.clear(); this.externalPayloads.clear(); this.rejections.clear();
+          this.journalError = undefined;
+        } else if (this.journal.health().status !== "ready") throw new Error("journal_writer_unavailable");
+        if (recovered) {
+          const merge = <T>(target:Map<string,T>, values:readonly [string,T][])=> {
+            for (const [id,value] of values) {
+              if (target.has(id) && JSON.stringify(target.get(id)) !== JSON.stringify(value)) throw new Error("journal_recovery_identity_conflict");
+              target.set(id,structuredClone(value));
+            }
+          };
+          merge(this.external,recovered.external ?? []); merge(this.externalPayloads,recovered.externalPayloads ?? []); merge(this.rejections,recovered.rejections ?? []);
+          recoveredPayloads.push(...(recovered.externalPayloads ?? []).map(([,payload])=>payload));
+          for (const [entity,retries] of recovered.retries) for (const retry of retries) { this.importRecoveredSnapshot(entity,retry); recoveredPayloads.push(retry.payload); }
+          for (const original of [...recovered.states,...recovered.detached]) if (this.hasPendingActivity(original)) {
+            const state = this.recoveryState(original,previous);
+            this.getOrCreateState(state.entity);
+            const snapshot = this.captureSnapshot(state,"coding",state.pendingWrite,{metricVersion:"editor-before-after-v1",boundary:"flush",status:"unavailable",reason:"baseline_missing",changeEvents:state.pendingEditorChanges.length,containsReplay:true});
+            this.importRecoveredSnapshot(state.entity,snapshot); recoveredPayloads.push(snapshot.payload);
+          }
+        }
+        this.historicalIncomplete = true;
+        // If a separate live writer exists, commit import before acknowledging the
+        // old generation. A crash before clearing it retries the original IDs.
+        const priorError = this.journalError;
+        this.journalError = undefined;
+        try { this.checkpoint(); } catch(error) {this.journalError=priorError ?? "journal_recovery_resume_failed"; throw error;}
+        const incident = journalHistory(directory).find(m=>m.phase === "activated");
+        if (!incident) throw new Error("journal_recovery_not_activated");
+        const mappings = new Map((incident.recordMappings ?? []).map(record=>[record.heartbeatId,record]));
+        for (const payload of recoveredPayloads) {
+          if (!payload.heartbeat_id) throw new Error("journal_recovery_identity_missing");
+          const mapping={heartbeatId:payload.heartbeat_id,revision:payload.revision ?? 0,inputHash:createHash("sha256").update(JSON.stringify(canonicalRecoveryMetadata(payload))).digest("hex")};
+          if (mappings.has(mapping.heartbeatId) && JSON.stringify(mappings.get(mapping.heartbeatId))!==JSON.stringify(mapping)) throw new Error("journal_recovery_mapping_conflict");
+          mappings.set(mapping.heartbeatId,mapping);
+        }
+        updateJournalReconciliation(directory,incident.recoveryId,incident.scope,{recordMappings:[...mappings.values()]});
+        if (this.journal !== previous) previous.append({states:[],retries:[],detached:[]},0);
+        if (priorError && !["journal_corrupt_recovery_source","journal_recovery_parked"].includes(priorError)) this.journalError=priorError;
+        const ready = this.getJournalHealth()?.status === "ready";
+        if (ready && this.pauseBeforeRecovery !== undefined) { this.setCapturePaused(this.pauseBeforeRecovery); this.pauseBeforeRecovery = undefined; }
+        return ready;
+      } catch (error) {
+        this.journalError ??= "journal_recovery_resume_failed";
+        throw error;
+      } finally { if (this.journal !== previous) previous.close(); }
+    });
+  }
+
+  private recoveryState(original: BufferedFileState, source: HeartbeatJournal<JournalCheckpoint>): BufferedFileState {
+    const state = structuredClone(original);
+    // Legacy checkpoints may precede assignment of a heartbeat ID. Bind their
+    // ID to the source journal identity and original metadata, never restart time.
+    state.heartbeatId ||= source.recoveryRecordId(original);
+    return state;
+  }
+
+  private importRecoveredSnapshot(entity: string, snapshot: FlushSnapshot): void {
+    const existing = this.retrySnapshots.get(entity) ?? [];
+    const previous = existing.find(value => value.payload.heartbeat_id === snapshot.payload.heartbeat_id);
+    if (previous && JSON.stringify(previous) !== JSON.stringify(snapshot)) throw new Error("journal_recovery_identity_conflict");
+    if (!previous) existing.push(structuredClone(snapshot));
+    this.retrySnapshots.set(entity,existing);
   }
 
   public rejectedJournalItems(): Array<{ id: string; errorCode: string; time?: number }> {
@@ -1175,4 +1265,10 @@ function fingerprintDocument(document: Pick<TextDocument, "uri"> & { getText?: (
   } catch {
     return undefined;
   }
+}
+
+function canonicalRecoveryMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalRecoveryMetadata);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a],[b])=>a<b?-1:a>b?1:0).map(([key,item])=>[key,canonicalRecoveryMetadata(item)]));
+  return value;
 }

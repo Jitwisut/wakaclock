@@ -18,7 +18,6 @@ if [ -z "$CLI" ] && [ -f "${HOME}/.wakaclock/cli-path" ]; then
   CLI="$(tr -d '\r\n' < "${HOME}/.wakaclock/cli-path")"
 fi
 CLI="${CLI:-wakaclock}"
-command -v "$CLI" >/dev/null 2>&1 || exit 0
 
 SESSION_ID="$(jq -r '.session_id // .sessionId // .id // empty' <<<"$INPUT" 2>/dev/null || true)"
 [ -n "$SESSION_ID" ] || exit 0
@@ -42,7 +41,8 @@ jq -cn \
   --arg cwd "$CWD" \
   --arg occurred_at "$OCCURRED_AT" \
   '{session_id:$session_id,agent:$agent,provider:(if $provider=="" then null else $provider end),model:(if $model=="" then null else $model end),cwd:(if $cwd=="" then null else $cwd end),source:"agent_hook",occurred_at:(if $occurred_at=="" then null else $occurred_at end)}' \
-  | "$CLI" "${COMMAND[@]}" >/dev/null 2>&1 || true
+  | python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/metadata-producer.py" \
+      --kind "session_$PHASE" --cli "$CLI" --surface "${ATOAXIS_EXECUTION_SURFACE:-cli}" || printf '%s\n' 'AtoAxis: producer_capture_failure' >&2
 
 # Reconcile the active transcript at lifecycle boundaries, matching the WakaTime
 # plugin model without starting a watcher. Only adapters with a real parser are

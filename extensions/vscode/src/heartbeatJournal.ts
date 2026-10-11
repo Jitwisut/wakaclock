@@ -10,6 +10,7 @@ export interface JournalHealth {
   errorCode?: string;
   deadLetter?: number;
   historicalIncomplete?: boolean;
+  unacknowledgedIncidents?: number;
   handoffErrorCode?: string;
 }
 
@@ -80,6 +81,13 @@ export class HeartbeatJournal<T> {
     const scan = scanJournal<T>(fs.readFileSync(this.file), this.validate);
     this.sequence = scan.sequence; this.state = scan.state; this.healthState.pending = scan.pending;
     if (scan.errorCode) this.healthState = { ...this.healthState, status: "corrupt", errorCode: scan.errorCode };
+  }
+
+  /** Stable fallback for a pre-snapshot record without an assigned ID. */
+  recoveryRecordId(record: unknown): string {
+    const identity = JSON.parse(fs.readFileSync(path.join(path.dirname(this.file), "journal-identity.json"), "utf8"));
+    const hash = checksum(JSON.stringify([identity.journalId,record]));
+    return `${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`;
   }
 
   read(): T | undefined { return this.state === undefined ? undefined : structuredClone(this.state); }

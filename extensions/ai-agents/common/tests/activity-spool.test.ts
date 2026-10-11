@@ -30,3 +30,20 @@ test("persisted pause prevents spooling even when CLI is unavailable", async () 
   assert.deepEqual(readdirSync(join(home, ".wakaclock")), ["runtime-desired.json"]);
  } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+test("legacy metadata is spooled with immutable hash/time; contents cannot cross the contract", async () => {
+ const { retainMetadata, canonicalMetadata } = await import("../activity-spool.ts");
+ const { createHash } = await import("node:crypto");
+ const home = mkdtempSync(join(tmpdir(), "producer-metadata-"));
+ try {
+  mkdirSync(join(home, ".wakaclock/native-producer-bindings"), {recursive:true});
+  writeFileSync(join(home, ".wakaclock/native-producer-bindings/kilo-code-cli.json"), JSON.stringify({scope_id:"a".repeat(64)}));
+  const input = {adapter:"kilo-code",surface:"cli",kind:"session_end",metadata:{session_id:"session",agent:"kilo-code",cwd:"/fixture"},observedAt:"2026-10-07T01:18:09Z"} as const;
+  const retained = await retainMetadata(join(home,"missing-cli"), input, home);
+  assert.ok(retained); const record = JSON.parse(readFileSync(retained.file,"utf8"));
+  assert.equal(record.observed_at, input.observedAt); assert.equal(record.metadata.occurred_at,input.observedAt);
+  assert.equal(record.payload_hash,createHash("sha256").update(canonicalMetadata(record.metadata)).digest("hex"));
+  await assert.rejects(retainMetadata(join(home,"missing-cli"), {...input, metadata:{...input.metadata,prompt:"SECRET"}}, home), /metadata_invalid/);
+  assert.equal(readdirSync(join(home,".wakaclock/native-producer-spool", "a".repeat(64))).length,1);
+ } finally {rmSync(home,{recursive:true,force:true});}
+});

@@ -10,12 +10,18 @@ MOCK="$TMP/wakaclock"
 CAPTURE="$TMP/capture.json"
 cat >"$MOCK" <<'MOCK'
 #!/usr/bin/env bash
-cat >"$ATOAXIS_CAPTURE"
+if [ "${1:-}" = journal-scope ]; then
+  printf '{"schema_version":1,"owner_confirmed":true,"scope_id":"%064d"}\n' 0
+elif [ "${2:-}" = producer-batch ]; then
+  jq -c '.records[0].metadata' >"$ATOAXIS_CAPTURE"
+else
+  cat >/dev/null
+fi
 MOCK
 chmod +x "$MOCK"
 
 INPUT='{"client_id":"kilo-code","provider_id":"DeepSeek API","model_id":"deepseek-v4","session_id":"s1","tool_call_id":"t1","entity":"src/main.rs","project_root":"/repo","change_kind":"modify","lines_added":3,"content":"do not transmit this"}'
-printf '%s' "$INPUT" | ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
+printf '%s' "$INPUT" | ATOAXIS_PRODUCER_HOME="$TMP/home" ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
 
 grep -q '"agent":"kilo-code"' "$CAPTURE"
 grep -q '"provider":"DeepSeek API"' "$CAPTURE"
@@ -27,7 +33,7 @@ grep -q '"event_type":"file_change"' "$CAPTURE"
 grep -q '"producer_version":1' "$CAPTURE"
 
 printf '%s' '{"sessionId":"session-1","agent":"kilo-code","provider":"DeepSeek API","model":"deepseek-v4","cwd":"/repo","prompt":"never forward"}' \
-  | HOME="$TMP/home" ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/session-event.sh" start
+  | ATOAXIS_PRODUCER_HOME="$TMP/home" ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/session-event.sh" start
 grep -q '"session_id":"session-1"' "$CAPTURE"
 grep -q '"agent":"kilo-code"' "$CAPTURE"
 if grep -q 'never forward' "$CAPTURE"; then
@@ -39,14 +45,14 @@ fi
 # hook payloads are allowed to grow arbitrary nested fields, so a secret nested in
 # a provider object is a regression even when the top-level key is allowlisted.
 printf '%s' '{"client_id":{"name":"kilo-code","prompt":"must not leak"},"provider_id":{"id":"deepseek","secret":"must not leak"},"entity":{"path":"/repo/src/leak.ts","content":"must not leak"}}' \
-  | ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
+  | ATOAXIS_PRODUCER_HOME="$TMP/home" ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
 if grep -q 'must not leak' "$CAPTURE"; then
   echo "privacy failure: object-valued metadata reached broker envelope" >&2
   exit 1
 fi
 
 printf '%s' '{"entity":"/repo/src/unknown.ts","project_root":"/repo"}' \
-  | ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
+  | ATOAXIS_PRODUCER_HOME="$TMP/home" ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
 grep -q '"agent":"unknown-agent"' "$CAPTURE"
 grep -q '"source":"ide_telemetry"' "$CAPTURE"
 grep -q '"confidence":"unknown"' "$CAPTURE"
@@ -54,14 +60,14 @@ grep -q '"confidence":"unknown"' "$CAPTURE"
 # A legacy adapter may provide an event ID that accidentally contains a path.  The
 # shared boundary must keep the ID stable while removing that path from the wire value.
 printf '%s' '{"client_id":"codex","event_id":"session:src/raw.ts:1","entity":"/repo/src/raw.ts","project_root":"/repo"}' \
-  | ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
+  | ATOAXIS_PRODUCER_HOME="$TMP/home" ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
 if jq -e '.event_id | contains("src/raw.ts")' "$CAPTURE" >/dev/null; then
   echo "privacy failure: path-bearing event_id reached broker" >&2
   exit 1
 fi
 FIRST_OPAQUE_ID="$(jq -r '.event_id' "$CAPTURE")"
 printf '%s' '{"client_id":"codex","event_id":"prompt:shared-call","entity":"/repo/src/other.ts","project_root":"/repo"}' \
-  | ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
+  | ATOAXIS_PRODUCER_HOME="$TMP/home" ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
 SECOND_OPAQUE_ID="$(jq -r '.event_id' "$CAPTURE")"
 if [ "$FIRST_OPAQUE_ID" = "$SECOND_OPAQUE_ID" ]; then
   echo "identity failure: malformed multi-file IDs collided" >&2
@@ -71,11 +77,11 @@ fi
 # WAKACLOCK_EDITOR wins over TERM_PROGRAM, and neither being set means null (the
 # CLI/daemon decides the fallback later, not this boundary).
 printf '%s' '{"client_id":"claude-code","entity":"/repo/src/declared.ts","project_root":"/repo"}' \
-  | WAKACLOCK_EDITOR=vscode TERM_PROGRAM=Apple_Terminal ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
+  | WAKACLOCK_EDITOR=vscode TERM_PROGRAM=Apple_Terminal ATOAXIS_PRODUCER_HOME="$TMP/home" ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
 grep -q '"editor":"vscode"' "$CAPTURE"
 
 printf '%s' '{"client_id":"claude-code","entity":"/repo/src/undeclared.ts","project_root":"/repo"}' \
-  | env -u WAKACLOCK_EDITOR -u TERM_PROGRAM ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
+  | env -u WAKACLOCK_EDITOR -u TERM_PROGRAM ATOAXIS_PRODUCER_HOME="$TMP/home" ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/emit-event.sh"
 grep -q '"editor":null' "$CAPTURE"
 
 echo "common emitter ok"

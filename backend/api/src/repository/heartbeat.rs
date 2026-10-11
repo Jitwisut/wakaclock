@@ -919,6 +919,34 @@ impl HeartbeatRepository {
         }))
     }
 
+    /// Account-only identity/revision readback, excluding paths and payloads.
+    pub async fn readback_ids(
+        &self,
+        user_id: uuid::Uuid,
+        ids: &[String],
+    ) -> Result<Vec<(String, u32, u64)>> {
+        #[derive(serde::Deserialize, clickhouse::Row)]
+        struct ReadbackRow {
+            heartbeat_id: String,
+            revision: u32,
+            identities: u64,
+        }
+        let relation = canonical_winner_relation("h.user_id = ? AND h.heartbeat_id IN ?", "h");
+        let query = format!("SELECT assumeNotNull(heartbeat_id) AS heartbeat_id, max(revision) AS revision, uniqExact(tuple(entity,session_id)) AS identities FROM {relation} GROUP BY heartbeat_id");
+        let rows = self
+            .client
+            .get_client()
+            .query(&query)
+            .bind(user_id)
+            .bind(ids)
+            .fetch_all::<ReadbackRow>()
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.heartbeat_id, r.revision, r.identities))
+            .collect())
+    }
+
     /// Return the highest revision already stored for each AI event ID.
     pub async fn existing_ai_event_revisions(
         &self,

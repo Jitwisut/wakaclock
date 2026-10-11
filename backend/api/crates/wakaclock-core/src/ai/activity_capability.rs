@@ -81,6 +81,7 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                         "codex" | "claude-code" | "gemini-cli" | "kilo-code" | "kimi-code-cli"
                     ) && (id != "codex" || *surface == "cli")
                         || id == "generic-mcp"
+                        || id == "cursor"
                 }
                 "usage_tokens" | "cost" => {
                     matches!(id, "codex" | "claude-code" | "gemini-cli")
@@ -97,6 +98,8 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                 && matches!(metric, "activity_markers" | "session_identity")
             {
                 "explicit_activity_surface_configuration_required"
+            } else if implemented && id == "cursor" && metric == "file_edits" {
+                "documented_completed_edit_fragments_only_live_evidence_pending"
             } else if implemented {
                 if id == "opencode" {
                     "native_plugin_v1_1_19_0_v2_2_0_26_live_evidence_pending"
@@ -125,7 +128,9 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                     "evidence_pending"
                 }
                 .into(),
-                development_status: if implemented && metric == "file_edits" && id != "generic-mcp"
+                development_status: if implemented
+                    && metric == "file_edits"
+                    && !matches!(id, "generic-mcp" | "cursor")
                 {
                     "partial"
                 } else if implemented {
@@ -145,7 +150,8 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                             operating_system: os.into(),
                             development_status: if !implemented {
                                 "not_implemented"
-                            } else if setup_missing || metric == "file_edits" && id != "generic-mcp"
+                            } else if setup_missing
+                                || metric == "file_edits" && !matches!(id, "generic-mcp" | "cursor")
                             {
                                 "partial"
                             } else {
@@ -156,7 +162,10 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                             certification_status: "pending".into(),
                             reason: if setup_missing {
                                 "windows_hook_contract_evidence_pending"
-                            } else if metric == "file_edits" && implemented && id != "generic-mcp" {
+                            } else if metric == "file_edits"
+                                && implemented
+                                && !matches!(id, "generic-mcp" | "cursor")
+                            {
                                 "legacy_file_producer_durability_not_closed"
                             } else {
                                 reason
@@ -240,6 +249,9 @@ mod tests {
         assert!(for_adapter("cursor")
             .iter()
             .filter(|c| c.surface == "inline")
-            .all(|c| c.code_status != "implemented"));
+            .all(
+                |c| (c.metric == "file_edits" && c.development_status == "implemented")
+                    || (c.metric != "file_edits" && c.code_status != "implemented")
+            ));
     }
 }

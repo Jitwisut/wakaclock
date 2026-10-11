@@ -57,7 +57,7 @@ impl BrokerActivityEventV3 {
             || super::AdapterRegistry::builtin()
                 .get(&self.adapter_id)
                 .is_none()
-            || !["cli", "ide", "desktop", "inline", "mcp"]
+            || !["cli", "ide", "desktop", "inline", "mcp", "unknown"]
                 .contains(&self.execution_surface.as_str())
             || self.provider_schema_version.is_empty()
             || self.provider_schema_version.len() > 80
@@ -135,6 +135,11 @@ pub struct ActivityCursor {
     pub offset: u64,
     pub file_identity: String,
     pub context: ActivityContext,
+}
+impl ActivityCursor {
+    pub fn observed_surface(&self) -> &str {
+        &self.context.surface
+    }
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ActivityContext {
@@ -254,6 +259,15 @@ pub fn parse_activity(
     previous: &ActivityCursor,
     now: DateTime<Utc>,
 ) -> Result<ActivityBatch, String> {
+    parse_activity_bounded(path, previous, now, 2000)
+}
+fn parse_activity_bounded(
+    path: &Path,
+    previous: &ActivityCursor,
+    now: DateTime<Utc>,
+    record_limit: usize,
+) -> Result<ActivityBatch, String> {
+    let record_limit = record_limit.clamp(1, 2000);
     let metadata = std::fs::metadata(path).map_err(|_| "transcript_unavailable")?;
     #[cfg(unix)]
     let identity = {
@@ -276,7 +290,7 @@ pub fn parse_activity(
         JsonlCursorReader::open(path, cursor.offset).map_err(|_| "transcript_unavailable")?;
     let mut events = Vec::new();
     let mut records = 0;
-    while records < 2000 {
+    while records < record_limit {
         let Some(line) = reader
             .next_line(4 * 1024 * 1024)
             .map_err(|_| "transcript_read_failed")?
@@ -312,15 +326,8 @@ pub fn parse_activity(
                     || p["thread_source"]
                         .as_str()
                         .is_some_and(|v| matches!(v, "automation" | "heartbeat"));
-                c.surface = if p["originator"]
-                    .as_str()
-                    .is_some_and(|s| s.contains("desktop"))
-                {
-                    "codex-desktop"
-                } else {
-                    "codex"
-                }
-                .into();
+                c.surface = super::codex::normalize_codex_surface(p["originator"].as_str())
+                    .unwrap_or_else(|| "codex-unknown".into());
             }
             "turn_context" => {
                 c.turn = p["turn_id"].as_str().unwrap_or("").into();
@@ -606,7 +613,7 @@ pub fn parse_activity(
     let mut fallback = Vec::new();
     for (id, call) in &mut c.calls {
         if let Some(end) = call.completed {
-            if records < 2000
+            if records < record_limit
                 && !call.fallback_emitted
                 && now - end >= chrono::Duration::seconds(30)
                 && end >= call.started
@@ -650,7 +657,7 @@ pub fn parse_activity(
             ),
         );
     }
-    if records < 2000 {
+    if records < record_limit {
         c.calls
             .retain(|_, v| v.completed.is_none() || now - v.started < chrono::Duration::hours(6));
     }
@@ -679,8 +686,31 @@ pub fn parse_shared_activity(
     previous: &ActivityCursor,
     now: DateTime<Utc>,
 ) -> Result<(ActivityBatch, Option<String>), String> {
+    parse_shared_activity_bounded(
+        adapter,
+        surface,
+        metadata_contract,
+        path,
+        previous,
+        now,
+        2000,
+    )
+}
+/// Live collectors share one input-record budget across all adapters/sources.
+/// The legacy reader keeps its original 2000-record contract for explicit replay.
+pub fn parse_shared_activity_bounded(
+    adapter: &str,
+    surface: &str,
+    metadata_contract: bool,
+    path: &Path,
+    previous: &ActivityCursor,
+    now: DateTime<Utc>,
+    record_limit: usize,
+) -> Result<(ActivityBatch, Option<String>), String> {
+    let record_limit = record_limit.clamp(1, 2000);
     if adapter == "codex" && !metadata_contract {
-        return parse_activity(path, previous, now).map(|batch| (batch, None));
+        return parse_activity_bounded(path, previous, now, record_limit)
+            .map(|batch| (batch, None));
     }
     if super::AdapterRegistry::builtin().get(adapter).is_none() {
         return Err("unknown_activity_adapter".into());
@@ -709,7 +739,7 @@ pub fn parse_shared_activity(
     let mut records = 0;
     let mut blocked = None;
     let mut contracts = BTreeMap::new();
-    while records < 2000 {
+    while records < record_limit {
         let Some(line) = reader
             .next_line(2 * 1024 * 1024)
             .map_err(|_| "transcript_read_failure")?
@@ -1362,6 +1392,27 @@ mod tests {
             "event_msg",
             json!({"type":"item_completed","started_at_ms":start,"completed_at_ms":end,"item":{"type":typ,"id":id,"status":"failed","command":"SECRET_COMMAND","content":"SECRET_RESPONSE"}}),
         )
+    }
+    #[test]
+    fn bounded_live_reader_resumes_exactly_after_one_hundred_input_records() {
+        let at = Utc::now();
+        let rows = vec![
+            json!({"type":"session_meta","timestamp":at,"payload":{"id":"session","cwd":"/fixture"}});
+            250
+        ];
+        let path = file(&rows);
+        let mut cursor = ActivityCursor::default();
+        for expected in [100, 100, 50, 0] {
+            let (batch, blocked) =
+                parse_shared_activity_bounded("codex", "unknown", false, &path, &cursor, at, 100)
+                    .unwrap();
+            assert!(blocked.is_none());
+            assert_eq!(batch.records, expected);
+            assert!(batch.cursor.offset >= cursor.offset);
+            cursor = serde_json::from_slice(&serde_json::to_vec(&batch.cursor).unwrap()).unwrap();
+        }
+        assert_eq!(cursor.offset, std::fs::metadata(&path).unwrap().len());
+        std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn real_gap_markers_and_tools_do_not_invent_task_or_reasoning_time() {

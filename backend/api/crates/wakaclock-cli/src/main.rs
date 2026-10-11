@@ -24,6 +24,7 @@ mod delivery_service;
 mod native_hooks;
 mod native_spool;
 mod opencode_plugin;
+mod producer_handoff;
 mod runtime_service;
 mod team_context_capture;
 mod tool_snapshot;
@@ -142,6 +143,7 @@ enum Commands {
     JournalHealth,
     /// Inspect existing handoff receipts without modifying the queue.
     JournalReceipts,
+    JournalEvidence,
     Heartbeat {
         #[arg(short, long)]
         entity: String,
@@ -596,6 +598,11 @@ enum AgentAction {
 
 #[derive(Subcommand)]
 enum AiAction {
+    /// Commit metadata records before returning per-ID/hash durable acknowledgements.
+    ProducerBatch {
+        #[arg(long, default_value_t = true)]
+        json: bool,
+    },
     /// Normalize provider stdin transiently and durably accept metadata markers.
     ActivityHook {
         #[arg(long)]
@@ -1435,9 +1442,99 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .collect::<Vec<_>>();
             println!(
                 "{}",
-                serde_json::json!({"schema_version":1,"capabilities":["editor_durable_ack_v1","activity_envelope_v3","persistent_runtime_intent_v1","native_activity_hook_v1","editor_receipts_read_v1","native_producer_spool_v1"],
+                serde_json::json!({"schema_version":1,"capabilities":["editor_durable_ack_v1","activity_envelope_v3","persistent_runtime_intent_v1","native_activity_hook_v1","editor_receipts_read_v1","native_producer_spool_v1","producer_batch_ack_v2","journal_evidence_read_v1"],
                 "scope_id":journal_scope_id(&scope),"owner_confirmed":config.api_key.is_some(),"recoverable_scope_ids":recoverable_scope_ids,
                 "build":build_identity()})
+            );
+        }
+        Commands::JournalEvidence => {
+            let mut bytes = Vec::new();
+            io::stdin().take(65537).read_to_end(&mut bytes)?;
+            if bytes.len() > 65536 {
+                return Err("journal_evidence_bounds".into());
+            }
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {
+                schema_version: u8,
+                scope_id: String,
+                records: Vec<Record>,
+            }
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Record {
+                heartbeat_id: String,
+                revision: u32,
+            }
+            let input: Request =
+                serde_json::from_slice(&bytes).map_err(|_| "journal_evidence_invalid")?;
+            if config.api_key.is_none()
+                || input.schema_version != 1
+                || input.records.is_empty()
+                || input.records.len() > 100
+                || input.records.iter().any(|r| {
+                    r.heartbeat_id.is_empty()
+                        || r.heartbeat_id.len() > 256
+                        || !r
+                            .heartbeat_id
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || "_.:-".contains(c))
+                })
+            {
+                return Err("journal_evidence_invalid".into());
+            }
+            let current = api_client.queue_scope();
+            let ids = input
+                .records
+                .iter()
+                .map(|r| r.heartbeat_id.clone())
+                .collect::<Vec<_>>();
+            // Read-only owner proof precedes any network query. No rebinding or
+            // migration is performed; ambiguous old scopes fail closed.
+            Queue::inspect_verified_editor_receipts_at(
+                &Queue::db_path(),
+                &current,
+                &input.scope_id,
+                &ids,
+            )?;
+            let records = input
+                .records
+                .into_iter()
+                .map(|r| (r.heartbeat_id, r.revision))
+                .collect::<Vec<_>>();
+            let receipts = Queue::inspect_verified_server_receipts_at(
+                &Queue::db_path(),
+                &current,
+                &input.scope_id,
+                &records,
+            )?;
+            let readback = api_client.heartbeat_readback(&records).await.ok();
+            let observed = readback
+                .as_ref()
+                .and_then(|r| r["data"]["results"].as_array());
+            let results = receipts
+                .into_iter()
+                .map(|mut receipt| {
+                    let found = observed.and_then(|rows| {
+                        rows.iter().find(|r| {
+                            r["heartbeat_id"] == receipt["heartbeat_id"]
+                                && r["requested_revision"] == receipt["revision"]
+                        })
+                    });
+                    receipt["canonical_readback"] = serde_json::json!(found
+                        .and_then(|r| r["status"].as_str())
+                        .filter(
+                            |s| ["found", "missing", "conflict", "superseded", "unavailable"]
+                                .contains(s)
+                        )
+                        .unwrap_or("unavailable"));
+                    receipt["canonical_confirmation"] = serde_json::json!("id_revision_only");
+                    receipt
+                })
+                .collect::<Vec<_>>();
+            println!(
+                "{}",
+                serde_json::json!({"schema_version":1,"scope_id":input.scope_id,"results":results})
             );
         }
         Commands::JournalReceipts => {
@@ -2487,6 +2584,18 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     )?
                 );
             }
+            AiAction::ProducerBatch { json: _ } => {
+                let mut bytes = Vec::new();
+                io::stdin()
+                    .take(2 * 1024 * 1024 + 1)
+                    .read_to_end(&mut bytes)?;
+                println!(
+                    "{}",
+                    producer_handoff::batch(&config, &api_client, &bytes)
+                        .await
+                        .map_err(io::Error::other)?
+                );
+            }
             AiAction::ActivityHook {
                 adapter,
                 surface,
@@ -2751,7 +2860,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 observation_id,
                 json,
             } => {
-                let status = broker::editor_observation_status_for_cli(&observation_id).await?;
+                let status =
+                    broker::editor_observation_status_for_cli(&api_client, &observation_id).await?;
                 if json {
                     println!("{}", serde_json::to_string(&status)?);
                 } else {
@@ -6555,16 +6665,18 @@ fn run_ai_session(config: &Config, ended: bool, json: bool) -> Result<(), Box<dy
                 last_event_at: now,
                 ended_at: None,
             });
-        // A resumed session keeps its original start, while the latest lifecycle
-        // payload may reveal provider/model/cwd that were absent at first start.
-        record.last_event_at = now;
-        record.provider = provider.or_else(|| record.provider.clone());
-        record.model = model.or_else(|| record.model.clone());
-        record.cwd = cwd.or_else(|| record.cwd.clone());
-        record.source = source;
+        let newest = now >= record.last_event_at;
+        record.started_at = record.started_at.min(now);
+        record.last_event_at = record.last_event_at.max(now);
+        if newest {
+            record.provider = provider.or_else(|| record.provider.clone());
+            record.model = model.or_else(|| record.model.clone());
+            record.cwd = cwd.or_else(|| record.cwd.clone());
+            record.source = source;
+        }
         if ended {
-            record.ended_at = Some(now);
-        } else {
+            record.ended_at = Some(record.ended_at.map_or(now, |previous| previous.max(now)));
+        } else if newest && record.ended_at.is_some_and(|end| now > end) {
             record.ended_at = None;
         }
         record.ended_at

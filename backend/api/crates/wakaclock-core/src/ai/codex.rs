@@ -1431,10 +1431,17 @@ struct FileChangeShape {
     delta: LineDelta,
 }
 
-fn normalize_codex_surface(originator: Option<&str>) -> Option<String> {
-    let originator = originator?.trim().to_ascii_lowercase();
-    (originator.contains("codex desktop") || originator == "codex")
-        .then(|| "codex-desktop".to_string())
+pub(crate) fn normalize_codex_surface(originator: Option<&str>) -> Option<String> {
+    // Only the exact Desktop provenance has a captured contract in this checkout.
+    // Missing/new labels do not prove CLI or IDE execution.
+    match originator
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("codex desktop" | "codex-desktop") => Some("codex-desktop".into()),
+        _ => Some("codex-unknown".into()),
+    }
 }
 
 fn timestamp_from_millis(value: Option<i64>, fallback: DateTime<Utc>) -> DateTime<Utc> {

@@ -91,7 +91,13 @@ fn validate_metadata(adapter: &str, metadata: &Value) -> bool {
         })
     })
 }
-pub(crate) async fn drain(directory: &Path, config: &Config, api: &ApiClient) -> Value {
+pub(crate) async fn drain_bounded(
+    directory: &Path,
+    config: &Config,
+    api: &ApiClient,
+    max_batches: usize,
+    began: std::time::Instant,
+) -> Value {
     let mut scopes = vec![wakaclock_core::editor_health::scope_id(&api.queue_scope())];
     let aliases = wakaclock_core::queue::Queue::open()
         .and_then(|queue| queue.verified_editor_journal_scopes(&api.queue_scope()));
@@ -104,8 +110,23 @@ pub(crate) async fn drain(directory: &Path, config: &Config, api: &ApiClient) ->
     scopes.sort();
     scopes.dedup();
     let mut total = json!({"status":"unconfirmed","pending":0,"accepted":0,"failure_count":0,"paused_excluded":0,"last_scan_success_at":null});
-    for scope in scopes {
-        let state = drain_scope(directory, config, api, &scope).await;
+    let checkpoint = directory.join("producer-scope-cursor.metadata");
+    if checkpoint.is_symlink() {
+        return json!({"status":"capture_failure","pending":null,"error_code":"producer_cursor_symlink"});
+    }
+    if let Ok(previous) = fs::read_to_string(&checkpoint) {
+        if let Some(index) = scopes.iter().position(|s| s > &previous) {
+            scopes.rotate_left(index);
+        }
+    }
+    let mut pending_by_scope = std::collections::BTreeMap::new();
+    let mut last_scope = None;
+    for scope in scopes.iter().cycle().take(max_batches.min(5)) {
+        if began.elapsed() >= std::time::Duration::from_secs(10) {
+            break;
+        }
+        last_scope = Some(scope.clone());
+        let state = drain_scope(directory, config, api, scope).await;
         if state["status"] == "capture_failure" || state["status"] == "unavailable" {
             total["status"] = state["status"].clone();
             total["error_code"] = state["error_code"].clone();
@@ -121,15 +142,53 @@ pub(crate) async fn drain(directory: &Path, config: &Config, api: &ApiClient) ->
         for key in ["accepted", "failure_count", "paused_excluded"] {
             total[key] = json!(total[key].as_u64().unwrap_or(0) + state[key].as_u64().unwrap_or(0));
         }
-        total["pending"] = match (total["pending"].as_u64(), state["pending"].as_u64()) {
-            (Some(a), Some(b)) => json!(a + b),
-            _ => Value::Null,
-        };
+        pending_by_scope.insert(scope.clone(), state["pending"].as_u64());
         if !state["last_scan_success_at"].is_null() {
             total["last_scan_success_at"] = state["last_scan_success_at"].clone();
         }
     }
+    total["pending"] = if pending_by_scope.len() == scopes.len()
+        && pending_by_scope.values().all(Option::is_some)
+    {
+        json!(pending_by_scope.values().flatten().sum::<u64>())
+    } else {
+        Value::Null
+    };
+    if let Some(scope) = last_scope {
+        if persist_checkpoint(&checkpoint, &scope).is_err() {
+            total["status"] = json!("capture_failure");
+            total["error_code"] = json!("producer_cursor_write_failed");
+        }
+    }
+    let parked = directory.join("native-producer-spool/unconfirmed");
+    if parked.is_symlink() || fs::read_dir(parked).is_ok_and(|mut entries| entries.next().is_some())
+    {
+        total["status"] = json!("capture_failure");
+        total["error_code"] = json!("producer_owner_unconfirmed");
+        total["parked_pending"] = Value::Null;
+    }
     total
+}
+pub(crate) fn persist_checkpoint(path: &Path, value: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("producer_cursor_invalid"))?;
+    let stage = parent.join(format!("scan-{}.metadata", uuid::Uuid::new_v4()));
+    let mut options = fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&stage)?;
+    file.write_all(value.as_bytes())?;
+    file.sync_all()?;
+    fs::rename(stage, path)?;
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
 }
 async fn drain_scope(directory: &Path, config: &Config, api: &ApiClient, scope: &str) -> Value {
     let root = directory.join("native-producer-spool").join(scope);
@@ -179,10 +238,34 @@ async fn drain_scope(directory: &Path, config: &Config, api: &ApiClient, scope: 
                 .map(str::to_owned);
             for file in paths.into_iter().take(100) {
                 let result = async {
-                    if file.is_symlink() || fs::metadata(&file)?.len() > 64 * 1024 {
+                    if file.is_symlink() || fs::metadata(&file)?.len() > 128 * 1024 {
                         return Err("producer_spool_invalid".into());
                     }
                     let bytes = fs::read(&file)?;
+                    let raw: Value = serde_json::from_slice(&bytes)?;
+                    if raw["schema_version"] == 2 {
+                        let observation: crate::producer_handoff::Observation = serde_json::from_value(raw)?;
+                        if observation.scope_id != scope || file.file_stem().and_then(|s| s.to_str()) != Some(observation.observation_id.as_str()) {
+                            return Err("producer_scope_mismatch".into());
+                        }
+                        let id = observation.observation_id.clone();
+                        let hash = observation.payload_hash.clone();
+                        let ack = crate::producer_handoff::accept(config, api, observation).await;
+                        if ack["durable"] != true || !matches!(ack["status"].as_str(), Some("accepted" | "duplicate")) || ack["id"] != id || ack["payload_hash"] != hash {
+                            if ack["status"] == "permanent_rejection" {
+                                failures += 1;
+                                let diagnostic = json!({"schema_version":1,"id":id,"payload_hash":hash,"disposition":"recoverable_dead_letter","error_code":ack["error_code"]});
+                                let sidecar = file.with_extension("json.disposition");
+                                if sidecar.is_symlink() { return Err("producer_disposition_symlink".into()); }
+                                persist_checkpoint(&sidecar, &diagnostic.to_string())?;
+                            }
+                            return Ok(false);
+                        }
+                        if fs::read(&file)? != bytes { return Err("producer_spool_changed".into()); }
+                        fs::remove_file(&file)?;
+                        #[cfg(unix)] fs::File::open(&root)?.sync_all()?;
+                        return Ok(true);
+                    }
                     let observation: Observation = serde_json::from_slice(&bytes)?;
                     if observation.schema_version != 1
                         || observation.scope_id != scope

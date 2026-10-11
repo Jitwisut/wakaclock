@@ -697,6 +697,7 @@ pub enum BrokerIngestOutcome {
 #[derive(Debug, Clone, Serialize)]
 pub struct BrokerRecord {
     pub event_id: String,
+    pub scope_id: Option<String>,
     pub event: BrokerEventV1,
     pub status: BrokerEventStatus,
     pub attempt_count: i64,
@@ -1087,6 +1088,7 @@ impl BrokerStore {
         conn.execute_batch(
             "
             PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = FULL;
             CREATE TABLE IF NOT EXISTS broker_events (
                 event_id TEXT PRIMARY KEY NOT NULL,
                 schema_version INTEGER NOT NULL,
@@ -1145,6 +1147,9 @@ impl BrokerStore {
                 [],
             )?;
         }
+        if !columns.iter().any(|column| column == "scope_id") {
+            conn.execute("ALTER TABLE broker_events ADD COLUMN scope_id TEXT", [])?;
+        }
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS broker_editor_observations (
@@ -1168,6 +1173,16 @@ impl BrokerStore {
                 ON broker_editor_observations(status, expires_at, occurred_at, entity);
             ",
         )?;
+        let observation_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(broker_editor_observations)")?
+            .query_map([], |row| row.get(1))?
+            .collect::<Result<_, _>>()?;
+        if !observation_columns.iter().any(|name| name == "scope_id") {
+            conn.execute(
+                "ALTER TABLE broker_editor_observations ADD COLUMN scope_id TEXT",
+                [],
+            )?;
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1374,6 +1389,18 @@ impl BrokerStore {
         &mut self,
         normalized: &[BrokerEventV1],
     ) -> Result<Vec<BrokerIngestOutcome>, AppError> {
+        self.ingest_normalized_batch_scoped(normalized, None)
+    }
+
+    /// Scope is fixed at durable acceptance, never inferred from later configuration.
+    pub fn ingest_normalized_batch_scoped(
+        &mut self,
+        normalized: &[BrokerEventV1],
+        scope_id: Option<&str>,
+    ) -> Result<Vec<BrokerIngestOutcome>, AppError> {
+        if scope_id.is_some_and(|id| id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit())) {
+            return Err(AppError::Validation("broker_scope_invalid".into()));
+        }
         if normalized.is_empty() {
             return Ok(Vec::new());
         }
@@ -1422,6 +1449,12 @@ impl BrokerStore {
         for event in normalized {
             let hash = event.payload_hash()?;
             let mut storage_event_id = storage_event_id_for_ingest(&tx, event)?;
+            if let Some(scope) = scope_id {
+                storage_event_id = format!(
+                    "{}|owner:{scope}",
+                    scoped_storage_event_id(&event.event_id, event.session_id.as_deref())
+                );
+            }
             if let Some(previous_session) = storage_sessions.get(&storage_event_id) {
                 if previous_session.as_deref() != event.session_id.as_deref()
                     && event.session_id.is_some()
@@ -1485,9 +1518,9 @@ impl BrokerStore {
             let json = serde_json::to_string(event)?;
             tx.execute(
                 "INSERT INTO broker_events
-                 (event_id, schema_version, normalized_payload_json, payload_hash, status, received_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?5)",
-                params![storage_event_id, event.schema_version, json, hash, now],
+                 (event_id, schema_version, normalized_payload_json, payload_hash, status, received_at, updated_at, scope_id)
+                 VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?5, ?6)",
+                params![storage_event_id, event.schema_version, json, hash, now, scope_id],
             )?;
         }
         tx.commit()?;
@@ -1512,6 +1545,17 @@ impl BrokerStore {
         &self,
         observation: &EditorObservationV1,
     ) -> Result<(EditorObservationIngestOutcome, EditorObservationAck), AppError> {
+        self.ingest_editor_observation_scoped(observation, None)
+    }
+
+    pub fn ingest_editor_observation_scoped(
+        &self,
+        observation: &EditorObservationV1,
+        scope_id: Option<&str>,
+    ) -> Result<(EditorObservationIngestOutcome, EditorObservationAck), AppError> {
+        if scope_id.is_some_and(|id| id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit())) {
+            return Err(AppError::Validation("editor owner scope invalid".into()));
+        }
         let observation = observation.clone().normalize()?;
         if serde_json::to_vec(&observation)?.len() > MAX_EDITOR_OBSERVATION_BYTES {
             return Err(AppError::Validation(
@@ -1525,6 +1569,9 @@ impl BrokerStore {
             .saturating_add(EDITOR_CORRELATION_WINDOW_SECONDS);
         let existing = self.load_editor_observation(&observation.observation_id)?;
         if let Some(existing) = existing {
+            if existing.scope_id.as_deref() != scope_id {
+                return Err(AppError::Conflict("editor ownership differs".into()));
+            }
             if existing.observation != observation {
                 return Err(AppError::Conflict(
                     "editor observation_id already exists with a different payload".to_string(),
@@ -1546,8 +1593,8 @@ impl BrokerStore {
             "INSERT INTO broker_editor_observations
              (observation_id, editor, entity, workspace_root, occurred_at, change_kind,
               previous_entity, lines_added, lines_deleted, content_fingerprint,
-              received_at, expires_at, status, matched_event_id, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'pending', NULL, ?11)",
+              received_at, expires_at, status, matched_event_id, updated_at, scope_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'pending', NULL, ?11, ?13)",
             params![
                 observation.observation_id,
                 observation.editor,
@@ -1561,6 +1608,7 @@ impl BrokerStore {
                 observation.content_fingerprint,
                 now,
                 expires_at,
+                scope_id,
             ],
         )?;
 
@@ -1574,6 +1622,21 @@ impl BrokerStore {
             EditorObservationIngestOutcome::Accepted
         };
         Ok((outcome, ack))
+    }
+
+    pub fn editor_observation_status_scoped(
+        &self,
+        observation_id: &str,
+        scopes: &[String],
+    ) -> Result<Option<EditorObservationAck>, AppError> {
+        if !self
+            .load_editor_observation(observation_id)?
+            .and_then(|value| value.scope_id)
+            .is_some_and(|scope| scopes.contains(&scope))
+        {
+            return Ok(None);
+        }
+        self.editor_observation_status(observation_id)
     }
 
     pub fn editor_observation_status(
@@ -1648,10 +1711,18 @@ impl BrokerStore {
             return Ok(Some(existing));
         }
         let now = Utc::now().timestamp();
+        let event_scope: Option<String> = self.conn.query_row(
+            "SELECT scope_id FROM broker_events WHERE event_id=?1",
+            params![storage_event_id],
+            |row| row.get(0),
+        )?;
         let candidates = self.pending_observations(now)?;
         let matches: Vec<&StoredEditorObservation> = candidates
             .iter()
-            .filter(|candidate| observation_matches_event(&candidate.observation, event))
+            .filter(|candidate| {
+                candidate.scope_id == event_scope
+                    && observation_matches_event(&candidate.observation, event)
+            })
             .collect();
         if matches.len() != 1 {
             return Ok(None);
@@ -1700,10 +1771,10 @@ impl BrokerStore {
         let mut statement = self.conn.prepare(
             "SELECT event_id, normalized_payload_json FROM broker_events
              WHERE normalized_payload_json IS NOT NULL
-               AND status IN ('pending', 'retry', 'processing')",
+               AND scope_id IS ?1 AND status IN ('pending', 'retry', 'processing')",
         )?;
         let mut matches = Vec::new();
-        for row in statement.query_map([], |row| {
+        for row in statement.query_map(params![stored.scope_id], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })? {
             let (storage_event_id, json) = row?;
@@ -1731,12 +1802,13 @@ impl BrokerStore {
             .query_row(
                 "SELECT observation_id, editor, entity, workspace_root, occurred_at,
                         change_kind, previous_entity, lines_added, lines_deleted,
-                        content_fingerprint, expires_at, status, matched_event_id
+                        content_fingerprint, expires_at, status, matched_event_id, scope_id
                  FROM broker_editor_observations WHERE observation_id = ?1",
                 params![observation_id],
                 |row| {
                     let change_kind = parse_change_kind(&row.get::<_, String>(5)?)?;
                     Ok(StoredEditorObservation {
+                        scope_id: row.get(13)?,
                         observation: EditorObservationV1 {
                             schema_version: EDITOR_OBSERVATION_SCHEMA_VERSION,
                             observation_id: row.get(0)?,
@@ -1799,6 +1871,17 @@ impl BrokerStore {
 
     /// Claim a bounded batch. Expired processing leases are recoverable after a crash.
     pub fn claim_ready(&mut self, limit: usize) -> Result<Vec<BrokerRecord>, AppError> {
+        self.claim_ready_scoped(limit, None)
+    }
+
+    /// Legacy callers see legacy rows only. Authenticated workers supply verified
+    /// scopes; unbound historical rows stay parked rather than changing owners.
+    pub fn claim_ready_scoped(
+        &mut self,
+        limit: usize,
+        scopes: Option<&[String]>,
+    ) -> Result<Vec<BrokerRecord>, AppError> {
+        let scope_json = scopes.map(serde_json::to_string).transpose()?;
         let now = Utc::now().timestamp();
         let limit = limit.clamp(1, MAX_BATCH_EVENTS);
         let tx = self
@@ -1806,29 +1889,40 @@ impl BrokerStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut statement = tx.prepare(
             "SELECT event_id, normalized_payload_json, status, attempt_count,
-                    editor_wait_until
+                    editor_wait_until, scope_id
              FROM broker_events
-             WHERE normalized_payload_json IS NOT NULL AND (
+             WHERE normalized_payload_json IS NOT NULL
+             AND ((?3 IS NULL AND scope_id IS NULL) OR scope_id IN (SELECT value FROM json_each(?3))) AND (
                    (status IN ('pending', 'retry') AND next_attempt_at <= ?1)
                 OR (status = 'processing' AND lease_until IS NOT NULL AND lease_until <= ?1)
              )
              ORDER BY received_at ASC LIMIT ?2",
         )?;
-        let rows: Vec<(String, String, String, i64, Option<i64>)> = statement
-            .query_map(params![now, limit as i64], |row| {
+        type ClaimedRow = (String, String, String, i64, Option<i64>, Option<String>);
+        let rows: Vec<ClaimedRow> = statement
+            .query_map(params![now, limit as i64, scope_json], |row| {
                 Ok((
                     row.get(0)?,
                     row.get(1)?,
                     row.get(2)?,
                     row.get(3)?,
                     row.get(4)?,
+                    row.get(5)?,
                 ))
             })?
             .collect::<Result<_, _>>()?;
         drop(statement);
 
         let mut records = Vec::with_capacity(rows.len());
-        for (event_id, normalized_payload_json, status, attempt_count, editor_wait_until) in rows {
+        for (
+            event_id,
+            normalized_payload_json,
+            status,
+            attempt_count,
+            editor_wait_until,
+            scope_id,
+        ) in rows
+        {
             let next_attempt = attempt_count + 1;
             let changed = tx.execute(
                 "UPDATE broker_events SET status = 'processing', attempt_count = ?2,
@@ -1844,6 +1938,7 @@ impl BrokerStore {
             let event: BrokerEventV1 = serde_json::from_str(&normalized_payload_json)?;
             records.push(BrokerRecord {
                 event_id,
+                scope_id,
                 event,
                 status: BrokerEventStatus::parse(&status)?,
                 attempt_count: next_attempt,
@@ -2015,8 +2110,37 @@ impl BrokerStore {
         Ok(stats)
     }
 
-    /// Remove event payloads after a week while retaining event IDs and hashes for
-    /// duplicate detection. Old identity rows are removed after thirty days.
+    /// Pending data outside verified ownership remains parked, never assigned by PID/path.
+    pub fn handoff_health(&self, scopes: &[String]) -> Result<(u64, u64, u64), AppError> {
+        let mut statement=self.conn.prepare("SELECT scope_id, status, count(*) FROM broker_events WHERE status IN ('pending','retry','processing','dead_letter') GROUP BY scope_id,status")?;
+        let mut pending = 0;
+        let mut dead = 0;
+        let mut unconfirmed = 0;
+        for row in statement.query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u64>(2)?,
+            ))
+        })? {
+            let (scope, status, count) = row?;
+            match scope {
+                None => unconfirmed += count,
+                Some(scope) if scopes.contains(&scope) => {
+                    if status == "dead_letter" {
+                        dead += count;
+                    } else {
+                        pending += count;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok((pending, dead, unconfirmed))
+    }
+
+    /// Only processed data expires automatically; unresolved dead letters retain
+    /// their payload until an explicit recovery disposition is recorded.
     pub fn compact(&self) -> Result<(), AppError> {
         let now = Utc::now().timestamp();
         self.conn.execute(
@@ -2026,7 +2150,7 @@ impl BrokerStore {
         )?;
         self.conn.execute(
             "DELETE FROM broker_events WHERE updated_at < ?1
-             AND status IN ('processed', 'dead_letter')",
+             AND status = 'processed'",
             params![now - BROKER_ID_RETENTION_SECONDS],
         )?;
         Ok(())
@@ -2038,6 +2162,7 @@ impl BrokerStore {
 }
 
 struct StoredEditorObservation {
+    scope_id: Option<String>,
     observation: EditorObservationV1,
     expires_at: i64,
     status: String,
@@ -2256,6 +2381,33 @@ mod tests {
             lines_deleted: Some(1),
             content_fingerprint: None,
         }
+    }
+
+    #[test]
+    fn compaction_preserves_unresolved_dead_letter_payload_for_recovery() {
+        let path = temp_db("dead-letter-retention");
+        let mut store = BrokerStore::open_at(&path).unwrap();
+        let event = sample_event("old-dead-letter").normalize().unwrap();
+        store
+            .ingest_normalized_batch(std::slice::from_ref(&event))
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE broker_events SET status='dead_letter', updated_at=?1",
+                params![Utc::now().timestamp() - 90 * 86400],
+            )
+            .unwrap();
+        store.compact().unwrap();
+        assert_eq!(store.stats().unwrap().dead_letter, 1);
+        assert_eq!(store.retry_dead_letters(None).unwrap(), 1);
+        let rows = store.claim_ready(1).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&rows[0].event).unwrap(),
+            serde_json::to_value(&event).unwrap()
+        );
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -2596,6 +2748,53 @@ mod tests {
     }
 
     #[test]
+    fn scoped_inbox_survives_restart_without_cross_account_claims() {
+        let path = temp_db("scoped-inbox");
+        let mut store = BrokerStore::open_at(&path).unwrap();
+        let event = sample_event("scope-fixture");
+        let a = "a".repeat(64);
+        let b = "b".repeat(64);
+        assert_eq!(
+            store
+                .ingest_normalized_batch_scoped(std::slice::from_ref(&event), Some(&a))
+                .unwrap(),
+            vec![BrokerIngestOutcome::Accepted]
+        );
+        drop(store);
+        let mut store = BrokerStore::open_at(&path).unwrap();
+        assert!(store
+            .claim_ready_scoped(100, Some(std::slice::from_ref(&b)))
+            .unwrap()
+            .is_empty());
+        assert!(store.claim_ready(100).unwrap().is_empty());
+        assert_eq!(
+            store
+                .ingest_normalized_batch_scoped(std::slice::from_ref(&event), Some(&a))
+                .unwrap(),
+            vec![BrokerIngestOutcome::Duplicate]
+        );
+        let mut conflict = event.clone();
+        conflict.lines_added = Some(99);
+        assert!(store
+            .ingest_normalized_batch_scoped(&[conflict], Some(&a))
+            .is_err());
+        assert_eq!(
+            store
+                .claim_ready_scoped(100, Some(std::slice::from_ref(&a)))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .ingest_normalized_batch_scoped(&[event], Some(&b))
+                .unwrap(),
+            vec![BrokerIngestOutcome::Accepted]
+        );
+        assert_eq!(store.claim_ready_scoped(100, Some(&[b])).unwrap().len(), 1);
+    }
+
+    #[test]
     fn allow_list_matches_the_struct_fields() {
         // If a field is added to BrokerEventV1, ALLOWED_EVENT_FIELDS must gain it
         // too or the quarantine diagnostic will wrongly flag it as unknown.
@@ -2611,6 +2810,55 @@ mod tests {
         assert_eq!(
             keys, allowed,
             "ALLOWED_EVENT_FIELDS is out of sync with BrokerEventV1"
+        );
+    }
+
+    #[test]
+    fn editor_evidence_cannot_be_read_or_matched_across_owner_scopes() {
+        let path = temp_db("editor-owner-scope");
+        let mut store = BrokerStore::open_at(&path).unwrap();
+        let a = "a".repeat(64);
+        let b = "b".repeat(64);
+        let at = Utc::now();
+        let observation = sample_observation("private-observation", at);
+        store
+            .ingest_editor_observation_scoped(&observation, Some(&a))
+            .unwrap();
+        let mut event = sample_event("foreign-same-file");
+        event.occurred_at = at;
+        store
+            .ingest_normalized_batch_scoped(&[event.clone()], Some(&b))
+            .unwrap();
+        let claimed = store
+            .claim_ready_scoped(1, Some(std::slice::from_ref(&b)))
+            .unwrap();
+        assert!(store
+            .match_editor_observation_for_event(&claimed[0].event_id, &event)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .editor_observation_status_scoped("private-observation", std::slice::from_ref(&b))
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .editor_observation_status_scoped("private-observation", std::slice::from_ref(&a))
+                .unwrap()
+                .unwrap()
+                .status,
+            "pending"
+        );
+        event.event_id = "owned-same-file".into();
+        store
+            .ingest_normalized_batch_scoped(&[event], Some(&a))
+            .unwrap();
+        assert_eq!(
+            store
+                .editor_observation_status_scoped("private-observation", &[a])
+                .unwrap()
+                .unwrap()
+                .status,
+            "matched"
         );
     }
 

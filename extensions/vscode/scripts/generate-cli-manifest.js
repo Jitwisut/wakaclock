@@ -54,7 +54,8 @@ if (process.env.INTERNAL_CANDIDATE === "1") {
   manifest.buildProfile = "release";
   manifest.releaseChannel = "internal";
   manifest.signing = "unsigned";
-  manifest.capabilities = ["editor_durable_ack_v1", "activity_envelope_v3", "persistent_runtime_intent_v1", "native_activity_hook_v1", "editor_receipts_read_v1", "native_producer_spool_v1"];
+  manifest.prerequisites = [{ runtime: "python", minimumVersion: "3.10", scope: "native metadata hooks" }, { runtime: "bash", scope: "legacy shell hooks" }, { runtime: "jq", scope: "legacy shell hooks" }, { runtime: "provider", scope: "native plugins; version evidence required per adapter" }];
+  manifest.capabilities = ["editor_durable_ack_v1", "activity_envelope_v3", "persistent_runtime_intent_v1", "native_activity_hook_v1", "editor_receipts_read_v1", "native_producer_spool_v1", "producer_batch_ack_v2", "journal_evidence_read_v1"];
   const repository = path.resolve(root, "../..");
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim();
   if (head !== manifest.sourceCommit) throw new Error("candidate_source_commit_mismatch");

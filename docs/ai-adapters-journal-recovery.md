@@ -1,5 +1,7 @@
 # AI adapters และ Journal recovery — implementation ledger
 
+> สถานะรอบล่าสุดต่อจาก `8baf491` อยู่ใน [Producer / Journal closure](producer-journal-closure-2026-10-11.md) ตารางด้านล่างเป็นหลักฐานของรอบก่อนหน้าและเก็บไว้เป็นประวัติ
+
 วันที่ตรวจ: 11 ต.ค. 2026 (Asia/Bangkok) · branch `codex/heartbeat-capture-release` · ฐาน `8c5e21d`
 
 **สถานะทั้งแผน: บางส่วน ยังไม่รับรองครบ** ตารางนี้แยกการพัฒนาออกจากหลักฐาน runtime/certification ไม่ใช้จำนวน 14 adapter เป็นจำนวนที่รองรับครบ ไม่มีการติดตั้ง hook จริง ซ่อม journal จริง หรือส่งข้อมูลย้อนหลังของผู้ใช้ในรอบนี้

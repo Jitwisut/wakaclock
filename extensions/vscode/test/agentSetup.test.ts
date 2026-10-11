@@ -475,7 +475,7 @@ describe("Codex heartbeat hook", () => {
     await fs.mkdir(path.join(homeDir, ".wakaclock"), { recursive: true });
     await fs.writeFile(
       fakeCli,
-      '#!/usr/bin/env bash\npayload="$(cat)"\nprintf "%s\\t%s\\n" "$*" "$payload" >> "$WAKACLOCK_TEST_CALLS"\n'
+      '#!/usr/bin/env bash\nif [ \"$*\" = \"journal-scope\" ]; then printf \'{\"schema_version\":1,\"owner_confirmed\":true,\"scope_id\":\"' + 'a'.repeat(64) + '\"}\\n\'; exit 0; fi\npayload="$(cat)"\nprintf "%s\\t%s\\n" "$*" "$payload" >> "$WAKACLOCK_TEST_CALLS"\n'
     );
     await fs.chmod(fakeCli, 0o755);
     await fs.writeFile(path.join(homeDir, ".wakaclock", "cli-path"), `${fakeCli}\n`);
@@ -504,6 +504,7 @@ describe("Codex heartbeat hook", () => {
       {
         ...process.env,
         HOME: homeDir,
+        ATOAXIS_PRODUCER_HOME: homeDir,
         WAKACLOCK_TEST_CALLS: callsLog
       }
     );
@@ -512,14 +513,14 @@ describe("Codex heartbeat hook", () => {
       .trim()
       .split("\n");
     const calls = rawCalls
-      .filter((line) => line.startsWith("ai emit --json\t"))
+      .filter((line) => line.startsWith("ai producer-batch --json\t"))
       .map((line) => {
         const [args, payload] = line.split("\t", 2);
-        return { args, payload: JSON.parse(payload) as Record<string, unknown> };
+        return { args, payload: JSON.parse(payload).records[0].metadata as Record<string, unknown> };
       });
     expect(calls).toHaveLength(2);
     expect(rawCalls.some((line) => line.startsWith("sync --agent codex --automatic --json\t"))).toBe(true);
-    expect(calls.map((call) => call.args)).toEqual(["ai emit --json", "ai emit --json"]);
+    expect(calls.map((call) => call.args)).toEqual(["ai producer-batch --json", "ai producer-batch --json"]);
     expect(calls.map((call) => call.payload)).toMatchObject([
       {
         schema_version: 1,
