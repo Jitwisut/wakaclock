@@ -89,7 +89,7 @@ def install(root, plugins, action):
     try:
         shutil.copytree(root / 'src', stage / 'modules')
         shutil.copyfile(root.parent / 'common/activity-spool.ts', stage / 'modules/activity-spool.ts')
-        for helper in ('tool-boundary-producer.py', 'activity-producer.py'):
+        for helper in ('tool-boundary-producer.py', 'activity-producer.py', 'context-producer.py'):
             shutil.copyfile(root.parent / 'common' / helper, stage / 'modules' / helper)
         producer = stage / 'modules/producer-client.ts'
         producer.write_text(producer.read_text().replace('"../../common/activity-spool.ts"', '"./activity-spool.ts"').replace('"../../common/tool-boundary-producer.py"', '"./tool-boundary-producer.py"'))

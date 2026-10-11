@@ -388,6 +388,7 @@ impl TeamGithubService {
     }
     pub async fn projects(&self, user: Uuid, org: Uuid) -> Result<Value> {
         self.authorize(user, org, false).await?;
+        let generation = self.guard(org).await?;
         let projects = self
             .insights
             .as_deref()
@@ -396,6 +397,10 @@ impl TeamGithubService {
             .await?;
         let repositories=self.repo()?.pg.query("SELECT s.repository_id,r.full_name FROM team_repository_scopes s JOIN team_github_repositories r USING(organization_id,repository_id) WHERE s.organization_id=$1 AND s.enabled AND (s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.role IN ('owner','admin') AND m.deactivated_at IS NULL)) ORDER BY r.full_name",&[&org,&user]).await?.into_iter().map(|r|json!({"repository_id":r.get::<_,Uuid>(0),"full_name":r.get::<_,String>(1)})).collect::<Vec<_>>();
         self.authorize(user, org, false).await?;
+        ensure!(
+            self.guard(org).await? == generation,
+            "sharing changed during repository choices read"
+        );
         Ok(json!({"projects":projects,"repositories":repositories}))
     }
     pub async fn context(&self, user: Uuid, org: Uuid, event: SessionContext) -> Result<()> {
@@ -473,6 +478,82 @@ impl TeamGithubService {
         );
         Ok(result)
     }
+    async fn owned_session(&self, org: Uuid, user: Uuid, session: &str) -> Result<()> {
+        ensure!(
+            session.len() == 64
+                && session
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            GithubInputError("invalid canonical session identity")
+        );
+        let insights = self
+            .insights
+            .as_deref()
+            .context("canonical sessions unavailable")?;
+        let consent = insights.consent(org, user).await?;
+        ensure!(consent.share_individual, "individual consent required");
+        let from = consent
+            .individual_from
+            .context("individual consent required")?
+            .max(crate::services::team_trust::cutoff(Utc::now()));
+        ensure!(
+            insights
+                .session_facts(user, session)
+                .await?
+                .iter()
+                .any(|f| f.user_id == user && f.event_time as i64 >= from.timestamp()),
+            GithubInputError("owned canonical session evidence unavailable")
+        );
+        Ok(())
+    }
+    pub async fn session_repository_binding(
+        &self,
+        user: Uuid,
+        org: Uuid,
+        q: SessionRepositoryBindingQuery,
+    ) -> Result<Value> {
+        self.authorize(user, org, false).await?;
+        let generation = self.guard(org).await?;
+        self.owned_session(org, user, &q.session_id).await?;
+        ensure!(
+            q.before_revision.is_none_or(|r| r > 0),
+            GithubInputError("invalid history revision")
+        );
+        let result = self
+            .repo()?
+            .session_repository_binding(org, user, &q.session_id, q.before_revision)
+            .await?;
+        self.authorize(user, org, false).await?;
+        ensure!(
+            self.guard(org).await? == generation,
+            "sharing changed during mapping read"
+        );
+        Ok(result)
+    }
+    pub async fn set_session_repository_binding(
+        &self,
+        user: Uuid,
+        org: Uuid,
+        input: SessionRepositoryBindingInput,
+    ) -> Result<Value> {
+        self.authorize(user, org, false).await?;
+        let generation = self.guard(org).await?;
+        ensure!(
+            (0..i64::MAX).contains(&input.expected_revision),
+            GithubInputError("invalid mapping revision")
+        );
+        self.owned_session(org, user, &input.session_id).await?;
+        let result = self
+            .repo()?
+            .set_session_repository_binding(org, user, &input, generation)
+            .await?;
+        self.authorize(user, org, false).await?;
+        ensure!(
+            self.guard(org).await? == generation,
+            "sharing changed during mapping response"
+        );
+        Ok(result)
+    }
     pub async fn retry_contexts(&self, user: Uuid, org: Uuid) -> Result<Value> {
         self.authorize(user, org, false).await?;
         self.guard(org).await?;
@@ -508,13 +589,10 @@ impl TeamGithubService {
                 Utc::now().timestamp() as u32 + 1,
             )
             .await?;
-        let projects = self.repo()?.own_projects(org, user).await?;
         let mut groups =
             std::collections::BTreeMap::<String, (DateTime<Utc>, DateTime<Utc>)>::new();
-        for f in facts.iter().filter(|f| {
-            f.project_attribution_method.as_deref() == Some("explicit_project_hint")
-                && f.project_id.is_some_and(|p| projects.contains(&p))
-        }) {
+        // Own canonical sessions remain visible even when native project evidence is absent.
+        for f in &facts {
             let session = hash(&format!(
                 "{}:{}:{}:{}:{}",
                 f.user_id,

@@ -80,6 +80,22 @@ pub fn device_health(
     if devices.is_empty() {
         return Health::new("unavailable", "no_snapshot", None, "own_account");
     }
+    if devices.len() > 1 {
+        let rank = |status: &str| match status {
+            "failure" => 6,
+            "partial" => 5,
+            "unavailable" => 4,
+            "stale" => 3,
+            "unconfirmed" => 2,
+            "pending" => 1,
+            _ => 0,
+        };
+        return devices
+            .iter()
+            .map(|device| device_health(std::slice::from_ref(device), capture, now))
+            .max_by_key(|health| rank(&health.status))
+            .unwrap();
+    }
     let at = devices.iter().map(|d| d.captured_at).min();
     for d in devices {
         if d.status != "fresh" {
@@ -89,6 +105,13 @@ pub fn device_health(
             let Some(c) = &d.capture else {
                 return Health::new("unconfirmed", "capture_evidence_missing", at, "own_account");
             };
+            if c.pipeline.as_ref().is_some_and(|stages| {
+                stages
+                    .iter()
+                    .any(|stage| stage.assessment(now) == "critical")
+            }) {
+                return Health::new("failure", "pipeline_needs_attention", at, "own_account");
+            }
             let Some(journal) = &c.editor_journal else {
                 return Health::new("unconfirmed", "journal_evidence_missing", at, "own_account");
             };
@@ -135,6 +158,30 @@ pub fn device_health(
             }
             if spool.status != "observed" || spool.pending != Some(0) || spool.failure_count > 0 {
                 return Health::new("partial", "producer_spool_not_ready", at, "own_account");
+            }
+            let Some(stages) = c.pipeline.as_ref().filter(|stages| !stages.is_empty()) else {
+                return Health::new(
+                    "unconfirmed",
+                    "pipeline_evidence_missing",
+                    at,
+                    "own_account",
+                );
+            };
+            for stage in stages {
+                let state = stage.assessment(now);
+                if state != "complete" {
+                    return Health::new(
+                        match state {
+                            "critical" => "failure",
+                            "warning" => "partial",
+                            "unknown" => "unconfirmed",
+                            other => other,
+                        },
+                        "pipeline_not_ready",
+                        at,
+                        "own_account",
+                    );
+                }
             }
         } else {
             let Some(details) = &d.details else {
@@ -299,6 +346,7 @@ mod tests {
         s.capture = Some(CaptureHealthSnapshot {
             editor_journal: None,
             producer_spool: None,
+            pipeline: None,
             schema_version: 1,
             captured_at: now,
             enabled: true,
@@ -329,6 +377,20 @@ mod tests {
                 last_scan_success_at: Some(now),
                 error_code: None,
             });
+        assert_eq!(health(s.clone(), true).reason, "pipeline_evidence_missing");
+        s.capture.as_mut().unwrap().pipeline =
+            Some(vec![wakaclock_core::queue::PipelineStageHealth {
+                adapter_id: "codex".into(),
+                execution_surface: "unknown".into(),
+                stage: "context".into(),
+                status: "observed".into(),
+                pending: Some(0),
+                failure_count: 0,
+                last_observed_at: Some(now),
+                oldest_pending_at: None,
+                error_code: None,
+                version: "fixture".into(),
+            }]);
         assert_eq!(health(s.clone(), true).status, "observed");
         s.capture
             .as_mut()

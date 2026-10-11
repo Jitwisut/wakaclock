@@ -141,6 +141,7 @@ export function TeamInsightsPanel({
     retry: false,
   });
   const sharing = useMutation({
+    mutationKey: ['team-sharing', userId, organizationId],
     mutationFn: (value: { share_aggregate: boolean; share_individual: boolean }) =>
       updateOrganizationSharing(organizationId, value),
     onMutate: async () => {
@@ -153,11 +154,14 @@ export function TeamInsightsPanel({
         queryKey: [...wakaclockKeys.all, 'team-receipt', userId, organizationId],
       });
       client.removeQueries({ queryKey: wakaclockKeys.teamHealth(userId, organizationId) });
+      await client.cancelQueries({ queryKey: wakaclockKeys.teamGithub(userId, organizationId) });
+      client.removeQueries({ queryKey: wakaclockKeys.teamGithub(userId, organizationId) });
     },
     onSettled: async () => {
       await Promise.all([
         client.invalidateQueries({ queryKey: consentKey }),
         client.invalidateQueries({ queryKey: insightsKey }),
+        client.invalidateQueries({ queryKey: wakaclockKeys.teamGithub(userId, organizationId) }),
       ]);
     },
   });

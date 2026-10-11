@@ -546,6 +546,81 @@ async fn github_binding_queue_context_and_revocation() {
     pg.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) VALUES('session_context',$1,'hash','sharing_or_scope_revoked',now())",&[&format!("{user}:{}",event.event_id)]).await.unwrap();
     pg.execute("UPDATE organization_analytics_consents SET share_individual=true WHERE organization_id=$1 AND user_id=$2",&[&org,&user]).await.unwrap();
     assert!(store.context(org, user, &event, "hash").await.is_err());
+    // User-confirmed context is versioned and starts now; it creates no native
+    // context/PR link and cannot use owner role to bypass individual consent.
+    use crate::model::team_github::SessionRepositoryBindingInput;
+    let generation = pg
+        .query_one(
+            "SELECT generation FROM team_rollouts WHERE organization_id=$1",
+            &[&org],
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0);
+    let input = SessionRepositoryBindingInput {
+        session_id: "d".repeat(64),
+        repository_id: Some(repo),
+        expected_revision: 0,
+        request_id: Uuid::now_v7(),
+    };
+    let before = Utc::now();
+    let saved = store
+        .set_session_repository_binding(org, user, &input, generation)
+        .await
+        .unwrap();
+    assert_eq!(saved["provenance"], "user_confirmed");
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(saved["effective_at"].as_str().unwrap()).unwrap()
+            >= before
+    );
+    assert_eq!(
+        store
+            .set_session_repository_binding(org, user, &input, generation)
+            .await
+            .unwrap(),
+        saved
+    );
+    let stale = SessionRepositoryBindingInput {
+        request_id: Uuid::now_v7(),
+        ..input
+    };
+    assert!(store
+        .set_session_repository_binding(org, user, &stale, generation)
+        .await
+        .is_err());
+    assert!(store
+        .set_session_repository_binding(other, user, &stale, generation)
+        .await
+        .is_err());
+    let removal = SessionRepositoryBindingInput {
+        session_id: "d".repeat(64),
+        repository_id: None,
+        expected_revision: 1,
+        request_id: Uuid::now_v7(),
+    };
+    assert_eq!(
+        store
+            .set_session_repository_binding(org, user, &removal, generation)
+            .await
+            .unwrap()["status"],
+        "unset"
+    );
+    let history = store
+        .session_repository_binding(org, user, &removal.session_id, None)
+        .await
+        .unwrap();
+    assert_eq!(history["history"].as_array().unwrap().len(), 2);
+    pg.execute("UPDATE organization_analytics_consents SET share_individual=FALSE WHERE organization_id=$1 AND user_id=$2",&[&org,&user]).await.unwrap();
+    assert!(store
+        .session_repository_binding(org, user, &removal.session_id, None)
+        .await
+        .unwrap()["current"]
+        .is_null());
+    assert!(store
+        .set_session_repository_binding(org, user, &removal, generation)
+        .await
+        .is_err());
+    pg.execute("UPDATE organization_analytics_consents SET share_individual=TRUE WHERE organization_id=$1 AND user_id=$2",&[&org,&user]).await.unwrap();
     // A receipt must close as soon as the signed removal is durably accepted.
     let webhook = crate::repository::team_webhooks::TeamWebhookRepository::new(pg.clone());
     webhook

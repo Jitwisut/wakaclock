@@ -6,29 +6,36 @@ import Link from 'next/link';
 import { toast } from 'sonner';
 
 import { useDeliveryHealth } from '@/hooks/use-delivery-health';
+import { pipelineTransitionKey } from '@/lib/wakaclock/pipeline-health';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 // Shared across Overview/Heartbeats navigation; unchanged poll results do not
 // create another notification. A recovery dismisses the previous warning.
-const lastStates = new Map<string, string>();
+const lastStates = new Map<string, { state: string; key: string }>();
 export function DeliveryStatusNotice() {
   const health = useDeliveryHealth();
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
+  const backlogTransition = JSON.stringify(
+    health.devices
+      .map((d) => [d.device_id, d.details?.backlog_error?.kind ?? null])
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+  );
+  const transition = `${health.state}:${backlogTransition}:${pipelineTransitionKey(health.devices.flatMap((d) => d.capture?.pipeline ?? []))}`;
   useEffect(() => {
     if (!userId) return;
     const previous = lastStates.get(userId);
-    if (previous === health.state) return;
-    lastStates.set(userId, health.state);
+    if (previous?.key === transition) return;
+    lastStates.set(userId, { state: health.state, key: transition });
     const id = `delivery-${userId}`;
     if (health.state === 'complete') {
       toast.dismiss(id);
-      if (previous && previous !== 'unknown') {
-        toast.success('Capture and delivery recovered. Data is up to date.');
+      if (previous && previous.state !== 'unknown' && previous.state !== 'complete') {
+        toast.success('Reported capture and delivery stages recovered.');
       }
     } else if (['warning', 'critical', 'stale', 'unavailable'].includes(health.state)) {
       toast.warning(health.message, { id });
     }
-  }, [userId, health.state, health.message]);
+  }, [userId, health.state, health.message, transition]);
   const incompleteStyle = health.incomplete ? 'border-amber-500/50 bg-amber-500/5' : 'bg-muted/30';
   const statusStyle =
     health.state === 'critical' ? 'border-red-500 bg-red-500/10' : incompleteStyle;
@@ -74,6 +81,13 @@ export function DeliveryStatusNotice() {
           {device.capture?.editor_journal?.status ?? 'unknown'}
           {' · editor handoff pending '}
           {device.capture?.editor_journal?.pending ?? 'unknown'}
+          {' · context/pipeline '}
+          {device.capture?.pipeline
+            ?.map(
+              (stage) =>
+                `${stage.adapter_id}/${stage.execution_surface} ${stage.stage}: ${stage.status}, pending ${stage.pending ?? 'unknown'}${stage.error_code ? ` (${stage.error_code})` : ''}`
+            )
+            .join(' · ') ?? 'details unavailable'}
           {' · ready '} {device.details?.eligible ?? 'unknown'} · leased{' '}
           {device.details?.leased ?? 'unknown'}
           {' · accepted '}

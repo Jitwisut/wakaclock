@@ -5,6 +5,9 @@
 const TEAM_GITHUB_KEY = 'team-github';
 export const wakaclockKeys = {
   all: ['wakaclock'] as const,
+  deliveryStatus: (userId: string) => [...wakaclockKeys.all, 'delivery-status', userId] as const,
+  teamSessionRepository: (userId: string, org: string, session: string, revision?: number) =>
+    [...wakaclockKeys.teamGithub(userId, org), 'session-repository', session, revision] as const,
   teamGithubSessions: (userId: string, org: string, after?: string) =>
     [...wakaclockKeys.all, TEAM_GITHUB_KEY, userId, org, 'sessions', after] as const,
   teamGithubOwnWork: (userId: string, org: string, after?: string) =>

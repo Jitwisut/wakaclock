@@ -23,11 +23,12 @@ KILO_PLUGIN_DIR="$PLUGIN_ROOT" "$ROOT/installer/install.sh"
 }
 [ -f "$TARGET/tool-boundary-producer.py" ]
 [ -f "$TARGET/activity-producer.py" ]
+[ -f "$TARGET/context-producer.py" ]
 # Installed entrypoint resolves only owned helpers, without a repository sibling.
 ! grep -q '../../common/tool-boundary-producer.py' "$TARGET/producer-client.ts"
 printf '%s' '{"agent":"kilo-code","tool_event_id":"fixture-call","session_id":"fixture-session"}' \
   | ATOAXIS_PRODUCER_HOME="$TMP/producer-home" python3 "$TARGET/tool-boundary-producer.py" --phase abort --surface ide --cli "$TMP/missing-cli"
-[ "$(find "$TMP/producer-home/.wakaclock/native-producer-spool/unconfirmed" -name '*.json' | wc -l | tr -d ' ')" = 1 ]
+[ "$(find "$TMP/producer-home/.wakaclock/native-producer-spool/unconfirmed" -name '*.json' | wc -l | tr -d ' ')" = 2 ]
 [ ! -d "$TARGET/__pycache__" ]
 
 KILO_PLUGIN_DIR="$PLUGIN_ROOT" "$ROOT/installer/install.sh"

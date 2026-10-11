@@ -20,7 +20,7 @@ pub struct SessionContext {
     pub commit_sha: Option<String>,
     pub provenance: String,
 }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GitMetadata {
     pub repository: String,
     pub branch: Option<String>,
@@ -135,9 +135,22 @@ pub struct PendingContext {
     pub event: SessionContext,
     pub lease: String,
     pub attempts: i64,
+    origin: String,
+    owner: Uuid,
+    organization: Uuid,
 }
 impl ContextQueue {
     pub fn open(path: &Path) -> Result<Self> {
+        for part in path.ancestors() {
+            if part.is_symlink()
+                && !(cfg!(target_os = "macos")
+                    && matches!(part.to_str(), Some("/var" | "/tmp" | "/etc"))
+                    && part.canonicalize().ok().as_deref()
+                        == Some(Path::new(&format!("/private{}", part.display()))))
+            {
+                return Err("context_queue_symlink_refused".into());
+            }
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -151,6 +164,23 @@ impl ContextQueue {
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS session_context_queue(origin TEXT NOT NULL,owner TEXT NOT NULL,organization TEXT NOT NULL,event_id TEXT NOT NULL,payload TEXT NOT NULL,payload_hash TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0,lease TEXT,lease_until INTEGER,dead_letter TEXT,PRIMARY KEY(origin,owner,organization,event_id));")?;
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS session_context_ingress_receipts(origin TEXT NOT NULL,owner TEXT NOT NULL,organization TEXT NOT NULL,event_id TEXT NOT NULL,payload_hash TEXT NOT NULL,acknowledged_at TEXT NOT NULL,PRIMARY KEY(origin,owner,organization,event_id))")?;
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(session_context_queue)")?
+            .query_map([], |r| r.get(1))?
+            .collect::<std::result::Result<_, _>>()?;
+        for (column, kind) in [
+            ("last_error_code", "TEXT"),
+            ("last_http_status", "INTEGER"),
+            ("last_failed_at", "INTEGER"),
+        ] {
+            if !columns.iter().any(|name| name == column) {
+                conn.execute(
+                    &format!("ALTER TABLE session_context_queue ADD COLUMN {column} {kind}"),
+                    [],
+                )?;
+            }
+        }
         Ok(Self { conn })
     }
     /// Persist context and the last observed state in the same transaction. The
@@ -184,7 +214,7 @@ impl ContextQueue {
         let payload = serde_json::to_string(event)?;
         let hash = format!("{:x}", Sha256::digest(payload.as_bytes()));
         let receipt: Option<String> = tx.query_row(
-            "SELECT payload_hash FROM session_context_observation_receipts WHERE origin=?1 AND owner=?2 AND organization=?3 AND event_id=?4",
+            "SELECT payload_hash FROM session_context_observation_receipts WHERE origin=?1 AND owner=?2 AND organization=?3 AND event_id=?4 UNION ALL SELECT payload_hash FROM session_context_ingress_receipts WHERE origin=?1 AND owner=?2 AND organization=?3 AND event_id=?4 LIMIT 1",
             params![origin, owner, org, event.event_id], |r| r.get(0),
         ).optional()?;
         if let Some(existing) = receipt {
@@ -222,10 +252,23 @@ impl ContextQueue {
     ) -> Result<()> {
         let payload = serde_json::to_string(event)?;
         let hash = format!("{:x}", Sha256::digest(payload.as_bytes()));
-        let n=self.conn.execute("INSERT INTO session_context_queue(origin,owner,organization,event_id,payload,payload_hash) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin,owner,organization,event_id) DO UPDATE SET event_id=excluded.event_id WHERE payload_hash=excluded.payload_hash",params![origin,owner.to_string(),org.to_string(),event.event_id,payload,hash])?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let receipt:Option<String>=tx.query_row("SELECT payload_hash FROM session_context_ingress_receipts WHERE origin=?1 AND owner=?2 AND organization=?3 AND event_id=?4",params![origin,owner.to_string(),org.to_string(),event.event_id],|r|r.get(0)).optional()?;
+        if let Some(old) = receipt {
+            if old != hash {
+                return Err("context identity conflict".into());
+            }
+            tx.commit()?;
+            return Ok(());
+        }
+        let n=tx.execute("INSERT INTO session_context_queue(origin,owner,organization,event_id,payload,payload_hash) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin,owner,organization,event_id) DO UPDATE SET event_id=excluded.event_id WHERE payload_hash=excluded.payload_hash",params![origin,owner.to_string(),org.to_string(),event.event_id,payload,hash])?;
         if n != 1 {
             return Err("context identity conflict".into());
         }
+        tx.commit()?;
         Ok(())
     }
     pub fn status(
@@ -236,8 +279,10 @@ impl ContextQueue {
         now: i64,
     ) -> Result<serde_json::Value> {
         let (pending,ready,leased,dead,oldest)=self.conn.query_row("SELECT count(*) FILTER(WHERE dead_letter IS NULL),count(*) FILTER(WHERE dead_letter IS NULL AND retry_at<=?4 AND (lease_until IS NULL OR lease_until<=?4)),count(*) FILTER(WHERE dead_letter IS NULL AND lease_until>?4),count(*) FILTER(WHERE dead_letter IS NOT NULL),min(json_extract(payload,'$.occurred_at')) FILTER(WHERE dead_letter IS NULL) FROM session_context_queue WHERE origin=?1 AND owner=?2 AND organization=?3",params![origin,owner.to_string(),org.to_string(),now],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,Option<String>>(4)?)))?;
+        let error=self.conn.query_row("SELECT last_error_code,last_http_status,last_failed_at FROM session_context_queue WHERE origin=?1 AND owner=?2 AND organization=?3 AND last_error_code IS NOT NULL ORDER BY last_failed_at DESC LIMIT 1",params![origin,owner.to_string(),org.to_string()],|r|Ok(serde_json::json!({"error_code":r.get::<_,String>(0)?,"http_status":r.get::<_,Option<i64>>(1)?,"failed_at":r.get::<_,Option<i64>>(2)?}))).optional()?;
+        let (accepted,last_ack)=self.conn.query_row("SELECT count(*),max(acknowledged_at) FROM session_context_ingress_receipts WHERE origin=?1 AND owner=?2 AND organization=?3",params![origin,owner.to_string(),org.to_string()],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,Option<String>>(1)?)))?;
         Ok(
-            serde_json::json!({"pending":pending,"eligible":ready,"leased":leased,"dead_letter":dead,"oldest_pending_at":oldest,"capture_status":"unconfirmed","capture_reason":"queue_state_does_not_prove_provider_capture_completeness"}),
+            serde_json::json!({"pending":pending,"eligible":ready,"leased":leased,"dead_letter":dead,"oldest_pending_at":oldest,"backlog_error":error,"accepted_total":accepted,"last_ingress_ack_at":last_ack,"capture_status":"unconfirmed","capture_reason":"queue_state_does_not_prove_provider_capture_completeness"}),
         )
     }
     pub fn claim(
@@ -261,16 +306,40 @@ impl ContextQueue {
             event: serde_json::from_str(&payload)?,
             lease,
             attempts: attempts + 1,
+            origin: origin.into(),
+            owner,
+            organization: org,
         }))
     }
-    pub fn acknowledge(&self, pending: &PendingContext) -> Result<bool> {
-        Ok(self.conn.execute(
-            "DELETE FROM session_context_queue WHERE event_id=?1 AND lease=?2",
-            params![pending.event.event_id, pending.lease],
-        )? == 1)
+    /// Persist durable ingress evidence before removing the local pending row.
+    /// This receipt does not assert canonical verification has finished.
+    pub fn acknowledge(&mut self, pending: &PendingContext) -> Result<bool> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let hash: Option<String> = tx.query_row("SELECT payload_hash FROM session_context_queue WHERE origin=?1 AND owner=?2 AND organization=?3 AND event_id=?4 AND lease=?5",params![pending.origin,pending.owner.to_string(),pending.organization.to_string(),pending.event.event_id,pending.lease],|r|r.get(0)).optional()?;
+        let Some(hash) = hash else {
+            return Ok(false);
+        };
+        tx.execute("INSERT INTO session_context_ingress_receipts(origin,owner,organization,event_id,payload_hash,acknowledged_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(origin,owner,organization,event_id) DO NOTHING",params![pending.origin,pending.owner.to_string(),pending.organization.to_string(),pending.event.event_id,hash,Utc::now().to_rfc3339()])?;
+        tx.execute("DELETE FROM session_context_queue WHERE origin=?1 AND owner=?2 AND organization=?3 AND event_id=?4 AND lease=?5",params![pending.origin,pending.owner.to_string(),pending.organization.to_string(),pending.event.event_id,pending.lease])?;
+        tx.commit()?;
+        Ok(true)
+    }
+    pub fn retry_with_error(
+        &self,
+        pending: &PendingContext,
+        at: i64,
+        dead: Option<&str>,
+        code: &str,
+        status: Option<u16>,
+        now: i64,
+    ) -> Result<()> {
+        self.conn.execute("UPDATE session_context_queue SET last_error_code=?6,last_http_status=?7,last_failed_at=?8,retry_at=?9,dead_letter=?10,lease=NULL,lease_until=NULL WHERE origin=?1 AND owner=?2 AND organization=?3 AND event_id=?4 AND lease=?5",params![pending.origin,pending.owner.to_string(),pending.organization.to_string(),pending.event.event_id,pending.lease,code,status,now,at,dead])?;
+        Ok(())
     }
     pub fn retry(&self, pending: &PendingContext, at: i64, dead: Option<&str>) -> Result<()> {
-        self.conn.execute("UPDATE session_context_queue SET retry_at=?3,dead_letter=?4,lease=NULL,lease_until=NULL WHERE event_id=?1 AND lease=?2",params![pending.event.event_id,pending.lease,at,dead])?;
+        self.conn.execute("UPDATE session_context_queue SET retry_at=?3,dead_letter=?4,lease=NULL,lease_until=NULL WHERE event_id=?1 AND lease=?2 AND origin=?5 AND owner=?6 AND organization=?7",params![pending.event.event_id,pending.lease,at,dead,pending.origin,pending.owner.to_string(),pending.organization.to_string()])?;
         Ok(())
     }
 }
@@ -348,12 +417,96 @@ mod tests {
             .enqueue("https://stage.test", owner, org, &changed)
             .is_err());
         assert!(q.acknowledge(&pending).unwrap());
+        q.enqueue("https://stage.test", owner, org, &event).unwrap();
+        assert!(q
+            .enqueue("https://stage.test", owner, org, &changed)
+            .is_err());
+        assert_eq!(
+            q.status("https://stage.test", owner, org, 200).unwrap()["accepted_total"],
+            1
+        );
         assert!(q
             .claim("https://stage.test", owner, org, 200)
             .unwrap()
             .is_none());
         drop(q);
         let _ = std::fs::remove_file(file);
+    }
+    #[test]
+    fn backlog_error_and_ingress_receipt_survive_restart_without_cross_scope_ack() {
+        let path = std::env::temp_dir().join(format!("context-retry-{}.sqlite", Uuid::new_v4()));
+        let owner = Uuid::new_v4();
+        let org = Uuid::new_v4();
+        let origin = "https://stage.test";
+        let mut event = SessionContext::observed(
+            owner,
+            "codex",
+            Uuid::new_v4(),
+            "session",
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Utc::now(),
+            GitMetadata {
+                repository: "o/r".into(),
+                branch: None,
+                commit_sha: None,
+            },
+        );
+        let mut q = ContextQueue::open(&path).unwrap();
+        q.enqueue(origin, owner, org, &event).unwrap();
+        let pending = q.claim(origin, owner, org, 100).unwrap().unwrap();
+        q.retry_with_error(&pending, 500, None, "context_auth_required", Some(401), 100)
+            .unwrap();
+        drop(q);
+        let mut q = ContextQueue::open(&path).unwrap();
+        assert!(q.claim(origin, owner, org, 499).unwrap().is_none());
+        assert_eq!(
+            q.status(origin, owner, org, 101).unwrap()["backlog_error"]["http_status"],
+            401
+        );
+        event.event_id = "new-event".into();
+        q.enqueue(origin, owner, org, &event).unwrap();
+        let mut new = q.claim(origin, owner, org, 101).unwrap().unwrap();
+        new.origin = "https://other.test".into();
+        assert!(!q.acknowledge(&new).unwrap());
+        new.origin = origin.into();
+        assert!(q.acknowledge(&new).unwrap());
+        // Success for the new event preserves the old failure evidence.
+        assert_eq!(q.status(origin, owner, org, 101).unwrap()["pending"], 1);
+        assert_eq!(
+            q.status(origin, owner, org, 101).unwrap()["backlog_error"]["error_code"],
+            "context_auth_required"
+        );
+        drop(q);
+        let mut q = ContextQueue::open(&path).unwrap();
+        assert_eq!(
+            q.conn
+                .query_row(
+                    "SELECT count(*) FROM session_context_ingress_receipts",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        let retry = q.claim(origin, owner, org, 500).unwrap().unwrap();
+        q.retry_with_error(
+            &retry,
+            700,
+            Some("validation"),
+            "context_validation",
+            Some(422),
+            500,
+        )
+        .unwrap();
+        assert_eq!(q.status(origin, owner, org, 700).unwrap()["dead_letter"], 1);
+        assert!(q.claim(origin, owner, org, 900).unwrap().is_none());
+        q.conn.execute_batch("PRAGMA query_only=ON").unwrap();
+        assert!(q
+            .retry_with_error(&retry, 1000, None, "context_backend_unavailable", None, 900)
+            .is_err());
+        drop(q);
+        std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn observed_changes_commit_with_cursor_and_survive_ack_restart() {

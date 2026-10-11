@@ -119,6 +119,7 @@ pub(crate) async fn drain_bounded(
             scopes.rotate_left(index);
         }
     }
+    let mut stage_observations = Vec::new();
     let mut pending_by_scope = std::collections::BTreeMap::new();
     let mut last_scope = None;
     for scope in scopes.iter().cycle().take(max_batches.min(5)) {
@@ -142,6 +143,9 @@ pub(crate) async fn drain_bounded(
         for key in ["accepted", "failure_count", "paused_excluded"] {
             total[key] = json!(total[key].as_u64().unwrap_or(0) + state[key].as_u64().unwrap_or(0));
         }
+        if let Some(stages) = state["stages"].as_array() {
+            stage_observations.extend(stages.iter().cloned());
+        }
         pending_by_scope.insert(scope.clone(), state["pending"].as_u64());
         if !state["last_scan_success_at"].is_null() {
             total["last_scan_success_at"] = state["last_scan_success_at"].clone();
@@ -160,6 +164,7 @@ pub(crate) async fn drain_bounded(
             total["error_code"] = json!("producer_cursor_write_failed");
         }
     }
+    total["stages"] = json!(stage_observations);
     let parked = directory.join("native-producer-spool/unconfirmed");
     if parked.is_symlink() || fs::read_dir(parked).is_ok_and(|mut entries| entries.next().is_some())
     {
@@ -190,6 +195,12 @@ pub(crate) fn persist_checkpoint(path: &Path, value: &str) -> std::io::Result<()
     fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
+#[derive(Default)]
+struct SpoolStageObservation {
+    pending: u32,
+    failures: u32,
+    oldest: Option<chrono::DateTime<Utc>>,
+}
 async fn drain_scope(directory: &Path, config: &Config, api: &ApiClient, scope: &str) -> Value {
     let root = directory.join("native-producer-spool").join(scope);
     let mut accepted = 0;
@@ -197,6 +208,9 @@ async fn drain_scope(directory: &Path, config: &Config, api: &ApiClient, scope: 
     let mut pending = 0;
     let mut excluded_paused = 0;
     let mut last_scan = None;
+    let mut by_adapter: std::collections::BTreeMap<(String, String), SpoolStageObservation> =
+        std::collections::BTreeMap::new();
+    let mut fully_scanned = false;
     // Do not follow a redirected spool root or process file symlinks.
     if directory.join("native-producer-spool").is_symlink() || root.is_symlink() {
         return json!({"status":"capture_failure","error_code":"producer_spool_symlink","pending":null});
@@ -215,6 +229,7 @@ async fn drain_scope(directory: &Path, config: &Config, api: &ApiClient, scope: 
             }
             paths.sort();
             pending = paths.len();
+            fully_scanned = pending <= 100;
             let checkpoint = root.join("scan-cursor.json.metadata");
             if checkpoint.is_symlink() {
                 return json!({"status":"capture_failure","pending":null,"error_code":"producer_cursor_symlink"});
@@ -237,6 +252,7 @@ async fn drain_scope(directory: &Path, config: &Config, api: &ApiClient, scope: 
                 .and_then(|s| s.to_str())
                 .map(str::to_owned);
             for file in paths.into_iter().take(100) {
+                let mut identity = None;
                 let result = async {
                     if file.is_symlink() || fs::metadata(&file)?.len() > 8 * 1024 * 1024 + 64 * 1024 {
                         return Err("producer_spool_invalid".into());
@@ -251,6 +267,8 @@ async fn drain_scope(directory: &Path, config: &Config, api: &ApiClient, scope: 
                         if observation.scope_id != scope || file.file_stem().and_then(|s| s.to_str()) != Some(observation.observation_id.as_str()) {
                             return Err("producer_scope_mismatch".into());
                         }
+                        if observation.validate().is_err() {return Err("producer_spool_invalid".into());}
+                        identity=Some((observation.adapter_id.clone(),observation.execution_surface.clone(),observation.observed_at));
                         let id = observation.observation_id.clone();
                         let hash = observation.payload_hash.clone();
                         let ack = crate::producer_handoff::accept(config, api, observation).await;
@@ -279,6 +297,7 @@ async fn drain_scope(directory: &Path, config: &Config, api: &ApiClient, scope: 
                     {
                         return Err("producer_spool_invalid".into());
                     }
+                    identity=Some((observation.adapter_id.clone(),observation.execution_surface.clone(),observation.observed_at));
                     // Events captured during a persisted Pause are never replayed.
                     if !wakaclock_core::runtime::capture_allowed_at(
                         observation.observed_at.timestamp(),
@@ -311,6 +330,16 @@ async fn drain_scope(directory: &Path, config: &Config, api: &ApiClient, scope: 
                     Ok::<bool, Box<dyn std::error::Error>>(true)
                 }
                 .await;
+                if let Some((adapter, surface, at)) = identity {
+                    let state = by_adapter.entry((adapter, surface)).or_default();
+                    if !matches!(result, Ok(true)) {
+                        state.pending = state.pending.saturating_add(1);
+                        state.oldest = Some(state.oldest.map_or(at, |old| old.min(at)));
+                    }
+                    if result.is_err() {
+                        state.failures = state.failures.saturating_add(1);
+                    }
+                }
                 match result {
                     Ok(true) => {
                         accepted += 1;
@@ -350,6 +379,45 @@ async fn drain_scope(directory: &Path, config: &Config, api: &ApiClient, scope: 
             return json!({"status":"unavailable","pending":null,"error_code":"producer_spool_unreadable"})
         }
     }
-    json!({"status":if failures>0{"capture_failure"}else if pending>0{"pending"}else if last_scan.is_some(){"observed"}else{"unconfirmed"},
+    let stages = by_adapter
+        .into_iter()
+        .map(
+            |(
+                (adapter, surface),
+                SpoolStageObservation {
+                    pending,
+                    failures: errors,
+                    oldest,
+                },
+            )| {
+                wakaclock_core::queue::PipelineStageHealth {
+                    adapter_id: adapter,
+                    execution_surface: surface,
+                    stage: "spool".into(),
+                    status: if errors > 0 {
+                        "capture_failure"
+                    } else if !fully_scanned {
+                        "unconfirmed"
+                    } else if pending > 0 {
+                        "pending"
+                    } else {
+                        "observed"
+                    }
+                    .into(),
+                    pending: fully_scanned.then_some(pending),
+                    failure_count: errors,
+                    last_observed_at: last_scan,
+                    oldest_pending_at: oldest,
+                    error_code: None,
+                    version: format!(
+                        "{}-{}",
+                        env!("CARGO_PKG_VERSION"),
+                        env!("WAKACLOCK_GIT_SHA")
+                    ),
+                }
+            },
+        )
+        .collect::<Vec<_>>();
+    json!({"stages":stages,"status":if failures>0{"capture_failure"}else if pending>0{"pending"}else if last_scan.is_some(){"observed"}else{"unconfirmed"},
         "pending":pending,"accepted":accepted,"failure_count":failures,"paused_excluded":excluded_paused,"last_scan_success_at":last_scan})
 }

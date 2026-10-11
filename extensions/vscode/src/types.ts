@@ -1,3 +1,4 @@
+import type { PipelineStage } from "./pipelineHealth";
 export type HeartbeatCategory = "coding" | "building" | "debugging";
 export type ActorType = "human" | "ai_verified" | "ai_inferred" | "unknown";
 export type PasteOrigin = "same_file" | "same_workspace" | "external_or_unknown";
@@ -262,7 +263,7 @@ export interface DeliveryQueueDetails {
 export interface StatusBarSnapshot {
     deliveryDetails?: DeliveryQueueDetails;
     dataIncomplete?: boolean;
-    capture?: { status: string; checked_at?: string; last_scan_success_at?: string; pending?: number; parser_errors?: number; incomplete?: boolean };
+    capture?: { pipeline?: PipelineStage[]; status: string; checked_at?: string; last_scan_success_at?: string; pending?: number; parser_errors?: number; incomplete?: boolean };
     deadLetter?: number;
     oldestPendingAt?: string;
     humanReadable: string;

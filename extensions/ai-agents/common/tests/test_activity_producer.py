@@ -9,6 +9,14 @@ spec = importlib.util.spec_from_file_location('producer', Path(__file__).parents
 producer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(producer)
 
+def primary_files(files):
+    files = list(files)
+    contexts = [p for p in files if json.loads(p.read_text()).get('kind') == 'session_context']
+    for file in contexts:
+        record = json.loads(file.read_text())
+        assert set(record['metadata']) == {'context_version', 'native_session', 'repository', 'branch', 'commit_sha', 'reason', 'binding'}
+    return [p for p in files if json.loads(p.read_text()).get('kind') != 'session_context']
+
 class ProducerTests(unittest.TestCase):
     def profile(self):
         return {'schema_version': 1, 'adapter_id': 'cline', 'execution_surface': 'ide', 'scope_id': 'a' * 64, 'cli_path': '/missing/fixture-cli'}
@@ -18,7 +26,7 @@ class ProducerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             home = Path(root)
             self.assertEqual(producer.run(self.profile(), self.raw(), home), 'handoff_pending')
-            files = list((home / '.wakaclock/native-producer-spool').rglob('*.json'))
+            files = primary_files((home / '.wakaclock/native-producer-spool').rglob('*.json'))
             self.assertEqual(len(files), 1)
             content = files[0].read_text()
             self.assertNotIn('SENSITIVE', content)
@@ -34,13 +42,13 @@ class ProducerTests(unittest.TestCase):
     def test_failed_disk_commit_never_calls_cli(self):
         with tempfile.TemporaryDirectory() as root, patch.object(producer, 'durable_file', side_effect=OSError('disk full')), patch.object(producer.subprocess, 'run') as invoke:
             with self.assertRaises(OSError): producer.run(self.profile(), self.raw(), Path(root))
-            invoke.assert_not_called()
+            self.assertTrue(all(call.args[0][0] == "git" for call in invoke.call_args_list))
     def test_neutral_or_false_ack_cannot_remove_spool(self):
         for acknowledgement in ({'cancel': False}, {'acknowledgement': {'durable': True, 'status': 'accepted'}}):
             with tempfile.TemporaryDirectory() as root, patch.object(producer.subprocess, 'run') as invoke:
                 invoke.return_value.returncode = 0; invoke.return_value.stdout = json.dumps(acknowledgement).encode()
                 producer.run(self.profile(), self.raw(), Path(root))
-                self.assertEqual(len(list(Path(root).rglob('*.json'))), 1)
+                self.assertEqual(len(primary_files(Path(root).rglob('*.json'))), 1)
     def test_antigravity_metadata_strips_tool_arguments_error_and_transcript(self):
         metadata = producer.sanitize('antigravity', {'hook_event_name': 'PostToolUse', 'conversationId': 'fixture', 'workspacePaths': ['/fixture'], 'stepIdx': 2, 'toolCall': {'args': 'SENSITIVE'}, 'error': 'SENSITIVE', 'transcriptPath': 'SENSITIVE'})
         self.assertTrue(metadata['failed']); self.assertEqual(metadata['stepIdx'], 2)

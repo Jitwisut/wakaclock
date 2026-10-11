@@ -1,3 +1,4 @@
+import type { PipelineStage } from '@/lib/wakaclock/pipeline-health';
 export interface MeasurementQuality {
   attribution_coverage: {
     attributed_line_changes: number;
@@ -71,6 +72,7 @@ export interface DeliveryStatusResponse {
   devices: Array<{
     age_seconds: number;
     capture?: {
+      pipeline?: PipelineStage[];
       captured_at: string;
       enabled: boolean;
       last_scan_success_at: null | string;

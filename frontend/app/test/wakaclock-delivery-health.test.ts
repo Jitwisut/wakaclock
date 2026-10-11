@@ -12,6 +12,20 @@ function report(
     devices: [
       {
         capture: {
+          pipeline: [
+            {
+              adapter_id: 'codex',
+              execution_surface: 'cli',
+              stage: 'context',
+              status: 'observed',
+              pending: 0,
+              failure_count: 0,
+              last_observed_at: new Date(now).toISOString(),
+              oldest_pending_at: null,
+              error_code: null,
+              version: 'fixture',
+            },
+          ],
           schema_version: 1,
           captured_at: new Date(now).toISOString(),
           enabled: true,
@@ -156,4 +170,16 @@ describe('delivery completeness', () => {
     delete data.devices[0].capture;
     expect(deliveryHealth(data, false, now)).toMatchObject({ state: 'unknown', incomplete: true });
   });
+});
+
+it('context failure and parser failure remain visible while heartbeat delivery is pending', () => {
+  const data = report({ pending: 2, oldest_pending_at: new Date(now - 60000).toISOString() });
+  data.devices[0].capture!.parser_errors = 1;
+  expect(deliveryHealth(data, false, now).state).toBe('critical');
+  data.devices[0].capture!.parser_errors = 0;
+  data.devices[0].capture!.pipeline![0].status = 'auth_required';
+  expect(deliveryHealth(data, false, now).state).toBe('critical');
+  data.devices[0].capture!.pipeline![0].status = 'observed';
+  delete data.devices[0].capture!.pipeline;
+  expect(deliveryHealth(data, false, now).state).toBe('unknown');
 });

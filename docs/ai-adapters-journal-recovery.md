@@ -1,6 +1,6 @@
 # AI adapters และ Journal recovery — implementation ledger
 
-> สถานะรอบล่าสุดต่อจาก `8baf491` อยู่ใน [Producer / Journal closure](producer-journal-closure-2026-10-11.md) ตารางด้านล่างเป็นหลักฐานของรอบก่อนหน้าและเก็บไว้เป็นประวัติ
+> สถานะ Context/Health ล่าสุดต่อจาก `db18f40` อยู่ใน [Context / Health closure](context-health-closure-2026-10-12.md); Producer/Journal รอบก่อนอยู่ใน [Producer / Journal closure](producer-journal-closure-2026-10-11.md) ตารางด้านล่างเก็บไว้เป็นหลักฐานของรอบก่อนหน้า ไม่ใช่การรับรอง candidate ปัจจุบัน
 
 วันที่ตรวจ: 11 ต.ค. 2026 (Asia/Bangkok) · branch `codex/heartbeat-capture-release` · ฐาน `8c5e21d`
 

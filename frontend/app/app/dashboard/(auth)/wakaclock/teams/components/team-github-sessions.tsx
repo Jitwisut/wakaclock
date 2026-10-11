@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { SessionRepositoryBinding } from './session-repository-binding';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -21,7 +22,7 @@ export function TeamGithubSessions({ organizationId }: { organizationId: string 
   const [target, setTarget] = React.useState('');
   const [historyLink, setHistoryLink] = React.useState('');
   const [historyAfter, setHistoryAfter] = React.useState<string>();
-  const [receiptTarget, setReceiptTarget] = React.useState<{ item: number; repository: string; }>();
+  const [receiptTarget, setReceiptTarget] = React.useState<{ item: number; repository: string }>();
   const [receiptAfter, setReceiptAfter] = React.useState<string>();
   const [relationAfter, setRelationAfter] = React.useState<string>();
   React.useEffect(() => {
@@ -99,10 +100,11 @@ export function TeamGithubSessions({ organizationId }: { organizationId: string 
     mutationFn: async (run: () => Promise<unknown>) => {
       const captured = scope;
       await run();
-      if (active.current === captured)
-        {await cache.invalidateQueries({
+      if (active.current === captured) {
+        await cache.invalidateQueries({
           queryKey: wakaclockKeys.teamGithub(userId, organizationId),
-        });}
+        });
+      }
     },
   });
   const decide = (
@@ -182,6 +184,10 @@ export function TeamGithubSessions({ organizationId }: { organizationId: string 
             </QueryState>
             {sessions.data.items.map((session) => (
               <div className="rounded border p-2" key={session.session_id}>
+                <SessionRepositoryBinding
+                  organizationId={organizationId}
+                  sessionId={session.session_id}
+                />
                 <p>
                   {session.started_at} – {session.last_event_at} · {session.reason}
                 </p>
@@ -244,15 +250,16 @@ export function TeamGithubSessions({ organizationId }: { organizationId: string 
                         work.isFetching
                       }
                       onClick={() => {
-                        if (selection)
-                          {action.mutate(() =>
+                        if (selection) {
+                          action.mutate(() =>
                             github.replaceGithubLink(
                               organizationId,
                               link,
                               selection.repository_id,
                               selection.external_id
                             )
-                          );}
+                          );
+                        }
                       }}
                     >
                       Replace with selected PR
@@ -283,13 +290,14 @@ export function TeamGithubSessions({ organizationId }: { organizationId: string 
                   <Button
                     disabled={action.isPending || !selection || work.isError || work.isFetching}
                     onClick={() => {
-                      if (selection)
-                        {decide(
+                      if (selection) {
+                        decide(
                           session.session_id,
                           selection.repository_id,
                           selection.external_id,
                           'confirmed'
-                        );}
+                        );
+                      }
                     }}
                   >
                     Confirm selected PR

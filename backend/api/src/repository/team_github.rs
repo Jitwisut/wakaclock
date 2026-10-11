@@ -28,6 +28,105 @@ pub struct SyncFact {
     pub metadata: Value,
 }
 impl GithubRepositoryStore {
+    pub async fn session_repository_binding(
+        &self,
+        org: Uuid,
+        user: Uuid,
+        session: &str,
+        before: Option<i64>,
+    ) -> Result<Value> {
+        let current=self.pg.query_opt("SELECT b.* FROM team_session_repository_bindings b JOIN organization_analytics_consents c USING(organization_id,user_id) JOIN organization_members m USING(organization_id,user_id) LEFT JOIN team_repository_scopes s ON s.organization_id=b.organization_id AND s.repository_id=b.repository_id WHERE b.organization_id=$1 AND b.user_id=$2 AND b.session_id=$3 AND NOT b.blocked AND c.share_individual AND b.effective_at>=c.individual_from AND b.effective_at>=now()-interval '12 months' AND m.deactivated_at IS NULL AND (b.repository_id IS NULL OR (s.enabled AND (s.team_id IS NULL OR m.role IN ('owner','admin') OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2))))",&[&org,&user,&session]).await?;
+        let Some(current) = current else {
+            let revision=self.pg.query_opt("SELECT revision FROM team_session_repository_bindings WHERE organization_id=$1 AND user_id=$2 AND session_id=$3",&[&org,&user,&session]).await?.map_or(0,|r|r.get::<_,i64>(0));
+            return Ok(json!({"current":null,"revision":revision,"history":[],"next":null}));
+        };
+        let rows=self.pg.query("SELECT h.* FROM team_session_repository_binding_history h JOIN organization_analytics_consents c USING(organization_id,user_id) JOIN organization_members m USING(organization_id,user_id) LEFT JOIN team_repository_scopes s ON s.organization_id=h.organization_id AND s.repository_id=h.repository_id WHERE h.organization_id=$1 AND h.user_id=$2 AND h.session_id=$3 AND ($4::bigint IS NULL OR h.revision<$4) AND c.share_individual AND h.effective_at>=c.individual_from AND h.effective_at>=now()-interval '12 months' AND m.deactivated_at IS NULL AND (h.repository_id IS NULL OR (s.enabled AND (s.team_id IS NULL OR m.role IN ('owner','admin') OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2)))) ORDER BY h.revision DESC LIMIT 51",&[&org,&user,&session,&before]).await?;
+        let more = rows.len() > 50;
+        let history = rows
+            .into_iter()
+            .take(50)
+            .map(binding_value)
+            .collect::<Vec<_>>();
+        let next = if more {
+            history.last().map(|h| h["revision"].clone())
+        } else {
+            None
+        };
+        let revision = current.get::<_, i64>("revision");
+        Ok(
+            json!({"current":binding_value(current),"revision":revision,"history":history,"next":next}),
+        )
+    }
+    pub async fn set_session_repository_binding(
+        &self,
+        org: Uuid,
+        user: Uuid,
+        input: &SessionRepositoryBindingInput,
+        generation: i64,
+    ) -> Result<Value> {
+        let mut client = self.pg.transaction_client().await?;
+        let tx = client.transaction().await?;
+        ensure!(
+            (0..i64::MAX).contains(&input.expected_revision),
+            GithubInputError("invalid mapping revision")
+        );
+        // Serialize confirmations per organization; concurrent consent/scope changes
+        // bump this same generation. A stale preflight cannot authorize a write.
+        let g = tx
+            .query_one(
+                "SELECT generation FROM team_rollouts WHERE organization_id=$1 FOR UPDATE",
+                &[&org],
+            )
+            .await?
+            .get::<_, i64>(0);
+        ensure!(g == generation, "sharing changed during confirmation");
+        let member=tx.query_opt("SELECT m.role,c.individual_from FROM organization_members m JOIN users u ON u.id=m.user_id JOIN organization_analytics_consents c USING(organization_id,user_id) WHERE m.organization_id=$1 AND m.user_id=$2 AND m.deactivated_at IS NULL AND m.seat_type='developer' AND m.role<>'viewer' AND u.is_active AND u.deleted_at IS NULL AND c.share_individual AND c.individual_from IS NOT NULL FOR SHARE OF m,c,u",&[&org,&user]).await?.context("individual consent and active developer membership required")?;
+        if let Some(repository) = input.repository_id {
+            let scope=tx.query_opt("SELECT team_id FROM team_repository_scopes WHERE organization_id=$1 AND repository_id=$2 AND enabled FOR SHARE",&[&org,&repository]).await?.context("repository outside permitted scope")?;
+            let role: String = member.get(0);
+            if !matches!(role.as_str(), "owner" | "admin") {
+                if let Some(team) = scope.get::<_, Option<Uuid>>(0) {
+                    ensure!(
+                        tx.query_opt(
+                            "SELECT 1 FROM team_members WHERE team_id=$1 AND user_id=$2 FOR SHARE",
+                            &[&team, &user]
+                        )
+                        .await?
+                        .is_some(),
+                        "repository outside member team"
+                    );
+                }
+            }
+        }
+        ensure!(tx.query_opt("SELECT 1 FROM team_webhook_dispositions WHERE provider='session_repository_binding' AND delivery_id=$1",&[&format!("{user}:{}",input.request_id)]).await?.is_none(),"confirmation previously disposed");
+        let repeated=tx.query_opt("SELECT * FROM team_session_repository_binding_history WHERE organization_id=$1 AND user_id=$2 AND request_id=$3",&[&org,&user,&input.request_id]).await?;
+        if let Some(row) = repeated {
+            ensure!(!tx.query_one("SELECT blocked FROM team_session_repository_bindings WHERE organization_id=$1 AND user_id=$2 AND session_id=$3",&[&org,&user,&input.session_id]).await?.get::<_,bool>(0),"restored confirmation requires new owner authorization");
+            ensure!(
+                row.get::<_, DateTime<Utc>>("effective_at")
+                    >= member.get::<_, DateTime<Utc>>("individual_from"),
+                "confirmation predates current consent"
+            );
+            ensure!(
+                row.get::<_, String>("session_id") == input.session_id
+                    && row.get::<_, Option<Uuid>>("repository_id") == input.repository_id
+                    && row.get::<_, i64>("revision") == input.expected_revision + 1,
+                GithubInputError("confirmation request conflict")
+            );
+            tx.commit().await?;
+            return Ok(binding_value(row));
+        }
+        let old=tx.query_opt("SELECT revision FROM team_session_repository_bindings WHERE organization_id=$1 AND user_id=$2 AND session_id=$3 FOR UPDATE",&[&org,&user,&input.session_id]).await?;
+        ensure!(
+            old.map_or(0, |r| r.get::<_, i64>(0)) == input.expected_revision,
+            GithubInputError("mapping revision changed; reload before confirming")
+        );
+        let revision = input.expected_revision + 1;
+        let row=tx.query_one("INSERT INTO team_session_repository_bindings(organization_id,user_id,session_id,repository_id,revision,request_id) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(organization_id,user_id,session_id) DO UPDATE SET repository_id=EXCLUDED.repository_id,revision=EXCLUDED.revision,request_id=EXCLUDED.request_id,effective_at=clock_timestamp(),blocked=FALSE RETURNING *",&[&org,&user,&input.session_id,&input.repository_id,&revision,&input.request_id]).await?;
+        tx.execute("INSERT INTO team_session_repository_binding_history(organization_id,user_id,session_id,repository_id,revision,request_id,effective_at) VALUES($1,$2,$3,$4,$5,$6,$7)",&[&org,&user,&input.session_id,&input.repository_id,&revision,&input.request_id,&row.get::<_,DateTime<Utc>>("effective_at")]).await?;
+        tx.commit().await?;
+        Ok(binding_value(row))
+    }
     pub async fn selected_repository(&self, org: Uuid, full: &str) -> Result<Option<Row>> {
         self.pg.query_opt("SELECT s.github_repository_id FROM team_github_repositories r JOIN team_repository_scopes s USING(organization_id,repository_id) WHERE r.organization_id=$1 AND r.full_name=$2 AND s.enabled",&[&org,&full]).await
     }
@@ -299,9 +398,6 @@ impl GithubRepositoryStore {
         Ok(json!(groups.into_iter().map(|((session,repo),items)|json!({"session_id":session,"repository_id":repo,"status":if items.len()==1{"proposed"}else{"unresolved"},"evidence":"repository_branch_commit","candidates":items.into_iter().map(|(id,number)|json!({"external_id":id,"number":number})).collect::<Vec<_>>()})).collect::<Vec<_>>()))
     }
 
-    pub async fn own_projects(&self, org: Uuid, user: Uuid) -> Result<Vec<Uuid>> {
-        Ok(self.pg.query("SELECT DISTINCT COALESCE(b.project_id,s.project_id) FROM team_repository_scopes s LEFT JOIN team_member_project_bindings b ON b.organization_id=s.organization_id AND b.repository_id=s.repository_id AND b.user_id=$2 WHERE s.organization_id=$1 AND s.enabled AND (s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.deactivated_at IS NULL AND m.role IN ('owner','admin')))",&[&org,&user]).await?.into_iter().map(|r|r.get(0)).collect())
-    }
     pub async fn candidates(&self, org: Uuid, user: Uuid, session: &str) -> Result<Value> {
         let rows=self.pg.query("SELECT DISTINCT w.repository_id,w.external_id,w.number,w.state FROM team_session_contexts c JOIN team_repository_scopes s USING(organization_id,repository_id) JOIN team_work_items w ON w.organization_id=c.organization_id AND w.repository_id=c.repository_id AND w.kind='pull_request' AND w.head_branch=c.branch AND w.head_sha=c.commit_sha AND w.head_repository_id=s.github_repository_id JOIN organization_analytics_consents consent ON consent.organization_id=c.organization_id AND consent.user_id=c.user_id AND consent.share_individual AND c.occurred_at>=consent.individual_from WHERE c.organization_id=$1 AND c.user_id=$2 AND c.session_id=$3 AND s.enabled AND c.verification='verified' AND c.occurred_at>=now()-interval '12 months' AND w.opened_at<=c.occurred_at AND (w.closed_at IS NULL OR c.occurred_at<=w.closed_at) AND (w.merged_at IS NULL OR c.occurred_at<=w.merged_at) AND (s.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=s.team_id AND tm.user_id=$2) OR EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=$1 AND m.user_id=$2 AND m.role IN ('owner','admin') AND m.deactivated_at IS NULL)) AND NOT EXISTS(SELECT 1 FROM team_session_links l WHERE l.organization_id=c.organization_id AND l.user_id=c.user_id AND l.session_id=c.session_id AND l.repository_id=c.repository_id AND l.work_item_id=w.external_id AND l.status IN ('confirmed','rejected')) ORDER BY w.repository_id,w.external_id LIMIT 101",&[&org,&user,&session]).await?;
         ensure!(
@@ -657,4 +753,9 @@ pub async fn upsert_fact(
 ) -> Result<()> {
     tx.execute("INSERT INTO team_github_facts(organization_id,repository_id,kind,external_id,work_item_id,occurred_at,metadata,observed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(organization_id,repository_id,kind,external_id) DO UPDATE SET metadata=EXCLUDED.metadata,occurred_at=EXCLUDED.occurred_at,observed_at=EXCLUDED.observed_at,work_item_id=COALESCE(EXCLUDED.work_item_id,team_github_facts.work_item_id) WHERE (EXCLUDED.occurred_at,EXCLUDED.observed_at)>=(team_github_facts.occurred_at,team_github_facts.observed_at) AND NOT COALESCE((EXCLUDED.kind='review' AND team_github_facts.metadata->>'state'='DISMISSED' AND EXCLUDED.metadata->>'state'<>'DISMISSED'),false) AND NOT (EXCLUDED.kind IN ('check_run','status') AND (COALESCE(EXCLUDED.metadata->'source_at'='null'::jsonb,false) OR COALESCE(EXCLUDED.metadata->'at'='null'::jsonb,false)) AND NOT (COALESCE(team_github_facts.metadata->'source_at'='null'::jsonb,false) OR COALESCE(team_github_facts.metadata->'at'='null'::jsonb,false)))",&[&org,&repo,&fact.kind,&fact.external_id,&fact.work_item,&fact.at,&fact.metadata,&observed_at]).await?;
     Ok(())
+}
+
+fn binding_value(row: Row) -> Value {
+    let repository = row.get::<_, Option<Uuid>>("repository_id");
+    json!({"session_id":row.get::<_,String>("session_id"),"repository_id":repository,"revision":row.get::<_,i64>("revision"),"request_id":row.get::<_,Uuid>("request_id"),"effective_at":row.get::<_,DateTime<Utc>>("effective_at"),"provenance":"user_confirmed","status":if repository.is_some(){"active"}else{"unset"}})
 }

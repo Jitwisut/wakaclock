@@ -13,6 +13,14 @@ producer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(producer)
 
 
+def primary_files(files):
+    files = list(files)
+    contexts = [p for p in files if json.loads(p.read_text()).get('kind') == 'session_context']
+    for file in contexts:
+        record = json.loads(file.read_text())
+        assert set(record['metadata']) == {'context_version', 'native_session', 'repository', 'branch', 'commit_sha', 'reason', 'binding'}
+    return [p for p in files if json.loads(p.read_text()).get('kind') != 'session_context']
+
 class BoundaryTests(unittest.TestCase):
     def input(self, root, adapter="codex"):
         return {"tool_event_id": "stable-call", "agent": adapter, "session_id": "session",
@@ -30,7 +38,7 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(producer.run("before", self.input(root), "/missing/cli", "cli", home), "handoff_pending")
             file.write_text("PRIVATE_AFTER_SENTINEL\nsecond\n")
             self.assertEqual(producer.run("after", self.input(root), "/missing/cli", "cli", home), "handoff_pending")
-            records = [json.loads(p.read_text()) for p in (home / ".wakaclock/native-producer-spool").rglob("*.json")]
+            records = [json.loads(p.read_text()) for p in primary_files((home / ".wakaclock/native-producer-spool").rglob("*.json"))]
             self.assertEqual(len(records), 2)
             phases = {r["metadata"]["phase"]: r for r in records}
             self.assertEqual(phases["before"]["metadata"]["snapshot"]["files"]["a.ts"]["line_count"], 1)
@@ -63,7 +71,8 @@ class BoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp); root = home / "repo"; root.mkdir(); self.bind(home)
             def cli(*args, **kwargs):
-                records = list((home / ".wakaclock/native-producer-spool").rglob("*.json"))
+                if args[0][0] == "git": raise FileNotFoundError("fixture Git unavailable")
+                records = primary_files((home / ".wakaclock/native-producer-spool").rglob("*.json"))
                 self.assertEqual(len(records), 1)
                 json.loads(records[0].read_text())
                 raise FileNotFoundError("missing CLI")
@@ -77,7 +86,7 @@ class BoundaryTests(unittest.TestCase):
             home = Path(tmp); root = home / "repo"; root.mkdir(); self.bind(home)
             with patch.object(producer.common, "durable_file", side_effect=OSError("full")), patch.object(producer.subprocess, "run") as cli:
                 with self.assertRaises(OSError): producer.run("abort", self.input(root), "/cli", "cli", home)
-                cli.assert_not_called()
+                self.assertTrue(all(call.args[0][0] == "git" for call in cli.call_args_list))
 
     def test_failed_scan_is_durable_unavailable_not_empty_success(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -90,12 +99,12 @@ class BoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp); root = home / "repo"; root.mkdir()
             self.assertEqual(producer.run("abort", self.input(root), "/missing", "cli", home), "producer_owner_unconfirmed")
-            parked = next((home / ".wakaclock/native-producer-spool/unconfirmed").glob("*.json"))
+            parked = next(iter(primary_files((home / ".wakaclock/native-producer-spool/unconfirmed").glob("*.json"))))
             original = parked.read_bytes(); self.bind(home)
             self.assertEqual(parked.read_bytes(), original)
             (home / ".wakaclock/runtime-desired.json").write_text(json.dumps({"schema_version": 1, "desired": {"capture": False}}))
             self.assertEqual(producer.run("before", self.input(root), "/missing", "cli", home), "paused_by_user")
-            self.assertEqual(len(list((home / ".wakaclock/native-producer-spool").rglob("*.json"))), 1)
+            self.assertEqual(len(primary_files((home / ".wakaclock/native-producer-spool").rglob("*.json"))), 1)
 
     def test_missing_workspace_never_uses_producer_current_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -130,7 +139,7 @@ class BoundaryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "cached_evidence_conflict"):
                     producer.run("after", self.input(root), "/cli", "cli", home)
                 cli.assert_not_called()
-            self.assertEqual(len(list((home / ".wakaclock/native-producer-spool").rglob("*.json"))), 1)
+            self.assertEqual(len(primary_files((home / ".wakaclock/native-producer-spool").rglob("*.json"))), 1)
 
     def test_shell_paths_store_boundary_when_cli_absent(self):
         scripts = [("codex/git-sweep-before.sh", "before"), ("codex/git-sweep-after.sh", "after"),
@@ -148,7 +157,7 @@ class BoundaryTests(unittest.TestCase):
                 env = {**os.environ, "ATOAXIS_PRODUCER_HOME": str(home), "WAKACLOCK_CLI_PATH": str(home / "missing-cli")}
                 result = subprocess.run(["bash", str(ROOT / script)], input=json.dumps(payload).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=root, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
-                rows = list((home / ".wakaclock/native-producer-spool/unconfirmed").glob("*.json"))
+                rows = primary_files((home / ".wakaclock/native-producer-spool/unconfirmed").glob("*.json"))
                 self.assertEqual(len(rows), 1, result.stderr.decode())
                 text = rows[0].read_text(); record = json.loads(text)
                 self.assertEqual(record["metadata"]["phase"], phase)

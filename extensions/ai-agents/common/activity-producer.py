@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Metadata-only native hook spool. Provider stdout is neutral, never a durable ACK."""
 import argparse
+import importlib.util
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import uuid
+sys.dont_write_bytecode = True
 from datetime import datetime, timezone
 
 FIELDS = {
@@ -113,6 +115,9 @@ def retain(profile, raw, home):
     for parent in (directory.parent, directory.parent.parent, home):
         sync_dir(parent)
     file = directory / (identity + ".json")
+    spec = importlib.util.spec_from_file_location('context_producer', Path(__file__).with_name('context-producer.py'))
+    context = importlib.util.module_from_spec(spec); spec.loader.exec_module(context)
+    context.retain(record, metadata, home, __import__("types").SimpleNamespace(safe_path=safe_path, durable_file=durable_file, sync_dir=sync_dir))
     durable_file(file, encoded)
     return file, record
 

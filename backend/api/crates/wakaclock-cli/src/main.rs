@@ -1443,7 +1443,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .collect::<Vec<_>>();
             println!(
                 "{}",
-                serde_json::json!({"schema_version":1,"capabilities":["editor_durable_ack_v1","activity_envelope_v3","persistent_runtime_intent_v1","native_activity_hook_v1","editor_receipts_read_v1","native_producer_spool_v1","producer_batch_ack_v2","tool_boundary_durable_v1","journal_evidence_read_v1"],
+                serde_json::json!({"schema_version":1,"capabilities":["editor_durable_ack_v1","activity_envelope_v3","persistent_runtime_intent_v1","native_activity_hook_v1","editor_receipts_read_v1","native_producer_spool_v1","producer_batch_ack_v2","tool_boundary_durable_v1", "session_context_durable_v1","journal_evidence_read_v1"],
                 "scope_id":journal_scope_id(&scope),"owner_confirmed":config.api_key.is_some(),"recoverable_scope_ids":recoverable_scope_ids,
                 "build":build_identity()})
             );
@@ -6617,13 +6617,17 @@ fn run_ai_session(config: &Config, ended: bool, json: bool) -> Result<(), Box<dy
         .transpose()?;
     let model = input.model.as_deref().map(normalize_model_id).transpose()?;
     let cwd = normalize_session_cwd(input.cwd)?;
-    team_context_capture::observe(
-        config,
-        &agent,
-        Some(&input.session_id),
-        cwd.as_deref().map(Path::new),
-        now,
-    )?;
+    // A supplied timestamp may be a delayed replay. Modern producers send the
+    // separate frozen context; legacy input cannot authorize today's Git state.
+    if input.occurred_at.is_none() {
+        team_context_capture::observe(
+            config,
+            &agent,
+            Some(&input.session_id),
+            cwd.as_deref().map(Path::new),
+            now,
+        )?;
+    }
     let source = input
         .source
         .as_ref()
@@ -7266,15 +7270,8 @@ async fn run_ai_emit(
     }
     let parsed = parse_broker_event_input_with_context(&stdin)?;
     let event = parsed.event.clone();
-    if event.source == AiEventSource::AgentHook && event.confidence == AiConfidence::Verified {
-        team_context_capture::observe(
-            config,
-            &event.agent,
-            event.session_id.as_deref(),
-            event.project_root.as_deref().map(Path::new),
-            event.occurred_at,
-        )?;
-    }
+    // V1 edits carry event time, not a frozen Git observation. Context is
+    // delivered by the producer side stream; never inspect today's branch here.
     let mut handoff = match parsed.topology.as_ref() {
         Some(topology) => Some(prepare_handoff(topology, &parsed, &event)?),
         None => None,

@@ -148,7 +148,7 @@ export interface GithubSessionLink {
   work_item_id: number;
 }
 export interface GithubSessionPage {
-  context_health: { capture_status: string; dead_letter: number; pending: number; };
+  context_health: { capture_status: string; dead_letter: number; pending: number };
   items: Array<{
     candidates: Array<{
       external_id: number;
@@ -191,7 +191,7 @@ export const replaceGithubLink = async (
     )
   );
 export interface GithubLinkHistory {
-  items: Array<{ changed_at: string; id: string; revision: null | number; status: string; }>;
+  items: Array<{ changed_at: string; id: string; revision: null | number; status: string }>;
   next: null | string;
 }
 export const getGithubLinkHistory = async (org: string, link: string, after?: string) =>
@@ -241,5 +241,43 @@ export const getGithubOwnReceipt = async (
     await wakaclockV2Client.get<V2Envelope<WorkReceipt>>(
       `/organizations/${org}/me/github/work-items/${repository}/${item}/receipt`,
       { params: { after } }
+    )
+  );
+
+export interface SessionRepositoryBinding {
+  session_id: string;
+  repository_id: string | null;
+  revision: number;
+  request_id: string;
+  effective_at: string;
+  provenance: 'user_confirmed';
+  status: 'active' | 'unset';
+}
+export interface SessionRepositoryBindingPage {
+  revision: number;
+  current: SessionRepositoryBinding | null;
+  history: SessionRepositoryBinding[];
+  next: number | null;
+}
+export const getSessionRepositoryBinding = async (org: string, session: string, before?: number) =>
+  unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<SessionRepositoryBindingPage>>(
+      `/organizations/${org}/me/github/session-repository-bindings`,
+      { params: { session_id: session, before_revision: before } }
+    )
+  );
+export const setSessionRepositoryBinding = async (
+  org: string,
+  input: {
+    session_id: string;
+    repository_id: string | null;
+    expected_revision: number;
+    request_id: string;
+  }
+) =>
+  unwrapV2(
+    await wakaclockV2Client.post<V2Envelope<SessionRepositoryBinding>>(
+      `/organizations/${org}/me/github/session-repository-bindings`,
+      input
     )
   );

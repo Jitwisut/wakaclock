@@ -935,6 +935,59 @@ fn claude_activity_record(
 mod shared_tests {
     use super::*;
     #[test]
+    fn parser_health_is_durable_scoped_and_another_source_cannot_clear_failure() {
+        let path = std::env::temp_dir().join(format!("parser-health-{}.db", uuid::Uuid::new_v4()));
+        let store = ActivityStore::open(&path).unwrap();
+        let batch = ActivityBatch {
+            events: vec![],
+            cursor: ActivityCursor::default(),
+            records: 0,
+            contracts: BTreeMap::new(),
+        };
+        store
+            .commit_for_adapter("owner", "first", &batch, "codex", "unknown")
+            .unwrap();
+        store
+            .parser_failed("owner", "first", "codex", "unknown")
+            .unwrap();
+        store
+            .commit_for_adapter("owner", "second", &batch, "claude-code", "cli")
+            .unwrap();
+        drop(store);
+        let store = ActivityStore::open(&path).unwrap();
+        let stages = store.pipeline_health("owner", "fixture").unwrap();
+        assert!(stages
+            .iter()
+            .any(|s| s.adapter_id == "codex" && s.assessment(Utc::now()) == "critical"));
+        assert!(stages
+            .iter()
+            .any(|s| s.adapter_id == "claude-code" && s.status == "observed"));
+        assert!(store
+            .pipeline_health("other", "fixture")
+            .unwrap()
+            .is_empty());
+        store.conn.execute_batch("PRAGMA query_only=ON").unwrap();
+        assert!(store
+            .commit_for_adapter("owner", "first", &batch, "codex", "unknown")
+            .is_err());
+        assert!(store
+            .pipeline_health("owner", "fixture")
+            .unwrap()
+            .iter()
+            .any(|s| s.adapter_id == "codex" && s.status == "capture_failure"));
+        store.conn.execute_batch("PRAGMA query_only=OFF").unwrap();
+        store
+            .commit_for_adapter("owner", "first", &batch, "codex", "unknown")
+            .unwrap();
+        assert!(store
+            .pipeline_health("owner", "fixture")
+            .unwrap()
+            .iter()
+            .all(|s| s.status == "observed"));
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn claude_native_and_transcript_share_usage_identity_and_ordered_revisions() {
         let root = std::env::temp_dir();
         let at = Utc::now() - chrono::Duration::seconds(10);
@@ -1112,6 +1165,7 @@ impl ActivityStore {
         CREATE TABLE IF NOT EXISTS activity_adapter(scope TEXT,event_id TEXT,adapter TEXT NOT NULL,surface TEXT NOT NULL,PRIMARY KEY(scope,event_id));
         CREATE TABLE IF NOT EXISTS activity_contract(scope TEXT,event_id TEXT,revision INTEGER,metadata TEXT NOT NULL,PRIMARY KEY(scope,event_id,revision));
         CREATE TABLE IF NOT EXISTS activity_cursor(scope TEXT, source TEXT, cursor TEXT NOT NULL, PRIMARY KEY(scope,source));
+        CREATE TABLE IF NOT EXISTS activity_source_health(scope TEXT NOT NULL,source TEXT NOT NULL,adapter TEXT NOT NULL,surface TEXT NOT NULL,status TEXT NOT NULL,last_observed_at TEXT NOT NULL,PRIMARY KEY(scope,source));
         CREATE TABLE IF NOT EXISTS activity_inbox_v2(scope TEXT,event_id TEXT,revision INTEGER,wire_revision INTEGER NOT NULL,payload TEXT NOT NULL,handed_off INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,event_id,revision));")?;
         Ok(Self { conn })
     }
@@ -1149,6 +1203,11 @@ impl ActivityStore {
                         "a.adapter!=b.adapter OR a.surface!=b.surface",
                     ),
                     ("activity_cursor", "a.source=b.source", "a.cursor!=b.cursor"),
+                    (
+                        "activity_source_health",
+                        "a.source=b.source",
+                        "a.adapter!=b.adapter OR a.surface!=b.surface",
+                    ),
                 ] {
                     let conflicts:u64=tx.query_row(&format!("SELECT count(*) FROM {table} a JOIN {table} b ON {key} WHERE a.scope=?1 AND b.scope=?2 AND ({comparison})"),params![old,current],|row|row.get(0))?;
                     if conflicts > 0 {
@@ -1163,7 +1222,9 @@ impl ActivityStore {
                 tx.execute("INSERT OR IGNORE INTO activity_contract SELECT ?2,event_id,revision,metadata FROM activity_contract WHERE scope=?1",params![old,current])?;
                 tx.execute("INSERT OR IGNORE INTO activity_adapter SELECT ?2,event_id,adapter,surface FROM activity_adapter WHERE scope=?1",params![old,current])?;
                 tx.execute("INSERT OR IGNORE INTO activity_cursor SELECT ?2,source,cursor FROM activity_cursor WHERE scope=?1",params![old,current])?;
+                tx.execute("INSERT INTO activity_source_health SELECT ?2,source,adapter,surface,status,last_observed_at FROM activity_source_health WHERE scope=?1 ON CONFLICT(scope,source) DO UPDATE SET status=excluded.status,last_observed_at=excluded.last_observed_at WHERE excluded.last_observed_at>activity_source_health.last_observed_at",params![old,current])?;
                 for table in [
+                    "activity_source_health",
                     "activity_inbox_v2",
                     "activity_contract",
                     "activity_adapter",
@@ -1278,7 +1339,95 @@ impl ActivityStore {
         let raw = serde_json::to_string(&batch.cursor)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         tx.execute("INSERT INTO activity_cursor VALUES(?1,?2,?3) ON CONFLICT(scope,source) DO UPDATE SET cursor=excluded.cursor",params![scope,source,raw])?;
+        tx.execute("INSERT INTO activity_source_health VALUES(?1,?2,?3,?4,'observed',?5) ON CONFLICT(scope,source) DO UPDATE SET adapter=excluded.adapter,surface=excluded.surface,status=excluded.status,last_observed_at=excluded.last_observed_at",params![scope,source,adapter,surface,Utc::now().to_rfc3339()])?;
         tx.commit()
+    }
+    pub fn parser_failed(
+        &self,
+        scope: &str,
+        source: &str,
+        adapter: &str,
+        surface: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute("INSERT INTO activity_source_health VALUES(?1,?2,?3,?4,'capture_failure',?5) ON CONFLICT(scope,source) DO UPDATE SET adapter=excluded.adapter,surface=excluded.surface,status=excluded.status,last_observed_at=excluded.last_observed_at",params![scope,source,adapter,surface,Utc::now().to_rfc3339()])?;
+        Ok(())
+    }
+    /// Metadata readback from committed cursors/inbox, never queue emptiness alone.
+    pub fn pipeline_health(
+        &self,
+        scope: &str,
+        version: &str,
+    ) -> Result<Vec<crate::queue::PipelineStageHealth>, rusqlite::Error> {
+        use crate::queue::PipelineStageHealth;
+        let mut stages = Vec::new();
+        let mut parser=self.conn.prepare("SELECT adapter,surface,count(*) FILTER(WHERE status='capture_failure'),min(last_observed_at) FROM activity_source_health WHERE scope=?1 GROUP BY adapter,surface")?;
+        for row in parser.query_map([scope], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, u32>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })? {
+            let (adapter, surface, errors, at) = row?;
+            stages.push(PipelineStageHealth {
+                adapter_id: adapter,
+                execution_surface: surface,
+                stage: "parser".into(),
+                status: if errors > 0 {
+                    "capture_failure"
+                } else {
+                    "observed"
+                }
+                .into(),
+                pending: Some(0),
+                failure_count: errors,
+                last_observed_at: chrono::DateTime::parse_from_rfc3339(&at)
+                    .ok()
+                    .map(|at| at.with_timezone(&Utc)),
+                oldest_pending_at: None,
+                error_code: None,
+                version: version.into(),
+            });
+        }
+        let mut inbox=self.conn.prepare("SELECT a.adapter,a.surface,count(*) FILTER(WHERE i.handed_off=0),min(json_extract(i.payload,'$.occurred_at')) FILTER(WHERE i.handed_off=0) FROM activity_inbox_v2 i JOIN activity_adapter a USING(scope,event_id) WHERE i.scope=?1 GROUP BY a.adapter,a.surface")?;
+        for row in inbox.query_map([scope], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, u32>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })? {
+            let (adapter, surface, pending, oldest) = row?;
+            for stage in ["inbox", "cli_handoff"] {
+                stages.push(PipelineStageHealth {
+                    adapter_id: adapter.clone(),
+                    execution_surface: surface.clone(),
+                    stage: stage.into(),
+                    status: if stage == "cli_handoff" && pending > 0 {
+                        "pending"
+                    } else {
+                        "observed"
+                    }
+                    .into(),
+                    pending: Some(if stage == "inbox" { 0 } else { pending }),
+                    failure_count: 0,
+                    last_observed_at: Some(Utc::now()),
+                    oldest_pending_at: if stage == "inbox" {
+                        None
+                    } else {
+                        oldest
+                            .as_deref()
+                            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                            .map(|at| at.with_timezone(&Utc))
+                    },
+                    error_code: None,
+                    version: version.into(),
+                });
+            }
+        }
+        Ok(stages)
     }
     pub fn adapter_for(&self, scope: &str, id: &str) -> Result<String, rusqlite::Error> {
         Ok(self

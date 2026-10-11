@@ -98,6 +98,8 @@ pub struct CapabilityData {
     pub editor_journal_status_supported: bool,
     pub journal_recovery_status_supported: bool,
     pub producer_spool_status_supported: bool,
+    pub pipeline_health_supported: bool,
+    pub team_session_repository_mapping_supported: bool,
     pub team_weekly_aggregates_supported: bool,
     pub team_measurement_health_supported: bool,
     pub session_context_versions: Vec<u8>,
@@ -395,6 +397,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/organizations/:organization_id/integrations/github/work-items", get(team_github::work_page))
         .route("/organizations/:organization_id/integrations/github/sync", post(team_github::sync))
         .route("/organizations/:organization_id/me/github/project-bindings", get(team_github::projects).put(team_github::binding))
+        .route("/organizations/:organization_id/me/github/session-repository-bindings", get(team_github::session_repository_binding).post(team_github::set_session_repository_binding))
         .route("/organizations/:organization_id/me/github/session-context", post(team_github::context))
         .route("/organizations/:organization_id/me/github/session-context/retry", post(team_github::retry_contexts))
         .route("/organizations/:organization_id/me/github/suggestions", get(team_github::suggestions))
@@ -815,6 +818,9 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
             editor_journal_status_supported: true,
             journal_recovery_status_supported: true,
             producer_spool_status_supported: true,
+            pipeline_health_supported: true,
+            team_session_repository_mapping_supported: state.config.team_enabled
+                && state.postgres.is_some(),
             team_weekly_aggregates_supported: state.config.team_enabled && state.postgres.is_some(),
             team_measurement_health_supported: state.postgres.is_some(),
             session_context_versions: if state.config.team_enabled && state.postgres.is_some() {
@@ -1369,6 +1375,11 @@ fn validate_delivery_snapshot(snapshot: &DeliveryQueueSnapshot) -> Result<(), Ap
                 .is_some_and(|v| v > capture.captured_at)
         {
             return Err(ApiError::bad_request("invalid capture health snapshot"));
+        }
+        if capture.pipeline.as_ref().is_some_and(|stages| {
+            stages.len() > 256 || stages.iter().any(|stage| !stage.validate(now))
+        }) {
+            return Err(ApiError::bad_request("invalid pipeline health"));
         }
         if capture
             .producer_spool
@@ -4164,6 +4175,7 @@ mod delivery_snapshot_tests {
         snapshot.capture = Some(wakaclock_core::queue::CaptureHealthSnapshot {
             editor_journal: None,
             producer_spool: None,
+            pipeline: None,
             schema_version: 1,
             captured_at: at,
             enabled: true,

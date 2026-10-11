@@ -314,3 +314,36 @@ fn private_headers() -> HeaderMap {
     headers.insert("cache-control", "private, no-store".parse().unwrap());
     headers
 }
+
+pub async fn session_repository_binding(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(org): Path<Uuid>,
+    Query(q): Query<SessionRepositoryBindingQuery>,
+) -> Result<Json<V2Envelope<Value>>, ApiError> {
+    let user = actor(&s, &h).await?;
+    Ok(Json(envelope(
+        s.team_github_service
+            .session_repository_binding(user, org, q)
+            .await
+            .map_err(error)?,
+        "UTC",
+        None,
+    )))
+}
+pub async fn set_session_repository_binding(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(org): Path<Uuid>,
+    Json(input): Json<SessionRepositoryBindingInput>,
+) -> Result<Json<V2Envelope<Value>>, ApiError> {
+    let user = actor(&s, &h).await?;
+    Ok(Json(envelope(
+        s.team_github_service
+            .set_session_repository_binding(user, org, input)
+            .await
+            .map_err(error)?,
+        "UTC",
+        None,
+    )))
+}
