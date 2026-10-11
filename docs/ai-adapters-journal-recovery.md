@@ -52,7 +52,7 @@
 |---|---|---|---|
 | Inspect / scanner | เพิ่มแล้ว | Torn write/checksum/sequence/schema/symlink ผ่าน | Windows filesystem semantics และ native UI ยัง pending |
 | Prepare / persisted dry-run | เพิ่มแล้ว | Source unchanged, no verified checkpoint, scope mismatch ผ่าน | ต้องมี identity/verified scope ก่อน Apply; ambiguous legacy ownership ไม่ถูกแย่ง |
-| Backup / generation / activation | เพิ่มแล้ว | Before/after activation interruption, Apply ซ้ำ, identity mismatch ผ่าน | Full process-kill matrix ทุก fsync/backup/candidate จุดยังไม่ครบ |
+| Backup / generation / activation | เพิ่มแล้ว | Before/after activation interruption, Apply ซ้ำ, identity mismatch และ fault injection ทุก file/directory fsync ใน Apply ผ่าน | Full process-kill matrix และ native filesystem ของ Windows ยังต้องตรวจแยก |
 | CLI receipt inspection | เพิ่มแล้ว | Read-only subprocess + same-owner/origin key rotation ผ่าน | Receipts พิสูจน์ local acceptance ไม่ใช่ server delivery |
 | History / historical warning | เพิ่มแล้ว | Original retained, nullable unknown, receipt counts ไม่เปลี่ยน completeness ผ่าน | ยังไม่มี UI ตัดสิน unknown tail หรือ manual ownership adjudication; คำเตือนยังอยู่จนมีผลตัดสินที่พิสูจน์ได้ |
 | Writer scope / account switch | เพิ่มแล้ว | New token/journal identity + live/reused PID refusal ผ่าน | Guard ที่ ownership ไม่ชัดยังหยุดและต้องตรวจ ไม่ลบอัตโนมัติ |
@@ -81,7 +81,7 @@ Python 3 เป็น prerequisite ที่ setup ต้องตรวจ; ไ
 
 ## ผลตรวจในเครื่อง
 
-- VS Code: 202 tests / 19 files และ TypeScript lint ผ่าน (ตรวจล่าสุดจะบันทึกในรายงาน candidate)
+- VS Code: 203 tests / 19 files และ TypeScript lint ผ่าน (รวม fault injection ของ Apply; ตรวจล่าสุดจะบันทึกในรายงาน candidate)
 - Core: 387 unit + 1 attribution conformance + 12 offline delivery tests ผ่าน; additive capability/scope inspection checks ตรวจเพิ่มหลังแก้
 - CLI: 86 unit tests และ 6 isolated real subprocess handoff tests ผ่าน
 - Python producer: 6; shared TypeScript spool: 3; OpenCode native plugin: 3 ผ่าน
@@ -97,7 +97,7 @@ Python 3 เป็น prerequisite ที่ setup ต้องตรวจ; ไ
 ## งานถัดไปเรียงความสำคัญ
 
 1. ปิด legacy file/session producer durability โดยเฉพาะ Kilo/shared shell emit; ห้าม replay tool-before ด้วย baseline ปัจจุบันย้อนหลัง
-2. เพิ่ม recovery fault injection ครบ backup/fsync/candidate/guard ทุกจุด และ UI disposition ของ unknown tail/ownership ambiguity
+2. ต่อ recovery process-kill/native fault matrix และ UI disposition ของ unknown tail/ownership ambiguity; file/directory fsync failure ทุกจุดใน Apply ผ่านแล้ว
 3. ปิด Codex CLI/IDE/Desktop discovery/provenance, scoped producer health ราย adapter และ parked unconfirmed-spool adjudication
 4. ต่อ Cursor/Copilot inline และ Copilot daily API ด้วย receiver ก่อน producer; counters/provider meanings ต้องแยก
 5. ขอ runtime/contract หลักฐานสำหรับ Roo/Cline Windows และคำตอบเรื่อง Windsurf/Deep Code แล้วต่อเฉพาะ scope ที่ยืนยัน

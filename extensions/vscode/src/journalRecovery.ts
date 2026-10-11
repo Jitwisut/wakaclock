@@ -63,6 +63,13 @@ function syncDirectory(directory: string): void {
   if (process.platform === "win32") return;
   const fd = fs.openSync(directory, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
+// A file surviving a failed fsync is not yet a durable checkpoint. Every reused
+// recovery artifact must pass fsync again before it authorizes activation.
+function syncExistingFile(file: string): void {
+  const fd = fs.openSync(file, "r");
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  syncDirectory(path.dirname(file));
+}
 function writeExclusive(file: string, bytes: string | Buffer): void {
   const fd = fs.openSync(file, "wx", 0o600);
   try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
@@ -163,8 +170,14 @@ export function applyJournalRecovery(directory: string, plan: RecoveryPlan, veri
     if (!fs.existsSync(ownershipIdentity)) throw new Error("journal_recovery_identity_missing");
     if (!plan.ownershipHash || journalHash(fs.readFileSync(ownershipIdentity)) !== plan.ownershipHash) throw new Error("journal_recovery_ownership_unconfirmed");
     const bytes = fs.readFileSync(source);
-    if (manifest.phase === "activated") return manifest; // Writer may have appended after activation; never rewind it.
+    if (manifest.phase === "activated") {
+      // Writer may have appended after activation; never rewind it. Reconfirm
+      // durability if an earlier invocation lost its final directory fsync.
+      syncExistingFile(source);
+      return manifest;
+    }
     if (manifest.candidateHash && journalHash(bytes) === manifest.candidateHash) {
+      syncExistingFile(source);
       manifest.phase = "activated"; writeManifest(transaction, manifest); return manifest;
     }
     const scan = scanJournal(bytes, validate);
@@ -174,9 +187,7 @@ export function applyJournalRecovery(directory: string, plan: RecoveryPlan, veri
     if (journalHash(fs.readFileSync(backup)) !== plan.sourceHash) throw new Error("journal_recovery_backup_mismatch");
     // An earlier write may have completed before its fsync failed. Reusing its
     // hash is insufficient proof of durability; sync again before activation.
-    const backupFd = fs.openSync(backup, "r");
-    try { fs.fsyncSync(backupFd); } finally { fs.closeSync(backupFd); }
-    syncDirectory(transaction);
+    syncExistingFile(backup);
     const ownership = regular(transaction, "ownership.json");
     const identity = regular(directory, "journal-identity.json");
     if (!fs.existsSync(identity)) throw new Error("journal_recovery_identity_missing");
@@ -187,8 +198,10 @@ export function applyJournalRecovery(directory: string, plan: RecoveryPlan, veri
     const identityBackup = regular(transaction, "journal-identity.json");
     if (!fs.existsSync(identityBackup)) writeExclusive(identityBackup, identityBytes);
     if (!fs.readFileSync(identityBackup).equals(identityBytes)) throw new Error("journal_recovery_identity_conflict");
+    syncExistingFile(identityBackup);
     fs.chmodSync(identityBackup, 0o400);
     if (!fs.existsSync(ownership)) writeExclusive(ownership, JSON.stringify({ version: 1, scope: verifiedScope, sourceHash: plan.sourceHash, writerPresent: false, recoveryOwner: JSON.parse(fs.readFileSync(path.join(guard, "owner.json"), "utf8")) }));
+    syncExistingFile(ownership);
     // Keep original bytes in an immutable private backup; unknown tail stays there.
     fs.chmodSync(backup, 0o400);
     manifest.phase = "backed_up"; writeManifest(transaction, manifest);
@@ -196,11 +209,13 @@ export function applyJournalRecovery(directory: string, plan: RecoveryPlan, veri
     const candidateFile = regular(transaction, "candidate.jsonl");
     if (!fs.existsSync(candidateFile)) writeExclusive(candidateFile, candidate);
     if (fs.readFileSync(candidateFile, "utf8") !== candidate) throw new Error("journal_recovery_candidate_conflict");
+    syncExistingFile(candidateFile);
     manifest.candidateHash = journalHash(candidate); manifest.phase = "candidate_written"; writeManifest(transaction, manifest);
     // Same-volume atomic replacement. Candidate bytes and manifest are synced first.
     const swap = regular(directory, `recovery-${plan.recoveryId}.jsonl`);
     if (!fs.existsSync(swap)) writeExclusive(swap, candidate);
     if (journalHash(fs.readFileSync(swap)) !== manifest.candidateHash) throw new Error("journal_recovery_candidate_conflict");
+    syncExistingFile(swap);
     fs.renameSync(swap, source); syncDirectory(directory);
     manifest.phase = "activated"; writeManifest(transaction, manifest); return manifest;
   } finally { fs.rmSync(guard, { recursive: true }); syncDirectory(directory); }
