@@ -147,3 +147,5 @@ pub mod team_context;
 pub mod team_merged_cost;
 
 pub mod copilot_daily;
+
+pub mod copilot_reports;

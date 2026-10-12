@@ -7,6 +7,8 @@ export interface GithubConnection {
   can_manage: boolean;
   configured: boolean;
   copilot_daily?: CopilotDailyStatus;
+  copilot_weekly_csv?: boolean;
+  copilot_weekly_reports?: boolean;
   health: { last_success_at?: null | string; reason: string; status: string };
   identity: { github_user_id: number; login: string } | null;
   repositories: Array<{
@@ -325,3 +327,48 @@ export const getCopilotSelfDay = async (org: string, day: string) =>
       { params: { day } }
     )
   );
+
+export interface CopilotWeeklyReport {
+  calculation_version: string;
+  capture_status: string;
+  cells: Array<{
+    counter: string;
+    coverage: null | number;
+    feature: string;
+    reason: null | string;
+    status: string;
+    value: null | number;
+  }>;
+  generation: number;
+  ingestion_status: string;
+  organization_id: string;
+  organization_timezone: string;
+  provenance: string;
+  provider_definition_version: string;
+  publication_id: null | string;
+  source_revision: string;
+  status: string;
+  team_id: null | string;
+  timezone: 'UTC';
+  updated_at: null | string;
+  week_start: string;
+  window_end: string;
+  window_start: string;
+}
+export const getCopilotWeeklyReport = async (org: string, weekStart: string, teamId?: string) =>
+  unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<CopilotWeeklyReport>>(
+      `/organizations/${org}/copilot/reports`,
+      { params: { week_start: weekStart, timezone: 'UTC', team_id: teamId } }
+    )
+  );
+export async function exportCopilotWeeklyReport(org: string, weekStart: string, teamId?: string) {
+  const response = await wakaclockV2Client.get<string>(
+    `/organizations/${org}/copilot/reports/export`,
+    {
+      params: { week_start: weekStart, timezone: 'UTC', team_id: teamId },
+      responseType: 'text',
+    }
+  );
+  return response.data;
+}

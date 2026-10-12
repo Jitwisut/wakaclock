@@ -13,6 +13,7 @@ import { getTeamWorkReceipt } from '@/lib/wakaclock/team-endpoints';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 import { CopilotDailyPanel } from './copilot-daily-panel';
+import { CopilotWeeklyPanel } from './copilot-weekly-panel';
 import { TeamGithubSessions } from './team-github-sessions';
 
 function costText(metric: { reason: null | string; value: null | number }) {
@@ -154,6 +155,13 @@ export function TeamGithubPanel({ organizationId }: { organizationId: string }) 
                   key={`copilot:${scope}`}
                   organizationId={organizationId}
                 />
+                {visible.copilot_weekly_reports && (
+                  <CopilotWeeklyPanel
+                    connection={visible}
+                    key={`copilot-weekly:${scope}`}
+                    organizationId={organizationId}
+                  />
+                )}
                 {visible.can_manage && (
                   <>
                     {identities.isError && (

@@ -79,6 +79,57 @@ impl TeamInsightsService {
         Ok(())
     }
 
+    pub async fn copilot_report(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        team: Option<Uuid>,
+        start: chrono::NaiveDate,
+        timezone: &str,
+    ) -> Result<crate::services::copilot_reports::Report> {
+        anyhow::ensure!(
+            crate::services::copilot_reports::enabled(),
+            TeamError::Disabled
+        );
+        crate::services::copilot_reports::week(start, timezone, Utc::now()).map_err(|_| {
+            TeamError::Invalid("request one closed Monday-Sunday UTC week within retention")
+        })?;
+        let repo = self.readable(actor, org, team).await?;
+        let reports = crate::repository::copilot_reports::CopilotReportsRepository::new(
+            repo.postgres.clone(),
+        );
+        let report = reports.report(org, team, start).await?;
+        if report.publication_id.is_some() || report.status == "invalidated" {
+            let path = std::env::var("ATOAXIS_TEAM_PRIVACY_LEDGER_PATH")?;
+            crate::repository::team_trust::TeamTrustRepository::new(repo.postgres.clone())
+                .export_registry(std::path::Path::new(&path))
+                .await?;
+        }
+        self.validate_copilot_response(actor, &report).await?;
+        Ok(report)
+    }
+    pub async fn validate_copilot_response(
+        &self,
+        actor: Uuid,
+        report: &crate::services::copilot_reports::Report,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            crate::services::copilot_reports::enabled(),
+            TeamError::Disabled
+        );
+        let repo = self
+            .readable(actor, report.organization_id, report.team_id)
+            .await?;
+        let reports = crate::repository::copilot_reports::CopilotReportsRepository::new(
+            repo.postgres.clone(),
+        );
+        anyhow::ensure!(
+            reports.fence(report.organization_id).await? == report.fence,
+            TeamError::ProjectionChanged
+        );
+        Ok(())
+    }
+
     pub async fn consent(&self, actor: Uuid, org: Uuid) -> Result<TeamConsent> {
         // Preview/withdrawal must remain accessible even during a feature rollback.
         self.authorization
@@ -104,6 +155,8 @@ impl TeamInsightsService {
             "build": option_env!("ATOAXIS_BUILD_REVISION"),
             "version": env!("CARGO_PKG_VERSION"),
             "weekly_aggregates": true,
+            "copilot_weekly_reports": crate::services::copilot_reports::enabled(),
+            "copilot_weekly_csv": crate::services::copilot_reports::enabled(),
             "report_timezone": crate::repository::team_trust::TeamTrustRepository::new(self.repo()?.postgres.clone()).policy(org).await?,
             "gates": crate::services::team_release::release_gates(&evidence),
             "billing_packages": crate::services::team_billing::PACKAGES,

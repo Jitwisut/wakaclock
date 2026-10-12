@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
             "disable Team rollout before explicit initialization"
         );
         let initial = Registry {
-            schema_version: 1,
+            schema_version: 2,
             checked_at: chrono::Utc::now(),
             organizations: Default::default(),
             dispositions: vec![],

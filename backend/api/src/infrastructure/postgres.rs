@@ -321,6 +321,10 @@ impl PostgresClient {
                 "Copilot provider daily counters",
                 include_str!("../../migrations/postgres/036_team_copilot_daily.sql"),
             ),
+            (
+                "Copilot UTC reports and source revisions",
+                include_str!("../../migrations/postgres/037_team_copilot_reports.sql"),
+            ),
         ] {
             client
                 .batch_execute(sql)
