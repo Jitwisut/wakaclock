@@ -1,4 +1,6 @@
 # Producer / Journal closure — รายงานรอบพัฒนา 11 ต.ค. 2026
+ผลพัฒนาช่องทาง adapter รอบต่อ: [Cline Windows / Roo / Copilot daily และงานที่ยังค้าง](adapter-development-closure-2026-10-12.md). ตารางเดิมด้านล่างเป็นประวัติของรอบนั้น ไม่ใช่สถานะล่าสุดทุกช่องทาง.
+
 
 ฐาน `8baf491` · branch `codex/heartbeat-capture-release`
 

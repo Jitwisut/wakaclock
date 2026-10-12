@@ -317,6 +317,10 @@ impl PostgresClient {
                 "Team session repository confirmations",
                 include_str!("../../migrations/postgres/035_team_session_repository_bindings.sql"),
             ),
+            (
+                "Copilot provider daily counters",
+                include_str!("../../migrations/postgres/036_team_copilot_daily.sql"),
+            ),
         ] {
             client
                 .batch_execute(sql)

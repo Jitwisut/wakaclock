@@ -1590,18 +1590,24 @@ impl ApiClient {
             .send()
             .await;
         let mut capability_auth = false;
-        let supported = match capability {
-            Ok(r) if r.status().is_success() => r
-                .json::<Value>()
-                .await
-                .ok()
-                .is_some_and(|v| v["data"]["version"] == 1 && v["data"]["enabled"] == true),
+        let receiver = match capability {
+            Ok(r) if r.status().is_success() => r.json::<Value>().await.ok(),
             Ok(r) => {
                 capability_auth = matches!(r.status().as_u16(), 401 | 403);
-                false
+                None
             }
-            Err(_) => false,
+            Err(_) => None,
         };
+        let supported = receiver
+            .as_ref()
+            .is_some_and(|v| v["data"]["version"] == 1 && v["data"]["enabled"] == true);
+        let confirmed_context_supported = receiver.as_ref().is_some_and(|v| {
+            v["data"]["provenances"].as_array().is_some_and(|values| {
+                values
+                    .iter()
+                    .any(|value| value == "user_confirmed_task_git")
+            })
+        });
         let mut state = if capability_auth {
             "auth_required"
         } else {
@@ -1624,6 +1630,30 @@ impl ApiClient {
                         break;
                     }
                 };
+                // A legacy receiver can still receive native contexts. Preserve new
+                // provenance durably until its explicit capability is advertised.
+                if pending.event.provenance == "user_confirmed_task_git"
+                    && !confirmed_context_supported
+                {
+                    if queue
+                        .retry_with_error(
+                            &pending,
+                            now.saturating_add(60),
+                            None,
+                            "context_receiver_incompatible",
+                            None,
+                            now,
+                        )
+                        .is_err()
+                    {
+                        state = "unavailable";
+                        code = Some("context_retry_write_failure");
+                        break;
+                    }
+                    state = "unconfirmed";
+                    code = Some("context_receiver_incompatible");
+                    continue;
+                }
                 let result = self
                     .client
                     .post(format!(
@@ -2550,6 +2580,127 @@ mod tests {
             assert_eq!(request["event_id"], event.event_id);
             assert_eq!(request["branch"], "original");
         }
+        drop(queue);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated loopback sockets"]
+    async fn context_new_provenance_waits_for_receiver_without_blocking_legacy_context() {
+        use crate::session_context::{ContextQueue, GitMetadata, SessionContext};
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let worker = tokio::spawn(async move {
+            let mut received = Vec::new();
+            for body in [
+                Some(r#"{"data":{"version":1,"enabled":true}}"#),
+                None,
+                Some(
+                    r#"{"data":{"version":1,"enabled":true,"provenances":["user_confirmed_task_git"]}}"#,
+                ),
+                None,
+            ] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let n = stream.read(&mut buffer).await.unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]);
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if bytes.len() >= end + 4 + length {
+                            if length > 0 {
+                                received.push(
+                                    serde_json::from_slice::<Value>(
+                                        &bytes[end + 4..end + 4 + length],
+                                    )
+                                    .unwrap(),
+                                );
+                            }
+                            break;
+                        }
+                    }
+                    assert!(bytes.len() < 16384);
+                }
+                let status = if body.is_some() { 200 } else { 202 };
+                let body = body.unwrap_or("{}");
+                stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+            received
+        });
+        let owner = Uuid::new_v4();
+        let org = Uuid::new_v4();
+        let api = ApiClient::new(Config {
+            user_id: owner,
+            server_url: origin.clone(),
+            api_key: Some("fixture-only".into()),
+        })
+        .unwrap();
+        let path =
+            std::env::temp_dir().join(format!("context-capability-{}.sqlite", Uuid::new_v4()));
+        let mut queue = ContextQueue::open(&path).unwrap();
+        let event = SessionContext::observed(
+            owner,
+            "roo-code",
+            Uuid::new_v4(),
+            "fixture",
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            chrono::Utc::now(),
+            GitMetadata {
+                repository: "o/r".into(),
+                branch: Some("original".into()),
+                commit_sha: None,
+            },
+        );
+        let mut confirmed = event.clone();
+        confirmed.provenance = "user_confirmed_task_git".into();
+        let mut legacy = event;
+        legacy.event_id = format!("{}-legacy", legacy.event_id);
+        queue.enqueue(&origin, owner, org, &confirmed).unwrap();
+        queue.enqueue(&origin, owner, org, &legacy).unwrap();
+        let held = api
+            .drain_session_context_unpaused(&mut queue, &origin, owner, org, Instant::now(), 10)
+            .await;
+        assert_eq!(held["pending"], 1);
+        assert_eq!(held["dead_letter"], 0);
+        assert_eq!(held["error_code"], "context_receiver_incompatible");
+        let pending = queue
+            .claim(&origin, owner, org, chrono::Utc::now().timestamp() + 120)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&pending.event).unwrap(),
+            serde_json::to_value(&confirmed).unwrap()
+        );
+        queue
+            .retry(&pending, chrono::Utc::now().timestamp(), None)
+            .unwrap();
+        drop(queue);
+        let mut queue = ContextQueue::open(&path).unwrap();
+        let accepted = api
+            .drain_session_context_unpaused(&mut queue, &origin, owner, org, Instant::now(), 10)
+            .await;
+        assert_eq!(accepted["pending"], 0);
+        assert_eq!(accepted["verification"], "canonical_readback_unconfirmed");
+        let received = worker.await.unwrap();
+        assert_eq!(received.len(), 2);
+        assert_eq!(received[0]["event_id"], legacy.event_id);
+        assert_eq!(received[1]["event_id"], confirmed.event_id);
+        assert_eq!(received[1]["provenance"], "user_confirmed_task_git");
         drop(queue);
         std::fs::remove_file(path).unwrap();
     }

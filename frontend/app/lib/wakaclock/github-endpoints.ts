@@ -6,6 +6,7 @@ import type { V2Envelope } from './types';
 export interface GithubConnection {
   can_manage: boolean;
   configured: boolean;
+  copilot_daily?: CopilotDailyStatus;
   health: { last_success_at?: null | string; reason: string; status: string };
   identity: { github_user_id: number; login: string } | null;
   repositories: Array<{
@@ -245,19 +246,19 @@ export const getGithubOwnReceipt = async (
   );
 
 export interface SessionRepositoryBinding {
-  session_id: string;
-  repository_id: string | null;
-  revision: number;
-  request_id: string;
   effective_at: string;
   provenance: 'user_confirmed';
+  repository_id: null | string;
+  request_id: string;
+  revision: number;
+  session_id: string;
   status: 'active' | 'unset';
 }
 export interface SessionRepositoryBindingPage {
-  revision: number;
-  current: SessionRepositoryBinding | null;
+  current: null | SessionRepositoryBinding;
   history: SessionRepositoryBinding[];
-  next: number | null;
+  next: null | number;
+  revision: number;
 }
 export const getSessionRepositoryBinding = async (org: string, session: string, before?: number) =>
   unwrapV2(
@@ -269,15 +270,58 @@ export const getSessionRepositoryBinding = async (org: string, session: string, 
 export const setSessionRepositoryBinding = async (
   org: string,
   input: {
-    session_id: string;
-    repository_id: string | null;
     expected_revision: number;
+    repository_id: null | string;
     request_id: string;
+    session_id: string;
   }
 ) =>
   unwrapV2(
     await wakaclockV2Client.post<V2Envelope<SessionRepositoryBinding>>(
       `/organizations/${org}/me/github/session-repository-bindings`,
       input
+    )
+  );
+
+export interface CopilotDailyStatus {
+  configuration: {
+    enabled: boolean;
+    installation_id: number;
+    revision: number;
+    start_day: string;
+  } | null;
+  dead_letter_jobs: number;
+  error_code: null | string;
+  granularity: string;
+  last_success_at: null | string;
+  pending_jobs: number;
+  status: string;
+  timezone: 'UTC';
+}
+export interface CopilotDailyReadback {
+  coverage: string;
+  day: string;
+  estimated_cost: null;
+  features: Array<{
+    counters: Record<string, null | number>;
+    feature: string;
+    observed_at: string;
+  }>;
+  model: null;
+  timezone: 'UTC';
+  tokens: null;
+}
+export const configureCopilotDaily = async (
+  org: string,
+  input: { enabled: boolean; expected_revision: number; installation_id: number; start_day: string }
+) =>
+  unwrapV2(
+    await wakaclockV2Client.put<V2Envelope<CopilotDailyStatus>>(`${root(org)}/copilot-daily`, input)
+  );
+export const getCopilotSelfDay = async (org: string, day: string) =>
+  unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<CopilotDailyReadback>>(
+      `/organizations/${org}/me/github/copilot-daily`,
+      { params: { day } }
     )
   );

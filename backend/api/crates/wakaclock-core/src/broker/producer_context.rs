@@ -21,6 +21,10 @@ pub struct FrozenBinding {
 #[serde(deny_unknown_fields)]
 pub struct FrozenContext {
     pub context_version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_provenance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_effective_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub binding: Option<FrozenBinding>,
     pub native_session: Option<String>,
@@ -32,6 +36,13 @@ pub struct FrozenContext {
 impl FrozenContext {
     pub fn valid(&self) -> bool {
         self.context_version == 1
+            && matches!(
+                (
+                    self.project_provenance.as_deref(),
+                    self.project_effective_at
+                ),
+                (None, None) | (Some("user_confirmed"), Some(_))
+            )
             && self.binding.as_ref().is_none_or(|binding| {
                 self.repository.as_deref() == Some(binding.repository.as_str())
                     && crate::config::Config::normalize_server_url(&binding.origin).is_ok()
@@ -89,7 +100,7 @@ impl BrokerStore {
         &mut self,
         r: ContextReceipt<'_>,
     ) -> Result<BrokerIngestOutcome, AppError> {
-        if !r.evidence.valid() {
+        if !r.evidence.valid() || r.evidence.project_effective_at.is_some_and(|at| at > r.at) {
             return Err(AppError::Validation("producer_context_invalid".into()));
         }
         let payload = serde_json::to_string(r.evidence)?;
@@ -264,6 +275,48 @@ impl BrokerStore {
 mod tests {
     use super::*;
     #[test]
+    fn user_confirmation_is_optional_and_cannot_claim_native_or_future_context() {
+        let old = serde_json::json!({"context_version":1,"native_session":"task","repository":"o/r","branch":null,"commit_sha":null,"reason":null,"binding":null});
+        let mut e: FrozenContext = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&e).unwrap(), old);
+        e.project_provenance = Some("native".into());
+        e.project_effective_at = Some(Utc::now());
+        assert!(!e.valid());
+        e.project_provenance = Some("user_confirmed".into());
+        assert!(e.valid());
+        let root =
+            std::env::temp_dir().join(format!("roo-context-{}.sqlite", uuid::Uuid::new_v4()));
+        let mut store = BrokerStore::open_at(&root).unwrap();
+        let at = Utc::now();
+        e.project_effective_at = Some(at + chrono::Duration::seconds(1));
+        assert!(store
+            .accept_context(ContextReceipt {
+                scope: "scope",
+                id: "original",
+                adapter: "roo-code",
+                surface: "ide",
+                at,
+                evidence: &e
+            })
+            .is_err());
+        e.project_effective_at = Some(at);
+        assert_eq!(
+            store
+                .accept_context(ContextReceipt {
+                    scope: "scope",
+                    id: "original",
+                    adapter: "roo-code",
+                    surface: "ide",
+                    at,
+                    evidence: &e
+                })
+                .unwrap(),
+            BrokerIngestOutcome::Accepted
+        );
+        drop(store);
+        std::fs::remove_file(root).unwrap();
+    }
+    #[test]
     fn context_scope_rotation_is_durable_and_credentials_are_refused() {
         let path =
             std::env::temp_dir().join(format!("context-round-{}.sqlite", uuid::Uuid::new_v4()));
@@ -276,6 +329,8 @@ mod tests {
         assert_eq!(store.next_context_scope(&scopes).unwrap()[0], "a");
         let mut evidence = FrozenContext {
             context_version: 1,
+            project_provenance: None,
+            project_effective_at: None,
             native_session: Some("s".into()),
             repository: Some("o/r".into()),
             branch: None,
@@ -302,6 +357,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("context-{}.sqlite", uuid::Uuid::new_v4()));
         let evidence = FrozenContext {
             context_version: 1,
+            project_provenance: None,
+            project_effective_at: None,
             binding: None,
             native_session: Some("task".into()),
             repository: Some("owner/repo".into()),

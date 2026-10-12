@@ -1,4 +1,6 @@
 # AI adapters และ Journal recovery — implementation ledger
+ผลพัฒนาช่องทาง adapter รอบต่อ: [Cline Windows / Roo / Copilot daily และงานที่ยังค้าง](adapter-development-closure-2026-10-12.md). ตารางเดิมด้านล่างเป็นประวัติของรอบนั้น ไม่ใช่สถานะล่าสุดทุกช่องทาง.
+
 
 > สถานะ Context/Health ล่าสุดต่อจาก `db18f40` อยู่ใน [Context / Health closure](context-health-closure-2026-10-12.md); Producer/Journal รอบก่อนอยู่ใน [Producer / Journal closure](producer-journal-closure-2026-10-11.md) ตารางด้านล่างเก็บไว้เป็นหลักฐานของรอบก่อนหน้า ไม่ใช่การรับรอง candidate ปัจจุบัน
 

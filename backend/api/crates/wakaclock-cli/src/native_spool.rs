@@ -34,6 +34,15 @@ fn validate_metadata(adapter: &str, metadata: &Value) -> bool {
             "workspace_roots",
             "timestamp",
         ],
+        "roo-code" => &[
+            "eventName",
+            "taskId",
+            "timestamp",
+            "provider_version",
+            "project_root",
+            "context_provenance",
+            "context_effective_at",
+        ],
         "cline" => &[
             "hookName",
             "taskId",

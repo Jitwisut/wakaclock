@@ -87,8 +87,94 @@ impl TeamGithubService {
         status["configured"] = json!(self.config.is_some() && self.vault.is_some() && self.enabled);
         status["session_context_capability"] = json!(1);
         status["context_health"] = self.repo()?.context_health(org, user).await?;
+        status["copilot_daily"] =
+            crate::repository::copilot_daily::CopilotDailyRepository::new(self.repo()?.pg.clone())
+                .status(org)
+                .await?;
         self.authorize(user, org, false).await?;
         Ok(status)
+    }
+    pub async fn copilot_configure(
+        &self,
+        user: Uuid,
+        org: Uuid,
+        input: CopilotDailyConfiguration,
+    ) -> Result<Value> {
+        self.authorize(user, org, true).await?;
+        ensure!(
+            crate::services::copilot_daily::enabled(),
+            GithubInputError("Copilot daily feature disabled")
+        );
+        let repo =
+            crate::repository::copilot_daily::CopilotDailyRepository::new(self.repo()?.pg.clone());
+        // Verify the selected installation's account type through the existing App.
+        // Never add a permission or create a credential to make this pass.
+        if input.enabled {
+            let path = format!("/app/installations/{}", input.installation_id);
+            ensure!(
+                input.installation_id > 0,
+                GithubInputError("invalid installation")
+            );
+            let remote = self
+                .client
+                .request(&self.config()?.app_jwt()?, Method::GET, &path, None, None)
+                .await?
+                .value;
+            let local=self.repo()?.pg.query_opt("SELECT account_id FROM team_github_installations WHERE organization_id=$1 AND installation_id=$2 AND status='active'",&[&org,&input.installation_id]).await?.context("installation outside organization")?;
+            ensure!(
+                remote["account"]["type"] == "Organization"
+                    && remote["account"]["id"].as_i64() == Some(local.get(0))
+                    && remote["suspended_at"].is_null(),
+                GithubInputError(
+                    "Copilot daily requires an active verified GitHub organization installation"
+                )
+            );
+        }
+        self.authorize(user, org, true).await?;
+        repo.configure(
+            user,
+            org,
+            input.installation_id,
+            input.start_day,
+            input.enabled,
+            input.expected_revision,
+        )
+        .await?;
+        repo.status(org).await
+    }
+    pub async fn copilot_self_day(
+        &self,
+        user: Uuid,
+        org: Uuid,
+        day: chrono::NaiveDate,
+    ) -> Result<Value> {
+        self.authorize(user, org, false).await?;
+        ensure!(
+            crate::services::copilot_daily::enabled(),
+            GithubInputError("Copilot daily feature disabled")
+        );
+        ensure!(
+            day < Utc::now().date_naive(),
+            GithubInputError("provider day has not ended")
+        );
+        let pg = self.repo()?.pg.clone();
+        let trust = crate::repository::team_trust::TeamTrustRepository::new(pg.clone());
+        trust.guard(org).await?;
+        let generation = trust.registry_entry(org).await?.generation;
+        let daily = crate::repository::copilot_daily::CopilotDailyRepository::new(pg);
+        let fence = daily.read_fence(org, user).await?;
+        let result = daily.self_day(org, user, day).await?;
+        self.authorize(user, org, false).await?;
+        trust.guard(org).await?;
+        ensure!(
+            trust.registry_entry(org).await?.generation == generation,
+            "sharing changed during daily read"
+        );
+        ensure!(
+            daily.read_fence(org, user).await? == fence,
+            "integration changed during daily read"
+        );
+        Ok(result)
     }
     pub async fn start(&self, user: Uuid, org: Uuid, session: &str) -> Result<Value> {
         self.authorize(user, org, false).await?;
@@ -705,7 +791,7 @@ pub fn validate_context(event: &SessionContext, now: DateTime<Utc>) -> Result<()
     ensure!(
         matches!(
             event.provenance.as_str(),
-            "native_session_git" | "native_inline_git"
+            "native_session_git" | "native_inline_git" | "user_confirmed_task_git"
         ),
         GithubInputError("unsupported context provenance")
     );

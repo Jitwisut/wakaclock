@@ -31,3 +31,5 @@ pub mod team_store_retention;
 
 #[cfg(test)]
 mod team_github_tests;
+
+pub mod copilot_daily;

@@ -73,6 +73,12 @@ def inspect_members(package: Path, commit: str) -> tuple[dict, dict[str, bytes]]
     if (not recovery_commands.issubset(commands) or b"registerJournalRecoveryCommands" not in compiled
             or b"applyJournalRecovery" not in members.get("extension/out/src/journalRecovery.js", b"")):
         raise ArtifactError("candidate_journal_recovery_incompatible")
+    if "wakaclock.setupRooTracking" in commands:
+        if (not {"wakaclock.confirmRooProject", "wakaclock.inspectRooTracking"}.issubset(commands)
+                or b"RooBridge" not in members.get("extension/out/src/rooBridge.js", b"")
+                or b"retainRooMarker" not in members.get("extension/resources/ai-agents/common/activity-spool.js", b"")
+                or "roo_public_task_bridge_v1" not in manifest.get("capabilities", [])):
+            raise ArtifactError("candidate_roo_bridge_incompatible")
     if not re.fullmatch(r"[a-f0-9]{64}", manifest.get("sourceTreeDigest", "")):
         raise ArtifactError("candidate_source_inventory_missing")
     compiled_hashes = manifest.get("compiledSha256")
@@ -85,7 +91,8 @@ def inspect_members(package: Path, commit: str) -> tuple[dict, dict[str, bytes]]
     verify_native_target(binary, manifest["target"])
     if commit.encode() not in binary or (commit + "-dirty").encode() in binary:
         raise ArtifactError("candidate_embedded_source_commit_mismatch")
-    if any(capability.encode() not in binary for capability in REQUIRED_CAPABILITIES):
+    required_binary_capabilities = REQUIRED_CAPABILITIES | ({"roo_public_task_bridge_v1"} if "wakaclock.setupRooTracking" in commands else set())
+    if any(capability.encode() not in binary for capability in required_binary_capabilities):
         raise ArtifactError("candidate_embedded_cli_incompatible")
     return {**verification, "source_commit": commit, "manifest": manifest}, members
 

@@ -56,6 +56,16 @@ class InternalCandidateTest(unittest.TestCase):
                 with zipfile.ZipFile(package,'w') as archive:
                     for name,data in broken.items():archive.writestr(name,data)
                 with self.assertRaisesRegex(ArtifactError,'compiled_extension_incompatible'):inspect_members(package,COMMIT)
+    def test_declared_roo_bridge_requires_compiled_durable_resources_and_capability(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package=Path(directory)/"candidate.vsix";fixture(package)
+            with zipfile.ZipFile(package) as archive:members={name:archive.read(name) for name in archive.namelist()}
+            metadata=json.loads(members['extension/package.json']);metadata['contributes']['commands'].append({'command':'wakaclock.setupRooTracking'})
+            members['extension/package.json']=json.dumps(metadata).encode()
+            with zipfile.ZipFile(package,'w') as archive:
+                for name,data in members.items():archive.writestr(name,data)
+            with self.assertRaisesRegex(ArtifactError,'roo_bridge_incompatible'):inspect_members(package,COMMIT)
+
     def test_windows_standalone_keeps_identical_binary_resources_and_pending_certification(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

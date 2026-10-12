@@ -115,6 +115,27 @@ pub fn normalize_hook(
             };
             (string("conversation_id"), root, hook, operation, kind)
         }
+        "roo-code" => {
+            if string("provider_version") != Some("3.53.0") {
+                return Ok(unavailable("activity_hook_schema_unknown"));
+            }
+            let hook = string("eventName").ok_or("activity_hook_schema_unknown")?;
+            let kind = match hook {
+                "taskStarted" | "taskUserMessage" => ActivityKind::TaskStart,
+                "taskCompleted" | "taskAborted" => ActivityKind::TaskEnd,
+                "taskToolFailed" => ActivityKind::ToolEnd,
+                _ => return Ok(unavailable("activity_hook_not_an_activity_marker")),
+            };
+            let effective =
+                string("context_effective_at").and_then(|at| DateTime::parse_from_rfc3339(at).ok());
+            let event_at = string("timestamp").and_then(|at| DateTime::parse_from_rfc3339(at).ok());
+            if string("context_provenance") != Some("user_confirmed")
+                || effective.zip(event_at).is_none_or(|(start, at)| start > at)
+            {
+                return Ok(unavailable("activity_project_context_unresolved"));
+            }
+            (string("taskId"), string("project_root"), hook, None, kind)
+        }
         "cline" => {
             let hook = string("hookName").ok_or("activity_hook_schema_unknown")?;
             let kind = match hook {
@@ -184,9 +205,21 @@ pub fn normalize_hook(
         Some(timestamp) => Some(
             timestamp
                 .as_str()
-                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                .ok_or("activity_hook_timestamp_invalid")?
-                .with_timezone(&Utc),
+                .and_then(|s| {
+                    DateTime::parse_from_rfc3339(s)
+                        .ok()
+                        .map(|at| at.with_timezone(&Utc))
+                        .or_else(|| {
+                            (adapter == "cline")
+                                .then(|| {
+                                    s.parse::<i64>()
+                                        .ok()
+                                        .and_then(DateTime::<Utc>::from_timestamp_millis)
+                                })
+                                .flatten()
+                        })
+                })
+                .ok_or("activity_hook_timestamp_invalid")?,
         ),
         None => None,
     };
@@ -210,6 +243,7 @@ pub fn normalize_hook(
         || hook.ends_with(".failure")
         || adapter == "cline" && hook == "PostToolUse" && raw["postToolUse"]["success"] == false
         || adapter == "antigravity" && raw["failed"] == true
+        || adapter == "roo-code" && hook == "taskToolFailed"
     {
         Some("failed".into())
     } else {
@@ -219,7 +253,11 @@ pub fn normalize_hook(
         schema_version: 3,
         adapter_id: adapter.into(),
         execution_surface: surface.into(),
-        provider_schema_version: format!("{adapter}-hook-v1-{timestamp_source}"),
+        provider_schema_version: if adapter == "roo-code" {
+            "roo-code-public-3.53.0-user-confirmed-project".into()
+        } else {
+            format!("{adapter}-hook-v1-{timestamp_source}")
+        },
         activity: BrokerActivityEventV2 {
             // A directly observed hook can supersede a transcript marker for the
             // same proven operation without a same-revision timestamp conflict.
@@ -255,6 +293,45 @@ pub fn normalize_hook(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cline_milliseconds_and_roo_user_context_are_real_markers_not_tool_intervals() {
+        let at = Utc::now();
+        let root = std::env::temp_dir();
+        let cline=normalize_hook("cline","ide",&serde_json::json!({"hookName":"PostToolUse","taskId":"cline-task","timestamp":at.timestamp_millis().to_string(),"workspaceRoots":[root]}),at,"original").unwrap().event.unwrap();
+        assert_eq!(
+            cline.activity.occurred_at.timestamp_millis(),
+            at.timestamp_millis()
+        );
+        assert!(cline.activity.started_at.is_none());
+        let mut roo = serde_json::json!({"eventName":"taskToolFailed","taskId":"native-task","provider_version":"3.53.0","timestamp":at,"project_root":root,"context_provenance":"user_confirmed","context_effective_at":at});
+        let event = normalize_hook("roo-code", "ide", &roo, at, "original")
+            .unwrap()
+            .event
+            .unwrap();
+        assert!(event.activity.started_at.is_none());
+        assert_eq!(event.activity.status.as_deref(), Some("failed"));
+        assert!(event.provider_schema_version.contains("user-confirmed"));
+        let retry = normalize_hook("roo-code", "ide", &roo, at, "original")
+            .unwrap()
+            .event
+            .unwrap();
+        let another = normalize_hook("roo-code", "ide", &roo, at, "another-observation")
+            .unwrap()
+            .event
+            .unwrap();
+        assert_eq!(event.activity.event_id, retry.activity.event_id);
+        assert_ne!(event.activity.event_id, another.activity.event_id);
+        roo["context_effective_at"] = serde_json::json!(at + chrono::Duration::seconds(1));
+        assert!(normalize_hook("roo-code", "ide", &roo, at, "original")
+            .unwrap()
+            .event
+            .is_none());
+        roo.as_object_mut().unwrap().remove("project_root");
+        assert!(normalize_hook("roo-code", "ide", &roo, at, "original")
+            .unwrap()
+            .event
+            .is_none());
+    }
     #[test]
     fn antigravity_native_step_identity_is_metadata_only_and_not_a_measured_interval() {
         let at = Utc::now();

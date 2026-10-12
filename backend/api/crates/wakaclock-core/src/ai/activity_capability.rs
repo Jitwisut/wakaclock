@@ -46,7 +46,7 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
     };
     let mut result = Vec::new();
     for surface in surfaces {
-        for metric in [
+        let mut metrics = vec![
             "activity_markers",
             "measured_tool_intervals",
             "file_edits",
@@ -54,7 +54,11 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
             "cost",
             "session_identity",
             "inline_counters",
-        ] {
+        ];
+        if id == "copilot" && *surface == "daily_api" {
+            metrics.push("daily_feature_counters");
+        }
+        for metric in metrics {
             let native_markers = matches!(
                 id,
                 "codex"
@@ -67,6 +71,7 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                     | "kimi-code-cli"
                     | "opencode"
                     | "antigravity"
+                    | "roo-code"
             ) && *surface != "inline"
                 && (id != "codex" || *surface == "cli")
                 && (id != "copilot" || matches!(*surface, "cli" | "ide"));
@@ -87,9 +92,17 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                     matches!(id, "codex" | "claude-code" | "gemini-cli")
                         && (id != "codex" || *surface == "cli")
                 }
+                "daily_feature_counters" => id == "copilot" && *surface == "daily_api",
                 _ => false,
             };
-            let reason = if id == "deep-code" {
+            let provider_unavailable = id == "copilot"
+                && (*surface == "daily_api" && metric != "daily_feature_counters"
+                    || *surface == "inline");
+            let reason = if provider_unavailable && *surface == "daily_api" {
+                "daily_counters_not_event_session_token_model_or_cost_facts"
+            } else if provider_unavailable {
+                "no_verified_public_cross_extension_copilot_inline_acceptance_contract"
+            } else if id == "deep-code" {
                 "product_identity_unconfirmed"
             } else if implemented && id == "generic-mcp" {
                 "explicit_producer_contract_only"
@@ -100,11 +113,15 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                 "explicit_activity_surface_configuration_required"
             } else if implemented && id == "cursor" && metric == "file_edits" {
                 "documented_completed_edit_fragments_only_live_evidence_pending"
+            } else if implemented && id == "roo-code" {
+                "public_task_identity_user_confirmed_project_effective_forward_live_pending"
+            } else if implemented && id == "copilot" && *surface == "daily_api" {
+                "provider_user_day_feature_only_requires_existing_organization_metrics_permission"
             } else if implemented {
                 if id == "opencode" {
                     "native_plugin_v1_1_19_0_v2_2_0_26_live_evidence_pending"
                 } else if id == "cline" {
-                    "macos_hook_setup_windows_contract_evidence_pending"
+                    "cline_4_1_23_powershell_and_unix_owned_hooks_live_pending"
                 } else {
                     "requires_metric_and_version_live_evidence"
                 }
@@ -122,19 +139,18 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
             result.push(ActivityCapability {
                 surface: (*surface).into(),
                 metric: metric.into(),
-                code_status: if implemented {
+                code_status: if provider_unavailable {
+                    "unavailable"
+                } else if implemented {
                     "implemented"
                 } else {
                     "evidence_pending"
                 }
                 .into(),
-                development_status: if implemented
-                    && metric == "file_edits"
-                    && !matches!(id, "generic-mcp" | "cursor")
-                {
-                    "partial"
-                } else if implemented {
+                development_status: if implemented {
                     "implemented"
+                } else if provider_unavailable {
+                    "unavailable"
                 } else {
                     "not_implemented"
                 }
@@ -144,40 +160,27 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                 operating_systems: vec!["macos".into(), "windows".into()],
                 os_capabilities: ["macos", "windows"]
                     .into_iter()
-                    .map(|os| {
-                        let setup_missing = os == "windows" && id == "cline";
-                        OperatingSystemCapability {
-                            operating_system: os.into(),
-                            development_status: if !implemented {
-                                "not_implemented"
-                            } else if setup_missing
-                                || metric == "file_edits" && !matches!(id, "generic-mcp" | "cursor")
-                            {
-                                "partial"
-                            } else {
-                                "implemented"
-                            }
-                            .into(),
-                            runtime_status: "unconfirmed".into(),
-                            certification_status: "pending".into(),
-                            reason: if setup_missing {
-                                "windows_hook_contract_evidence_pending"
-                            } else if metric == "file_edits"
-                                && implemented
-                                && !matches!(id, "generic-mcp" | "cursor")
-                            {
-                                "legacy_file_producer_durability_not_closed"
-                            } else {
-                                reason
-                            }
-                            .into(),
+                    .map(|os| OperatingSystemCapability {
+                        operating_system: os.into(),
+                        development_status: if provider_unavailable {
+                            "unavailable"
+                        } else if !implemented {
+                            "not_implemented"
+                        } else {
+                            "implemented"
                         }
+                        .into(),
+                        runtime_status: "unconfirmed".into(),
+                        certification_status: "pending".into(),
+                        reason: reason.into(),
                     })
                     .collect(),
                 contract_version: implemented.then(|| {
                     match metric {
                         "file_edits" => "broker_file_change_v1",
                         "usage_tokens" | "cost" => "canonical_usage_metadata_v1",
+                        "daily_feature_counters" => "github_copilot_users_1_day_2026_03_10",
+                        _ if id == "roo-code" => "roo_public_3.53.0_user_confirmed_project",
                         _ if id == "opencode" => {
                             "activity_v3:opencode-v1-1.19.0|opencode-v2-2.0.26"
                         }
@@ -187,7 +190,11 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                     .into()
                 }),
                 reason: reason.into(),
-                channel: if id == "generic-mcp" {
+                channel: if id == "copilot" && *surface == "daily_api" {
+                    "github_installation_users_1_day"
+                } else if id == "cursor" && *surface == "inline" {
+                    "afterTabFileEdit"
+                } else if id == "generic-mcp" {
                     "explicit_activity_v3"
                 } else if native_markers {
                     "native_metadata_or_transcript"
@@ -196,9 +203,9 @@ pub fn for_adapter(id: &str) -> Vec<ActivityCapability> {
                 }
                 .into(),
                 live_certification: "pending".into(),
-                provider_version: None,
+                provider_version: (id == "roo-code").then(|| "3.53.0".into()),
                 installation_platforms: (id == "cline" && implemented)
-                    .then(|| vec!["macos".into()]),
+                    .then(|| vec!["macos".into(), "windows".into()]),
             });
         }
     }
@@ -229,7 +236,14 @@ mod tests {
             .into_iter()
             .filter(|c| !matches!(c.surface.as_str(), "cli" | "ide"))
         {
-            assert_eq!(c.development_status, "not_implemented");
+            assert_eq!(
+                c.development_status,
+                if c.metric == "daily_feature_counters" {
+                    "implemented"
+                } else {
+                    "unavailable"
+                }
+            );
         }
     }
     #[test]
@@ -239,9 +253,9 @@ mod tests {
         for adapter in registry.manifests() {
             let capabilities = for_adapter(&adapter.id);
             assert!(!capabilities.is_empty());
-            assert!(capabilities
-                .iter()
-                .all(|c| c.provider_version.is_none() && c.live_certification == "pending"));
+            assert!(capabilities.iter().all(|c| (c.provider_version.is_none()
+                || adapter.id == "roo-code")
+                && c.live_certification == "pending"));
         }
         assert!(for_adapter("deep-code")
             .iter()

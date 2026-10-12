@@ -25,6 +25,7 @@ import {
 } from "./secrets";
 import { StatusBarController } from "./statusBar";
 import { SingleFlight } from "./singleFlight";
+import { RooBridge, cachedRooProfile, rooProfileOwner, type RooSpool, type RooPublicApi } from "./rooBridge";
 import { registerJournalRecoveryCommands } from "./journalRecoveryCommands";
 
 let activeBufferManager: HeartbeatBufferManager | undefined;
@@ -204,6 +205,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (adapter === "opencode") {
         contract = await vscode.window.showQuickPick(["opencode-v1-1.19.0", "opencode-v2-2.0.26"], { title: "AtoAxis: Choose the installed OpenCode contract; CLI verifies the exact version" });
         if (!contract) return;
+      } else if (adapter === "cline" && process.platform === "win32") {
+        const installed=vscode.extensions.getExtension("saoudrizwan.claude-dev");
+        if(installed?.packageJSON.version!=="4.1.23") throw new Error("cline_provider_contract_evidence_pending");
+        contract="cline-vscode-4.1.23-powershell";
       } else if (adapter === "copilot") {
         const surface = await vscode.window.showQuickPick(["VS Code", "Copilot CLI"], { title: "AtoAxis: Choose Copilot surface (daily metrics and inline are separate)" });
         if (!surface) return;
@@ -218,6 +223,59 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage(`AtoAxis: ${adapter} activity hooks configured. Tool intervals and unavailable metrics require separate evidence. ${result.next_step ?? ""}`);
     } catch { void vscode.window.showErrorMessage("AtoAxis: activity hooks could not be configured; user hooks remain preserved. Check consent and runtime metadata."); }
   }));
+  let rooBridge: RooBridge | undefined;
+  let rooGeneration=0;
+  const stopRoo=()=>{rooGeneration++;rooBridge?.dispose();rooBridge=undefined;};
+  const startRoo=async()=>{
+    stopRoo();
+    const generation=rooGeneration;
+    if(!vscode.workspace.getConfiguration("wakaclock").get<boolean>("rooTrackingEnabled",false)) return;
+    const extension=vscode.extensions.getExtension<RooPublicApi>("RooVeterinaryInc.roo-cline");
+    if(!extension || extension.packageJSON.version!=="3.53.0") { logger.warn("Roo capture: provider contract evidence pending.");return; }
+    try {
+      const key=await getStoredApiKey(context.secrets);
+      const origin=configService.getSnapshot().serverUrl;
+      if(!key || !origin) throw new Error("roo_owner_unconfirmed");
+      const ownerBinding=rooProfileOwner(origin,key);
+      let profile:{scope_id:string;cli_path:string};
+      try {
+        profile=await cliService.nativeProducerProfile("roo_public_task_bridge_v1");
+        if(generation!==rooGeneration)return;
+        await context.globalState.update(`roo-profile:${ownerBinding}`,{...profile,owner_binding:ownerBinding,contract:"roo_public_task_bridge_v1"});
+      }catch {
+        // A previously verified profile stays fixed to this exact key/origin.
+        // Missing CLI during restart must not discard native producer observations.
+        profile=cachedRooProfile(context.globalState.get(`roo-profile:${ownerBinding}`),ownerBinding);
+      }
+      const api=extension.isActive ? extension.exports : await extension.activate();
+      if(generation!==rooGeneration)return;
+      const spool = require(path.join(context.extensionPath,"resources","ai-agents","common","activity-spool.js")) as RooSpool;
+      rooBridge=new RooBridge(api,spool,profile,extension.packageJSON.version,()=>logger.warn("Roo capture: durable spool write unconfirmed; check capture diagnostics."));
+    } catch { logger.warn("Roo capture: setup or durable producer unavailable."); }
+  };
+  context.subscriptions.push({dispose:stopRoo});
+  context.subscriptions.push(context.secrets.onDidChange(()=>stopRoo()));
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event=>{if(event.affectsConfiguration("wakaclock")) stopRoo();}));
+  context.subscriptions.push(vscode.commands.registerCommand("wakaclock.setupRooTracking",async()=>{
+    const choice=await vscode.window.showQuickPick(["Enable read-only task markers","Disable bridge"],{title:"AtoAxis Roo: metadata only; project requires explicit confirmation; live certification pending"});
+    if(!choice) return;
+    await configService.updateSetting("rooTrackingEnabled",choice.startsWith("Enable"));await startRoo();
+    void vscode.window.showInformationMessage(rooBridge?"AtoAxis: Roo task bridge ready. Confirm a project's actual task before attribution.":"AtoAxis: Roo bridge stopped or provider/setup evidence pending.");
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand("wakaclock.confirmRooProject",async()=>{
+    const task=await vscode.window.showQuickPick(rooBridge?.observedTasks()??[],{title:"AtoAxis: Select a task observed from Roo's public API"});if(!task || !rooBridge) return;
+    const roots=await vscode.window.showOpenDialog({canSelectFiles:false,canSelectFolders:true,canSelectMany:false,openLabel:"Confirm repository folder for future task activity"});if(!roots?.[0])return;
+    const revision=await vscode.window.showInputBox({prompt:"Expected mapping revision (0 for the first confirmation)",value:"0",validateInput:value=>/^\d+$/.test(value)&&Number.isSafeInteger(Number(value))?undefined:"Enter a non-negative revision"});if(revision===undefined)return;
+    const confirm=await vscode.window.showWarningMessage("This user-confirmed mapping applies to future events only. It does not verify historical Git context or link a PR.",{modal:true},"Confirm mapping");if(confirm!=="Confirm mapping")return;
+    try {rooBridge.confirm(task,roots[0].fsPath,Number(revision));void vscode.window.showInformationMessage("AtoAxis: task project confirmation recorded. Prior unresolved records remain retained.");}
+    catch {void vscode.window.showErrorMessage("AtoAxis: mapping not applied; reload identity/revision and verify ownership.");}
+  }));
+  const rooOutput=vscode.window.createOutputChannel("AtoAxis Roo Capture");context.subscriptions.push(rooOutput);
+  context.subscriptions.push(vscode.commands.registerCommand("wakaclock.inspectRooTracking",()=>{
+    const health=rooBridge?.health()??{adapter_id:"roo-code",execution_surface:"ide",runtime_status:"stopped_or_evidence_pending",certification_status:"pending"};
+    rooOutput.clear();rooOutput.appendLine(JSON.stringify(health,null,2));rooOutput.show();
+  }));
+  void startRoo();
   statusBar.setBufferedSecondsProvider(() => bufferManager.getBufferedSeconds());
   statusBar.setJournalHealthProvider(() => bufferManager.getJournalHealth());
   statusBar.setBufferedSegmentsProvider(() => bufferManager.getBufferedSegments());

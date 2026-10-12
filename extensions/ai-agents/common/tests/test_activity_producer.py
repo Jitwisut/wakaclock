@@ -53,6 +53,10 @@ class ProducerTests(unittest.TestCase):
         metadata = producer.sanitize('antigravity', {'hook_event_name': 'PostToolUse', 'conversationId': 'fixture', 'workspacePaths': ['/fixture'], 'stepIdx': 2, 'toolCall': {'args': 'SENSITIVE'}, 'error': 'SENSITIVE', 'transcriptPath': 'SENSITIVE'})
         self.assertTrue(metadata['failed']); self.assertEqual(metadata['stepIdx'], 2)
         self.assertNotIn('SENSITIVE', json.dumps(metadata))
+    def test_cline_milliseconds_preserve_exact_observation_time(self):
+        metadata = producer.sanitize('cline', {**self.raw(), 'timestamp': '1791313293123'})
+        self.assertEqual(metadata['timestamp'], '2026-10-06T19:01:33.123000Z')
+        self.assertNotIn('SENSITIVE', json.dumps(metadata))
     def test_symlink_cannot_redirect_spool(self):
         with tempfile.TemporaryDirectory() as root:
             home = Path(root); (home / '.wakaclock').symlink_to(home)

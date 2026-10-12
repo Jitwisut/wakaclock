@@ -393,6 +393,16 @@ impl TeamTrustRepository {
         .await?;
         tx.execute("UPDATE team_session_contexts SET verification='blocked',verification_reason='restore_reauthorization_required',verification_lease=NULL,verification_until=NULL",&[]).await?;
         tx.execute("UPDATE team_github_sync_jobs SET retry_at='infinity',lease_token=NULL,lease_until=NULL,error_code='restore_reauthorization_required' WHERE completed_at IS NULL",&[]).await?;
+        tx.execute(
+            "UPDATE team_copilot_daily_integrations SET enabled=FALSE",
+            &[],
+        )
+        .await?;
+        tx.execute("UPDATE team_copilot_daily_facts SET blocked=TRUE", &[])
+            .await?;
+        tx.execute("UPDATE team_copilot_daily_jobs SET completed_at=COALESCE(completed_at,now()),error_code='restore_reauthorization_required',lease_token=NULL,lease_until=NULL",&[]).await?;
+        tx.execute("DELETE FROM team_copilot_daily_staging", &[])
+            .await?;
         tx.execute("UPDATE team_rollouts SET enabled=FALSE", &[])
             .await?;
         tx.execute("UPDATE organization_analytics_consents SET share_aggregate=FALSE,share_individual=FALSE WHERE share_aggregate OR share_individual",&[]).await?;
@@ -507,9 +517,18 @@ impl TeamTrustRepository {
    },
    10 => tx.execute("DELETE FROM team_github_oauth_attempts WHERE state_hash IN (SELECT state_hash FROM team_github_oauth_attempts WHERE organization_id=$1 AND expires_at<$2 LIMIT 100)", &[&org,&now]).await?,
    11 => tx.execute("DELETE FROM team_github_delivery_recovery WHERE delivery_id IN (SELECT d.delivery_id FROM team_github_delivery_recovery d JOIN team_github_installations i USING(installation_id) WHERE i.organization_id=$1 AND d.delivered_at<$2 LIMIT 100)", &[&org,&cutoff]).await?,
+   12 => {
+    // Persist disposition before deleting provider facts. Accepted unfinished jobs
+    // receive an explicit expiry outcome; personal canonical facts are untouched.
+    tx.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) SELECT 'copilot_daily',f.organization_id::text||':'||f.user_id::text||':'||f.installation_id::text||':'||f.day::text||':'||f.feature,f.payload_hash,'sharing_or_retention_removed',$3 FROM team_copilot_daily_facts f LEFT JOIN organization_analytics_consents c ON c.organization_id=f.organization_id AND c.user_id=f.user_id LEFT JOIN organization_members m ON m.organization_id=f.organization_id AND m.user_id=f.user_id WHERE f.organization_id=$1 AND (f.day::timestamp AT TIME ZONE 'UTC'<$2 OR NOT COALESCE(c.share_aggregate,FALSE) OR c.consent_version<>f.consent_version OR m.deactivated_at IS NOT NULL OR m.user_id IS NULL OR f.blocked) ORDER BY f.day,f.user_id,f.feature LIMIT 100 ON CONFLICT DO NOTHING",&[&org,&cutoff,&now]).await?;
+    let facts=tx.execute("DELETE FROM team_copilot_daily_facts WHERE (organization_id,user_id,installation_id,day,feature) IN(SELECT f.organization_id,f.user_id,f.installation_id,f.day,f.feature FROM team_copilot_daily_facts f LEFT JOIN organization_analytics_consents c ON c.organization_id=f.organization_id AND c.user_id=f.user_id LEFT JOIN organization_members m ON m.organization_id=f.organization_id AND m.user_id=f.user_id WHERE f.organization_id=$1 AND (f.day::timestamp AT TIME ZONE 'UTC'<$2 OR NOT COALESCE(c.share_aggregate,FALSE) OR c.consent_version<>f.consent_version OR m.deactivated_at IS NOT NULL OR m.user_id IS NULL OR f.blocked) AND EXISTS(SELECT 1 FROM team_webhook_dispositions d WHERE d.provider='copilot_daily' AND d.delivery_id=f.organization_id::text||':'||f.user_id::text||':'||f.installation_id::text||':'||f.day::text||':'||f.feature AND d.payload_hash=f.payload_hash) LIMIT 100)",&[&org,&cutoff]).await?;
+    tx.execute("UPDATE team_copilot_daily_jobs SET completed_at=now(),error_code='retention_expired',lease_token=NULL,lease_until=NULL WHERE id IN(SELECT id FROM team_copilot_daily_jobs WHERE organization_id=$1 AND day::timestamp AT TIME ZONE 'UTC'<$2 AND completed_at IS NULL AND (lease_until IS NULL OR lease_until<now()) LIMIT 100)",&[&org,&cutoff]).await?;
+    let jobs=tx.execute("DELETE FROM team_copilot_daily_jobs WHERE id IN(SELECT id FROM team_copilot_daily_jobs WHERE organization_id=$1 AND day::timestamp AT TIME ZONE 'UTC'<$2 AND completed_at IS NOT NULL LIMIT 100)",&[&org,&cutoff]).await?;
+    facts.max(jobs)
+   },
    _ => 0,
   };
-        if phase >= 12 {
+        if phase >= 13 {
             tx.execute("INSERT INTO team_privacy_markers(organization_id,retention_before) VALUES($1,$2) ON CONFLICT(organization_id) DO UPDATE SET retention_before=GREATEST(team_privacy_markers.retention_before,EXCLUDED.retention_before),changed_at=now()", &[&org,&cutoff]).await?;
             tx.execute("UPDATE team_weekly_publications SET invalidated_at=COALESCE(invalidated_at,now()),contributors='{}',fingerprint='expired' WHERE organization_id=$1 AND week_start<$2::timestamptz::date", &[&org,&cutoff]).await?;
             tx.execute("UPDATE team_cleanup_jobs SET completed_at=$2,cutoff=NULL,phase=0,lease_token=NULL,lease_until=NULL,error_code=NULL WHERE organization_id=$1", &[&org,&now]).await?;

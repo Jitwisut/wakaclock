@@ -83,6 +83,10 @@ def sanitize(adapter, raw):
             if not isinstance(raw["fullyIdle"], bool): raise ValueError("producer_metadata_invalid")
             metadata["fullyIdle"] = raw["fullyIdle"]
         metadata["failed"] = bool(raw.get("error"))
+    if adapter == "cline" and isinstance(metadata.get("timestamp"),str) and metadata["timestamp"].isdigit():
+        # Cline v4 sends milliseconds since epoch as a string. Preserve that
+        # instant, and let context use it instead of today's branch on replay.
+        metadata["timestamp"] = datetime.fromtimestamp(int(metadata["timestamp"])/1000,timezone.utc).isoformat().replace("+00:00","Z")
     return metadata
 
 

@@ -1,4 +1,6 @@
 # Context และ Health — ผลพัฒนาและงานรับรองที่ยังเหลือ
+ผลพัฒนาช่องทาง adapter รอบต่อ: [Cline Windows / Roo / Copilot daily และงานที่ยังค้าง](adapter-development-closure-2026-10-12.md). ตารางเดิมด้านล่างเป็นประวัติของรอบนั้น ไม่ใช่สถานะล่าสุดทุกช่องทาง.
+
 
 ตรวจวันที่ 12 ต.ค. 2026 · Asia/Bangkok · branch `codex/heartbeat-capture-release` · ฐาน `db18f40c7f38bfb231badaf57a29f35457615726`
 

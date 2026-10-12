@@ -272,7 +272,7 @@ pub(crate) async fn tick(
                     &row.adapter,
                     native,
                 );
-                let event = SessionContext::observed(
+                let mut event = SessionContext::observed(
                     settings.user_id,
                     &row.adapter,
                     settings.collector_id,
@@ -286,6 +286,9 @@ pub(crate) async fn tick(
                         commit_sha: row.evidence.commit_sha,
                     },
                 );
+                if row.evidence.project_provenance.as_deref() == Some("user_confirmed") {
+                    event.provenance = "user_confirmed_task_git".into();
+                }
                 if queue
                     .observe_changed(
                         &settings.origin,

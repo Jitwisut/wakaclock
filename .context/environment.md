@@ -16,6 +16,7 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `CLICKHOUSE_DATABASE` / `CLICKHOUSE_DB` | no | Both names are read; defaults exist. |
 | `POSTGRES_URL` | no | Absent ⇒ `AppState.postgres` is `None` and Phase 10 org/billing paths degrade. |
 | `ATOAXIS_TEAM_PRIVACY_LEDGER_PATH` | Team reads/worker | Absolute path to shared independent privacy registry outside database backups; missing/stale fails closed. |
+| `ATOAXIS_COPILOT_DAILY_ENABLED` | no | Explicit opt-in for separate GitHub Copilot provider-day counters. Defaults off; requires existing installation permissions and Team rollout/consent. No session, token or PR cost inference. |
 | `ATOAXIS_BUILD_REVISION` | build metadata | Compile-time revision for Team readiness; unset is unavailable, never inferred from runtime checkout. |
 | `POSTGRES_MAX_CONNECTIONS` | no | |
 | `DATABASE_URL` | no | Also read; overlaps with `POSTGRES_URL` — `Unknown / Needs verification` which wins. |

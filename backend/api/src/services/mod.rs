@@ -145,3 +145,5 @@ pub mod team_github_redelivery;
 pub mod team_context;
 
 pub mod team_merged_cost;
+
+pub mod copilot_daily;
