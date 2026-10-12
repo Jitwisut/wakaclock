@@ -96,3 +96,17 @@ pub struct SessionRepositoryBindingQuery {
     pub session_id: String,
     pub before_revision: Option<i64>,
 }
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CopilotDailyConfiguration {
+    pub installation_id: i64,
+    pub start_day: chrono::NaiveDate,
+    pub enabled: bool,
+    pub expected_revision: i64,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CopilotDailyQuery {
+    pub day: chrono::NaiveDate,
+}

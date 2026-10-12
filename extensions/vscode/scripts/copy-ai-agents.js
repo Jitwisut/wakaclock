@@ -11,21 +11,28 @@ const path = require("node:path");
 const SOURCE_DIR = path.join(__dirname, "..", "..", "ai-agents");
 const TARGET_DIR = path.join(__dirname, "..", "resources", "ai-agents");
 
-function main() {
-  if (!fs.existsSync(SOURCE_DIR)) {
-    console.error(`copy-ai-agents: source dir not found at ${SOURCE_DIR}`);
+function main(sourceDir = SOURCE_DIR, targetDir = TARGET_DIR) {
+  if (!fs.existsSync(sourceDir)) {
+    console.error(`copy-ai-agents: source dir not found at ${sourceDir}`);
     process.exit(1);
   }
 
-  fs.rmSync(TARGET_DIR, { recursive: true, force: true });
-  fs.mkdirSync(path.dirname(TARGET_DIR), { recursive: true });
-  fs.cpSync(SOURCE_DIR, TARGET_DIR, { recursive: true, filter: source => {
+  fs.rmSync(targetDir, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+  fs.cpSync(sourceDir, targetDir, { recursive: true, filter: source => {
     const name = path.basename(source);
     return !["node_modules", "__pycache__", ".git", ".DS_Store"].includes(name) && !/\.(pyc|pyo)$/.test(name);
   } });
-  makeShellScriptsExecutable(TARGET_DIR);
+  // Ship the same shared spool implementation as CommonJS for the VS Code host.
+  // Runtime must not depend on the source checkout or a TS loader.
+  const ts = require("typescript");
+  const shared = path.join(targetDir, "common", "activity-spool.ts");
+  const compiled = ts.transpileModule(fs.readFileSync(shared, "utf8"), { compilerOptions: {target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}, reportDiagnostics:true });
+  if ((compiled.diagnostics || []).some(d => d.category === ts.DiagnosticCategory.Error)) throw new Error("shared spool compilation failed");
+  fs.writeFileSync(path.join(targetDir,"common","activity-spool.js"),compiled.outputText);
+  makeShellScriptsExecutable(targetDir);
 
-  console.log(`copy-ai-agents: copied ${SOURCE_DIR} -> ${TARGET_DIR}`);
+  console.log(`copy-ai-agents: copied ${sourceDir} -> ${targetDir}`);
 }
 
 function makeShellScriptsExecutable(rootDir) {
@@ -41,4 +48,5 @@ function makeShellScriptsExecutable(rootDir) {
   }
 }
 
-main();
+if (require.main === module) main();
+module.exports = { copyAiAgents: main };

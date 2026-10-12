@@ -199,7 +199,7 @@ pub async fn capability(
 ) -> Result<Json<V2Envelope<Value>>, ApiError> {
     require_scope(&s, &h, "write_logged_time").await?;
     Ok(Json(envelope(
-        serde_json::json!({"version":1,"enabled":s.config.team_enabled,"stream":"session-context","does_not_enable_consent":true}),
+        serde_json::json!({"version":1,"enabled":s.config.team_enabled,"stream":"session-context","does_not_enable_consent":true,"provenances":["native_session_git","native_inline_git","user_confirmed_task_git"]}),
         "UTC",
         None,
     )))
@@ -341,6 +341,39 @@ pub async fn set_session_repository_binding(
     Ok(Json(envelope(
         s.team_github_service
             .set_session_repository_binding(user, org, input)
+            .await
+            .map_err(error)?,
+        "UTC",
+        None,
+    )))
+}
+
+pub async fn copilot_configure(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(org): Path<Uuid>,
+    Json(input): Json<CopilotDailyConfiguration>,
+) -> Result<Json<V2Envelope<Value>>, ApiError> {
+    let user = actor(&s, &h).await?;
+    Ok(Json(envelope(
+        s.team_github_service
+            .copilot_configure(user, org, input)
+            .await
+            .map_err(error)?,
+        "UTC",
+        None,
+    )))
+}
+pub async fn copilot_self_day(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(org): Path<Uuid>,
+    Query(input): Query<CopilotDailyQuery>,
+) -> Result<Json<V2Envelope<Value>>, ApiError> {
+    let user = actor(&s, &h).await?;
+    Ok(Json(envelope(
+        s.team_github_service
+            .copilot_self_day(user, org, input.day)
             .await
             .map_err(error)?,
         "UTC",

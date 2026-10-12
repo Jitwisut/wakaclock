@@ -1,6 +1,6 @@
 {
   "name": "atoaxis-vscode",
-  "displayName": "AtoAxis — Developer Time Tracking",
+  "displayName": "AtoAxis \u2014 Developer Time Tracking",
   "description": "Developer time tracking for VS Code with AI agent attribution. Install, add your AtoAxis API key, and start tracking.",
   "version": "0.2.0",
   "publisher": "atoaxis",
@@ -142,6 +142,18 @@
       {
         "command": "wakaclock.journalRecoveryHistory",
         "title": "AtoAxis: Journal Recovery History"
+      },
+      {
+        "command": "wakaclock.setupRooTracking",
+        "title": "AtoAxis: Set Up Roo Task Tracking"
+      },
+      {
+        "command": "wakaclock.confirmRooProject",
+        "title": "AtoAxis: Confirm Roo Task Project"
+      },
+      {
+        "command": "wakaclock.inspectRooTracking",
+        "title": "AtoAxis: Inspect Roo Capture"
       }
     ],
     "configuration": {
@@ -217,6 +229,12 @@
           "type": "boolean",
           "default": false,
           "description": "While coding, periodically appear as active in your team's coworking presence room even when the AtoAxis dashboard tab isn't open. Off by default because it makes your activity visible to teammates without an explicit join."
+        },
+        "wakaclock.rooTrackingEnabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "Opt in to Roo 3.53.0 public task markers. Project attribution requires explicit task confirmation; live certification is pending."
         }
       }
     }

@@ -106,6 +106,14 @@ export class WakaclockCliService {
         private readonly executionSurface?: string,
     ) {}
 
+    public async nativeProducerProfile(requiredCapability="activity_envelope_v3"):Promise<{scope_id:string;cli_path:string}> {
+        const scope=await this.journalScope();
+        if(!scope.owner_confirmed || !scope.capabilities.includes(requiredCapability)) throw new Error("producer_scope_unconfirmed");
+        const binary=this.managedCli ? await this.managedCli.ensureReady() : this.getConfig().cliPath;
+        if(!binary) throw new Error("producer_binary_unavailable");
+        return {scope_id:scope.scope_id,cli_path:binary};
+    }
+
     public async journalScope(): Promise<{ scope_id: string; owner_confirmed: boolean; capabilities: string[]; recoverable_scope_ids?: string[] }> {
         const result = await this.runCli(["journal-scope"]);
         const response = JSON.parse(result.stdout);

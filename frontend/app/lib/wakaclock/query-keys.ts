@@ -8,6 +8,8 @@ export const wakaclockKeys = {
   deliveryStatus: (userId: string) => [...wakaclockKeys.all, 'delivery-status', userId] as const,
   teamSessionRepository: (userId: string, org: string, session: string, revision?: number) =>
     [...wakaclockKeys.teamGithub(userId, org), 'session-repository', session, revision] as const,
+  copilotSelfDay: (userId: string, org: string, day: string) =>
+    [...wakaclockKeys.teamGithub(userId, org), 'copilot-self-day', day] as const,
   teamGithubSessions: (userId: string, org: string, after?: string) =>
     [...wakaclockKeys.all, TEAM_GITHUB_KEY, userId, org, 'sessions', after] as const,
   teamGithubOwnWork: (userId: string, org: string, after?: string) =>

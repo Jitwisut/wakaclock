@@ -94,3 +94,10 @@ parsing is centralised in
 A handler function is unreachable until it is added to the `Router` in
 `handlers/v1/mod.rs` (or `v2.rs`). Path params use axum 0.7 colon syntax
 (`/insights/:type/:range`), not braces.
+
+## Copilot daily counters (adapter closure, 12 Oct 2026)
+
+- `PUT /api/v2/organizations/:id/integrations/github/copilot-daily`: Owner/Admin; revision CAS; verified GitHub organization installation; explicit feature flag. Does not add permissions or enable consent.
+- `GET /api/v2/organizations/:id/me/github/copilot-daily?day=YYYY-MM-DD`: authenticated caller only, ended provider UTC day; current individual/aggregate consent, privacy generation and integration/identity read fence rechecked before response. Nullable counters; no aggregate/team export endpoint.
+- `GET /api/v2/me/session-context/capability` adds optional `provenances`. Clients retain `user_confirmed_task_git` when the receiver does not advertise it; legacy native context remains compatible.
+- Additive PostgreSQL migration `036_team_copilot_daily.sql`; receiver before worker/client/UI. Existing GitHub worker performs bounded daily jobs; flag off preserves accepted jobs/facts.

@@ -1909,8 +1909,12 @@ pub(crate) fn native_activity_setup(
     {
         return Err("activity_native_hook_contract_evidence_pending".into());
     }
-    if adapter == "cline" && cfg!(windows) {
-        return Err("cline_windows_hook_contract_evidence_pending".into());
+    if adapter == "cline"
+        && cfg!(windows)
+        && !uninstall
+        && contract != Some("cline-vscode-4.1.23-powershell")
+    {
+        return Err("cline_windows_provider_contract_required".into());
     }
     let home = dirs::home_dir().ok_or("service_home_unavailable")?;
     let _lock = acquire_setup_lock(&home)?;

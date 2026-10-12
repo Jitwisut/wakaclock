@@ -1443,7 +1443,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .collect::<Vec<_>>();
             println!(
                 "{}",
-                serde_json::json!({"schema_version":1,"capabilities":["editor_durable_ack_v1","activity_envelope_v3","persistent_runtime_intent_v1","native_activity_hook_v1","editor_receipts_read_v1","native_producer_spool_v1","producer_batch_ack_v2","tool_boundary_durable_v1", "session_context_durable_v1","journal_evidence_read_v1"],
+                serde_json::json!({"schema_version":1,"capabilities":["editor_durable_ack_v1","activity_envelope_v3","persistent_runtime_intent_v1","native_activity_hook_v1","editor_receipts_read_v1","native_producer_spool_v1","producer_batch_ack_v2","tool_boundary_durable_v1", "session_context_durable_v1","journal_evidence_read_v1","roo_public_task_bridge_v1"],
                 "scope_id":journal_scope_id(&scope),"owner_confirmed":config.api_key.is_some(),"recoverable_scope_ids":recoverable_scope_ids,
                 "build":build_identity()})
             );

@@ -4,7 +4,6 @@ import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
-
 import { Button } from '@/components/ui/button';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { listOrganizationTeams } from '@/lib/wakaclock/endpoints-v2';
@@ -13,6 +12,7 @@ import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { getTeamWorkReceipt } from '@/lib/wakaclock/team-endpoints';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
+import { CopilotDailyPanel } from './copilot-daily-panel';
 import { TeamGithubSessions } from './team-github-sessions';
 
 function costText(metric: { reason: null | string; value: null | number }) {
@@ -149,6 +149,11 @@ export function TeamGithubPanel({ organizationId }: { organizationId: string }) 
                 <p>
                   Sync: {visible.health.status} · {visible.health.reason}
                 </p>
+                <CopilotDailyPanel
+                  connection={visible}
+                  key={`copilot:${scope}`}
+                  organizationId={organizationId}
+                />
                 {visible.can_manage && (
                   <>
                     {identities.isError && (

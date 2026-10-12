@@ -180,3 +180,47 @@ export async function retainMetadata(cli: string, input: { adapter: string; surf
   try { await runProducerCli(cli, ["ai","producer-batch","--json"], {schema_version:2,records:[record]}); } catch { /* Original stays until collector verifies the ID/hash ACK. */ }
   return {file,record};
 }
+
+/** Public Roo events supply task identity only. Project mapping is an explicit,
+ * scoped user confirmation effective from now; never infer active workspace. */
+export function retainRooMarker(profile: {scope_id:string;cli_path:string}, taskId:string, eventName:string, home=homedir(), observedAt=new Date().toISOString()) {
+  if (!Number.isFinite(Date.parse(observedAt)) || !/^[a-f0-9]{64}$/.test(profile.scope_id) || !taskId || taskId.length>512 || /[\x00-\x1f]/.test(taskId) || !["taskStarted","taskCompleted","taskAborted","taskUserMessage","taskToolFailed"].includes(eventName)) throw new Error("roo_contract_invalid");
+  const base=path.join(home,".wakaclock"); safe(base);
+  const desired=path.join(base,"runtime-desired.json");safe(desired);
+  if(fs.existsSync(desired)) { const state=JSON.parse(fs.readFileSync(desired,"utf8")); if(state.schema_version!==1 || !state.desired) throw new Error("producer_runtime_unconfirmed"); if(state.desired.capture===false) return undefined; }
+  const mappingPath=rooMappingPath(home,profile.scope_id,taskId);safe(mappingPath);
+  let project: string|undefined; let effective:string|undefined;
+  if(fs.existsSync(mappingPath)) { const binding=readRooMapping(mappingPath);
+    if(binding.scope_id!==profile.scope_id || binding.task_id!==taskId || binding.provenance!=="user_confirmed") throw new Error("roo_mapping_scope_invalid");
+    if(Date.parse(binding.effective_at)<=Date.parse(observedAt)) { project=binding.project_root; effective=binding.effective_at; }
+  }
+  const metadata={eventName,taskId,timestamp:observedAt,provider_version:"3.53.0",...(project?{project_root:project,context_provenance:"user_confirmed",context_effective_at:effective}:{})};
+  const record={schema_version:1,scope_id:profile.scope_id,adapter_id:"roo-code",execution_surface:"ide",observation_id:randomUUID(),observed_at:observedAt,metadata};
+  const root=path.join(base,"native-producer-spool",profile.scope_id);safe(root);fs.mkdirSync(root,{recursive:true,mode:0o700});
+  for(const parent of [path.dirname(root),base,home]) syncDirectory(parent);
+  const context={...freezeContext(observedAt,{session_id:taskId,...(project?{project_root:project}:{})}),...(project?{project_provenance:"user_confirmed",project_effective_at:effective}:{})};
+  // Repository context is frozen at the public event, never refreshed during replay.
+  retainContext(record,context,root);
+  // Missing project context is retained, not acknowledged as captured activity.
+  const file=path.join(root,`${record.observation_id}.json`);write(file,record);
+  return {file,record};
+}
+function readRooMapping(file:string) {
+  safe(file); if(fs.statSync(file).size>1024*1024) throw new Error("roo_mapping_limit");
+  const b=JSON.parse(fs.readFileSync(file,"utf8"));
+  if(b.schema_version!==1 || !Number.isSafeInteger(b.revision) || b.revision<1 || !Number.isFinite(Date.parse(b.effective_at)) || typeof b.project_root!=="string" || b.project_root.length>4096 || !path.isAbsolute(b.project_root) || !Array.isArray(b.history)) throw new Error("roo_mapping_invalid");
+  return b;
+}
+function rooMappingPath(home:string,scope:string,taskId:string) { return path.join(home,".wakaclock","roo-project-bindings",scope,createHash("sha256").update(taskId).digest("hex")+".json"); }
+export function confirmRooProject(profile:{scope_id:string},taskId:string,project:string,home=homedir(),expectedRevision=0) {
+  if(!Number.isSafeInteger(expectedRevision) || expectedRevision<0 || expectedRevision>=Number.MAX_SAFE_INTEGER || !/^[a-f0-9]{64}$/.test(profile.scope_id) || !taskId || taskId.length>512 || /[\x00-\x1f]/.test(taskId) || !path.isAbsolute(project) || project.length>4096) throw new Error("roo_mapping_invalid");
+  safe(project);if(!fs.statSync(project).isDirectory()) throw new Error("roo_mapping_invalid");
+  const file=rooMappingPath(home,profile.scope_id,taskId);safe(file);fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
+  for(const parent of [path.dirname(path.dirname(file)),path.join(home,".wakaclock"),home]) syncDirectory(parent);
+  const lock=file+".lock";safe(lock); const handle=fs.openSync(lock,"wx",0o600);
+  try { const previous=fs.existsSync(file)?readRooMapping(file):undefined;
+    if((previous?.revision??0)!==expectedRevision || previous && (previous.scope_id!==profile.scope_id || previous.task_id!==taskId)) throw new Error("roo_mapping_revision_conflict");
+    const binding={schema_version:1,scope_id:profile.scope_id,task_id:taskId,project_root:project,provenance:"user_confirmed",revision:expectedRevision+1,effective_at:new Date().toISOString()};
+    const stage=file+"."+randomUUID()+".stage";write(stage,{...binding,history:[...(previous?.history??[]),...(previous?[{revision:previous.revision,effective_at:previous.effective_at,project_root:previous.project_root}]:[])]});fs.renameSync(stage,file);syncDirectory(path.dirname(file));return binding;
+  } finally { fs.closeSync(handle);fs.unlinkSync(lock); }
+}

@@ -86,3 +86,25 @@ test("context freezes before a CLI handshake can change the active branch", asyn
   assert.equal(context.metadata.repository,"o/r");
  } finally {rmSync(home,{recursive:true,force:true});}
 });
+
+test("Roo retains project-unresolved observations and does not borrow a later mapping", async()=>{
+ const {retainRooMarker,confirmRooProject}=await import("../activity-spool.ts");
+ const home=mkdtempSync(join(tmpdir(),"roo-project-ภาษาไทย-"));const profile={scope_id:"a".repeat(64),cli_path:"missing"};
+ try {
+  const root=join(home,"repo");mkdirSync(root);const {execFileSync}=await import("node:child_process");execFileSync("git",["-C",root,"init","-q"]);execFileSync("git",["-C",root,"remote","add","origin","https://github.com/o/r.git"]);const first=retainRooMarker(profile,"task","taskStarted",home);
+  assert.ok(first);assert.equal(first.record.metadata.project_root,undefined);
+  const original=readFileSync(first.file,"utf8");const mapping=confirmRooProject(profile,"task",root,home);
+  assert.equal(mapping.provenance,"user_confirmed");assert.equal(mapping.revision,1);
+  assert.throws(()=>confirmRooProject(profile,"task",root,home),/revision_conflict/);
+  assert.equal(readFileSync(first.file,"utf8"),original);
+  const next=retainRooMarker(profile,"task","taskToolFailed",home);assert.equal(next?.record.metadata.project_root,root);
+  const files=join(home,".wakaclock/native-producer-spool",profile.scope_id);
+  const contexts=readdirSync(files).map(file=>JSON.parse(readFileSync(join(files,file),"utf8"))).filter(record=>record.kind==="session_context");
+  assert.ok(contexts.some(record=>record.metadata.project_provenance==="user_confirmed" && record.metadata.project_effective_at===mapping.effective_at));
+  const delayed=retainRooMarker(profile,"task","taskStarted",home,"2020-01-01T00:00:00Z");assert.equal(delayed?.record.metadata.project_root,undefined);
+  const history=confirmRooProject(profile,"task",root,home,1);assert.equal(history.revision,2);
+  assert.throws(()=>retainRooMarker({...profile,scope_id:"invalid"},"task","taskStarted",home),/contract_invalid/);
+  mkdirSync(join(home,".wakaclock"),{recursive:true});writeFileSync(join(home,".wakaclock/runtime-desired.json"),JSON.stringify({schema_version:1,desired:{capture:false}}));
+  assert.equal(retainRooMarker(profile,"task","taskStarted",home),undefined);
+ }finally{rmSync(home,{recursive:true,force:true});}
+});

@@ -139,3 +139,18 @@ The implementation on `codex/heartbeat-capture-release` is documented in [Contex
 - Optional capture pipeline stages are capability-negotiated. Missing details remain unconfirmed; stale, backlog, auth and dead letter use the same assessment in VS Code and dashboard. Team retains the existing consent/suppression projection rather than exposing small-group diagnostics.
 
 Two isolated native PostgreSQL integration tests pass, including 205 retention-history dispositions and the restored-binding read barrier. The disposable database is stopped. No actual GitHub/provider/Windows deployment or Cloud restore is certified by these fixtures.
+
+## Adapter closure: Copilot daily (12 Oct 2026)
+
+Migration `036` adds an opt-in connector to the existing GitHub worker and credential path. `ATOAXIS_COPILOT_DAILY_ENABLED` is off by default. Owner/Admin must explicitly select a verified organization installation and start day. Missing Organization Copilot metrics read permission is `permission_required`; the application does not expand App permissions. The self-service panel exposes only the caller's permitted provider UTC day/feature counters. Suggested, accepted, agent feature definitions remain separate; absent counters are null. This source never enters heartbeat, canonical usage, session/PR allocation, token/model or estimated-cost facts.
+
+| Retention inventory | Disposition / restore behavior |
+|---|---|
+| `team_copilot_daily_facts` | 12 calendar months; consent version/from fence; record independent deletion disposition before delete; replay checks deletion markers |
+| `team_copilot_daily_jobs` | Expired pending/dead-letter jobs receive retention disposition before deletion; lease/checkpoint retry retained within scope |
+| `team_copilot_daily_staging`, `team_copilot_daily_conflicts`, `team_copilot_daily_rejections` | Job-owned metadata only; reset changed report checkpoint atomically; cascade only after parent disposition |
+| `team_copilot_daily_integrations` | Current configuration, revision/start day; restore disables and requires reauthorization |
+
+Restore blocks restored facts, terminates accepted jobs with `restore_reauthorization_required`, clears staging and disables configuration before Team reads. This is a local projection/registry regression, not a new physical Cloud restore certificate. Withdrawal of consent or identity blocks self read immediately; cleanup proceeds separately.
+
+A safe weekly organization/team projection and CSV for these provider UTC-day counters are **not implemented in this adapter slice**. They must use Phase 2 consent/cohort/publication inference rules and an explicit provider-day versus organization-week policy; no unsuppressed cross-person aggregate is exposed. Live GitHub App delivery and provider/OS certification remain pending. See [adapter closure report](adapter-development-closure-2026-10-12.md).

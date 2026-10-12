@@ -679,10 +679,16 @@ fn configure_cline(
     executable: &Path,
     uninstall: bool,
 ) -> Result<Value, Box<dyn Error>> {
+    configure_cline_for_platform(home, executable, uninstall, cfg!(windows))
+}
+
+fn configure_cline_for_platform(
+    home: &Path,
+    executable: &Path,
+    uninstall: bool,
+    windows: bool,
+) -> Result<Value, Box<dyn Error>> {
     use fs2::FileExt;
-    if cfg!(windows) {
-        return Err("cline_windows_hook_contract_evidence_pending".into());
-    }
     let directory = home.join(".wakaclock/native-activity-hooks");
     assert_safe_path(&directory)?;
     fs::create_dir_all(&directory)?;
@@ -693,30 +699,51 @@ fn configure_cline(
         .truncate(false)
         .open(directory.join("setup.lock"))?;
     lock.lock_exclusive()?;
-    let ledger = directory.join("cline-files.json");
+    let ledger = directory.join(if windows {
+        "cline-windows-files.json"
+    } else {
+        "cline-files.json"
+    });
     let previous = load(&ledger)?;
-    let events = [
+    let events: Vec<String> = [
         "TaskStart",
         "TaskResume",
         "TaskCancel",
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
-    ];
+    ]
+    .into_iter()
+    .map(|event| {
+        if windows {
+            format!("{event}.ps1")
+        } else {
+            event.into()
+        }
+    })
+    .collect();
     let mut next = serde_json::Map::new();
     if !uninstall {
-        let command = command(home, executable, "cline", "ide")?;
-        for event in events {
+        let command = if windows {
+            cline_windows_command(home, executable)?
+        } else {
+            command(home, executable, "cline", "ide")?
+        };
+        for event in &events {
             next.insert(
                 event.into(),
-                json!(format!(
+                json!(if windows { format!("\u{feff}# AtoAxis owned native activity hook; neutral response is not a durable ACK.\r\n$ErrorActionPreference = 'Stop'\r\ntry {{\r\n  {command} | Out-Null\r\n  if ($LASTEXITCODE -ne 0) {{ throw 'capture_failed' }}\r\n}} catch {{ [Console]::Error.WriteLine('atoaxis_activity_capture_not_confirmed') }}\r\n[Console]::Out.WriteLine('{{\"cancel\":false}}')\r\n") } else { format!(
                     "#!/bin/sh\n# AtoAxis owned native activity hook; cancel is provider control, never a durable ACK.\n{command} >/dev/null 2>/dev/null\nif [ \"$?\" -ne 0 ]; then printf '%s\\n' 'atoaxis_activity_capture_not_confirmed' >&2; fi\nprintf '%s\\n' '{{\"cancel\":false}}'\n"
-                )),
+                ) }),
             );
         }
     }
     let next = Value::Object(next);
-    let recovery_path = directory.join("cline-files-recovery.json");
+    let recovery_path = directory.join(if windows {
+        "cline-windows-files-recovery.json"
+    } else {
+        "cline-files-recovery.json"
+    });
     let recovery = load(&recovery_path)?;
     let mut generations = match recovery.get("generations") {
         Some(Value::Array(generations)) => generations.clone(),
@@ -737,7 +764,7 @@ fn configure_cline(
             .ok_or("activity_hook_ownership_invalid")?;
         if files
             .iter()
-            .any(|(event, contents)| !events.contains(&event.as_str()) || !contents.is_string())
+            .any(|(event, contents)| !events.contains(event) || !contents.is_string())
         {
             return Err("activity_hook_ownership_invalid".into());
         }
@@ -746,7 +773,7 @@ fn configure_cline(
     check_cline_directories(home)?;
     // Preflight every file before changing any. Symlinks and unknown contents
     // are foreign even if the filename resembles one of our hooks.
-    for event in events {
+    for event in &events {
         let path = hooks.join(event);
         check_cline_file(&path, event, &generations)?;
     }
@@ -754,7 +781,7 @@ fn configure_cline(
     if !uninstall {
         fs::create_dir_all(&hooks)?;
     }
-    for event in events {
+    for event in &events {
         let path = hooks.join(event);
         // Recheck after durable registration, before each mutation. An external
         // editor may have replaced a file since the all-file preflight.
@@ -772,10 +799,40 @@ fn configure_cline(
     fs::remove_file(recovery_path)?;
     Ok(
         json!({"adapter":"cline","surface":"ide","status":if uninstall{"uninstalled"}else{"configured"},
-        "capture_contract":"native_activity_hook_v1","installation_platforms":["macos"],
+        "capture_contract":"native_activity_hook_v1","installation_platforms":[if windows {"windows"} else {"macos"}],"provider_contract":if windows {Some("cline-vscode-4.1.23-powershell")}else{None},
         "live_certification":"pending","user_hooks_preserved":true,
-        "next_step":"Enable Hooks in Cline settings. Existing foreign event hooks require manual additive setup; Windows provider-version evidence is pending."}),
+        "next_step":"Enable Hooks in Cline settings. Foreign hooks are preserved; certify the installed provider version and native lifecycle before use."}),
     )
+}
+
+fn cline_windows_command(home: &Path, executable: &Path) -> Result<String, Box<dyn Error>> {
+    let directory = home.join(".wakaclock/native-activity-hooks");
+    assert_safe_path(&directory)?;
+    let profile = directory.join("cline-producer.json");
+    assert_safe_path(&profile)?;
+    let config = load(&profile)?;
+    if config["cli_path"].as_str() != executable.to_str() || config["scope_id"].as_str().is_none() {
+        return Err("cline_durable_producer_required".into());
+    }
+    let script = directory.join("activity-producer.py");
+    assert_safe_path(&script)?;
+    if !script.is_file() {
+        return Err("cline_durable_producer_required".into());
+    }
+    let quote = |path: &Path| -> Result<String, Box<dyn Error>> {
+        let path = path.to_str().ok_or("producer_path_invalid")?;
+        if path.chars().any(|c| c.is_control()) {
+            return Err("producer_path_invalid".into());
+        }
+        Ok(format!("'{}'", path.replace('\'', "''")))
+    };
+    // Provider stdin flows directly to the shared allowlist/spool producer. Do
+    // not echo raw input or stage it in a PowerShell variable/file.
+    Ok(format!(
+        "& python {} --profile {}",
+        quote(&script)?,
+        quote(&profile)?
+    ))
 }
 
 fn check_cline_file(path: &Path, event: &str, generations: &[Value]) -> Result<(), Box<dyn Error>> {
@@ -844,6 +901,47 @@ fn persist_hook(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cline_windows_uses_owned_powershell_files_with_durable_producer_and_preserves_unix() {
+        let home =
+            std::env::temp_dir().join(format!("cline Windows ภาษาไทย {}", uuid::Uuid::new_v4()));
+        let directory = home.join(".wakaclock/native-activity-hooks");
+        fs::create_dir_all(&directory).unwrap();
+        let binary = home.join("CLI folder/wakaclock.exe");
+        persist(
+            &directory.join("cline-producer.json"),
+            &json!({"cli_path":binary,"scope_id":"a".repeat(64)}),
+        )
+        .unwrap();
+        fs::write(directory.join("activity-producer.py"), "# fixture").unwrap();
+        let hooks = home.join("Documents/Cline/Hooks");
+        fs::create_dir_all(&hooks).unwrap();
+        fs::write(hooks.join("TaskStart"), "USER UNIX HOOK").unwrap();
+        configure_cline_for_platform(&home, &binary, false, true).unwrap();
+        let script = fs::read_to_string(hooks.join("TaskStart.ps1")).unwrap();
+        assert!(script.starts_with('\u{feff}'));
+        assert!(script.contains("--profile"));
+        assert!(script.contains("activity-producer.py"));
+        assert!(!script.contains("ai activity-hook"));
+        assert_eq!(
+            fs::read_to_string(hooks.join("TaskStart")).unwrap(),
+            "USER UNIX HOOK"
+        );
+        configure_cline_for_platform(&home, &binary, false, true).unwrap();
+        fs::write(hooks.join("PostToolUse.ps1"), "FOREIGN SCRIPT").unwrap();
+        assert!(configure_cline_for_platform(&home, &binary, true, true).is_err());
+        assert!(hooks.join("TaskStart.ps1").exists());
+        let ledger = load(&directory.join("cline-windows-files.json")).unwrap();
+        fs::write(
+            hooks.join("PostToolUse.ps1"),
+            ledger["PostToolUse.ps1"].as_str().unwrap(),
+        )
+        .unwrap();
+        configure_cline_for_platform(&home, &binary, true, true).unwrap();
+        assert!(!hooks.join("TaskStart.ps1").exists());
+        assert!(hooks.join("TaskStart").exists());
+        fs::remove_dir_all(home).unwrap();
+    }
     #[test]
     fn cursor_inline_setup_ships_helpers_and_preserves_user_hook_on_uninstall() {
         let home = std::env::temp_dir().join(format!("cursor-edit-hooks-{}", uuid::Uuid::new_v4()));
