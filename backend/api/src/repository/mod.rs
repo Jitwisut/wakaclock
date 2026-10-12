@@ -33,3 +33,8 @@ pub mod team_store_retention;
 mod team_github_tests;
 
 pub mod copilot_daily;
+
+pub mod copilot_reports;
+
+#[cfg(test)]
+mod copilot_reports_tests;

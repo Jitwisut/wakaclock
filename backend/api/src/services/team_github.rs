@@ -86,6 +86,8 @@ impl TeamGithubService {
             .await?;
         status["configured"] = json!(self.config.is_some() && self.vault.is_some() && self.enabled);
         status["session_context_capability"] = json!(1);
+        status["copilot_weekly_reports"] = json!(crate::services::copilot_reports::enabled());
+        status["copilot_weekly_csv"] = json!(crate::services::copilot_reports::enabled());
         status["context_health"] = self.repo()?.context_health(org, user).await?;
         status["copilot_daily"] =
             crate::repository::copilot_daily::CopilotDailyRepository::new(self.repo()?.pg.clone())

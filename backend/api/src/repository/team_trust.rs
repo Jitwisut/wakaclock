@@ -23,6 +23,8 @@ pub struct RegistryEntry {
     pub invalidated_weeks: BTreeSet<NaiveDate>,
     #[serde(default)]
     pub deleted: bool,
+    #[serde(default)]
+    pub copilot_sources: BTreeMap<String, (i64, String)>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Disposition {
@@ -32,7 +34,7 @@ pub struct Disposition {
     pub reason: String,
     pub disposed_at: DateTime<Utc>,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct Registry {
     pub schema_version: u8,
     pub checked_at: DateTime<Utc>,
@@ -40,8 +42,53 @@ pub struct Registry {
     #[serde(default)]
     pub dispositions: Vec<Disposition>,
 }
+// v1 is accepted only for an explicit monotonic upgrade/closed restore. A v2
+// organization must carry source heads even when empty; missing proof is corruption.
+impl<'de> Deserialize<'de> for Registry {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            schema_version: u8,
+            checked_at: DateTime<Utc>,
+            organizations: BTreeMap<Uuid, RegistryEntry>,
+            #[serde(default)]
+            dispositions: Vec<Disposition>,
+        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let version = value.get("schema_version").and_then(|x| x.as_u64());
+        if !matches!(version, Some(1 | 2)) {
+            return Err(serde::de::Error::custom(
+                "privacy registry schema unsupported",
+            ));
+        }
+        if version == Some(2)
+            && value
+                .get("organizations")
+                .and_then(|x| x.as_object())
+                .is_some_and(|orgs| {
+                    orgs.values()
+                        .any(|entry| entry.get("copilot_sources").is_none())
+                })
+        {
+            return Err(serde::de::Error::custom(
+                "v2 privacy registry source proof missing",
+            ));
+        }
+        let wire: Wire = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            schema_version: wire.schema_version,
+            checked_at: wire.checked_at,
+            organizations: wire.organizations,
+            dispositions: wire.dispositions,
+        })
+    }
+}
+
 fn covers_history(current: &RegistryEntry, old: &RegistryEntry) -> bool {
     old.weeks.iter().all(|week| current.weeks.contains(week))
+        && old.copilot_sources.iter().all(|(day,(revision,hash))| current.copilot_sources.get(day).is_some_and(|(new,new_hash)| new>=revision && (new>revision || new_hash==hash)))
         && old.invalidated_weeks.is_subset(&current.invalidated_weeks)
         && old.publication_marks.iter().all(|(week, marks)| {
             current.invalidated_weeks.contains(week)
@@ -51,6 +98,7 @@ fn covers_history(current: &RegistryEntry, old: &RegistryEntry) -> bool {
         && old.weeks.iter().all(|week| old.publication_marks.contains_key(week)
             || old.invalidated_weeks.contains(week) || current.invalidated_weeks.contains(week))
 }
+
 pub struct TeamTrustRepository {
     pub postgres: Arc<PostgresClient>,
 }
@@ -71,9 +119,9 @@ impl TeamTrustRepository {
     }
     pub async fn registry_entry(&self, org: Uuid) -> Result<RegistryEntry> {
         let row=self.postgres.query_one("SELECT r.generation,m.retention_before FROM team_rollouts r LEFT JOIN team_privacy_markers m USING(organization_id) WHERE r.organization_id=$1", &[&org]).await?;
-        let access=self.postgres.query_one("SELECT jsonb_build_object('consents',COALESCE((SELECT jsonb_agg(jsonb_build_object('user',c.user_id,'version',c.consent_version,'aggregate',c.share_aggregate,'individual',c.share_individual,'aggregate_from',c.aggregate_from,'individual_from',c.individual_from) ORDER BY c.user_id) FROM organization_analytics_consents c WHERE c.organization_id=$1),'[]'::jsonb), 'members',COALESCE((SELECT jsonb_agg(to_jsonb(m) ORDER BY m.user_id) FROM organization_members m WHERE m.organization_id=$1),'[]'::jsonb), 'scopes',COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.repository_id) FROM team_repository_scopes s WHERE s.organization_id=$1),'[]'::jsonb), 'project_bindings',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.user_id,b.project_id) FROM team_member_project_bindings b WHERE b.organization_id=$1),'[]'::jsonb))", &[&org]).await?.get::<_,serde_json::Value>(0);
+        let access=self.postgres.query_one("SELECT jsonb_build_object('consents',COALESCE((SELECT jsonb_agg(jsonb_build_object('user',c.user_id,'version',c.consent_version,'aggregate',c.share_aggregate,'individual',c.share_individual,'aggregate_from',c.aggregate_from,'individual_from',c.individual_from) ORDER BY c.user_id) FROM organization_analytics_consents c WHERE c.organization_id=$1),'[]'::jsonb), 'members',COALESCE((SELECT jsonb_agg(to_jsonb(m) ORDER BY m.user_id) FROM organization_members m WHERE m.organization_id=$1),'[]'::jsonb), 'scopes',COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.repository_id) FROM team_repository_scopes s WHERE s.organization_id=$1),'[]'::jsonb), 'project_bindings',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.user_id,b.project_id) FROM team_member_project_bindings b WHERE b.organization_id=$1),'[]'::jsonb), 'copilot_membership',COALESCE((SELECT jsonb_agg(to_jsonb(h) ORDER BY id) FROM team_copilot_membership_intervals h WHERE h.organization_id=$1),'[]'::jsonb), 'user_state',COALESCE((SELECT jsonb_agg(jsonb_build_object('user',u.id,'active',u.is_active,'deleted',u.deleted_at) ORDER BY u.id) FROM users u JOIN organization_members m ON m.user_id=u.id WHERE m.organization_id=$1),'[]'::jsonb), 'github_identity',COALESCE((SELECT jsonb_agg(jsonb_build_object('user',g.user_id,'id',g.github_user_id,'verified',g.verified_at,'revoked',g.revoked_at) ORDER BY g.user_id) FROM team_github_identities g JOIN organization_members m ON m.user_id=g.user_id WHERE m.organization_id=$1),'[]'::jsonb), 'github_installations',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',installation_id,'account',account_id,'status',status,'generation',generation) ORDER BY installation_id) FROM team_github_installations WHERE organization_id=$1),'[]'::jsonb))", &[&org]).await?.get::<_,serde_json::Value>(0);
         let weeks=self.postgres.query("SELECT DISTINCT week_start FROM team_weekly_publications WHERE organization_id=$1 ORDER BY week_start", &[&org]).await?.iter().map(|r|r.get(0)).collect();
-        let rows=self.postgres.query("SELECT week_start,view_key,generation,fingerprint,contributors,invalidated_at,fact_membership FROM team_weekly_publications WHERE organization_id=$1 ORDER BY week_start,view_key",&[&org]).await?;
+        let rows=self.postgres.query("SELECT week_start,view_key,generation,fingerprint,contributors,invalidated_at,fact_membership,report_family,window_start,window_end,calculation_version,source_revisions FROM team_weekly_publications WHERE organization_id=$1 ORDER BY week_start,view_key",&[&org]).await?;
         let mut publication_marks: BTreeMap<NaiveDate, BTreeSet<String>> = BTreeMap::new();
         let mut invalidated_weeks = BTreeSet::new();
         for row in rows {
@@ -91,6 +139,15 @@ impl TeamTrustRepository {
             if let Some(membership) = row.get::<_, Option<Vec<String>>>(6) {
                 marker.extend(serde_json::to_vec(&membership)?);
             }
+            if row.get::<_, Option<String>>(7).is_some() {
+                marker.extend(serde_json::to_vec(&(
+                    row.get::<_, Option<String>>(7),
+                    row.get::<_, Option<DateTime<Utc>>>(8),
+                    row.get::<_, Option<DateTime<Utc>>>(9),
+                    row.get::<_, Option<String>>(10),
+                    row.get::<_, Option<serde_json::Value>>(11),
+                ))?);
+            }
             publication_marks
                 .entry(week)
                 .or_default()
@@ -106,6 +163,7 @@ impl TeamTrustRepository {
             publication_marks,
             invalidated_weeks,
             deleted: false,
+            copilot_sources: self.postgres.query("SELECT day,revision,fingerprint FROM team_copilot_day_manifests WHERE organization_id=$1 ORDER BY day", &[&org]).await?.into_iter().map(|r|(r.get::<_,NaiveDate>(0).to_string(),(r.get::<_,i64>(1),r.get::<_,String>(2)))).collect(),
         })
     }
     pub async fn guard(&self, org: Uuid) -> Result<()> {
@@ -115,7 +173,7 @@ impl TeamTrustRepository {
             &std::fs::read(path).context("Team privacy ledger unavailable")?,
         )?;
         ensure!(
-            ledger.schema_version == 1
+            ledger.schema_version == 2
                 && (0..=300).contains(
                     &Utc::now()
                         .signed_duration_since(ledger.checked_at)
@@ -136,6 +194,7 @@ impl TeamTrustRepository {
             current.generation == expected.generation
                 && current.access_hash == expected.access_hash
                 && current.retention_before == expected.retention_before
+                && current.copilot_sources == expected.copilot_sources
                 && covers_history(&current, expected),
             "Team privacy ledger differs from restored/live data"
         );
@@ -177,6 +236,13 @@ impl TeamTrustRepository {
             .await?
             .get(0);
         ensure!(current == generation, "sharing changed during publication");
+        let copilot=tx.query("SELECT contributors FROM team_weekly_publications WHERE organization_id=$1 AND report_family='copilot_daily_weekly' AND (window_start IS NULL OR window_start<($2::date+7)::timestamp AT TIME ZONE (SELECT timezone FROM team_report_policies WHERE organization_id=$1)) AND (window_end IS NULL OR window_end>$2::date::timestamp AT TIME ZONE (SELECT timezone FROM team_report_policies WHERE organization_id=$1))", &[&org,&week]).await?;
+        if copilot.iter().any(|r| {
+            let old: BTreeSet<Uuid> = r.get::<_, Vec<Uuid>>(0).into_iter().collect();
+            old.is_empty() || !old.is_disjoint(contributors)
+        }) {
+            return Ok(false);
+        }
         let rows=tx.query("SELECT view_key,fingerprint,contributors,invalidated_at,generation FROM team_weekly_publications WHERE organization_id=$1 AND week_start=$2", &[&org,&week]).await?;
         if rows.iter().any(|r| {
             r.get::<_, Option<DateTime<Utc>>>("invalidated_at")
@@ -229,9 +295,25 @@ impl TeamTrustRepository {
                 }
             }
         }
+        let timezone: String = tx
+            .query_opt(
+                "SELECT timezone FROM team_report_policies WHERE organization_id=$1",
+                &[&org],
+            )
+            .await?
+            .map_or_else(|| "Asia/Bangkok".into(), |r| r.get(0));
+        let range = crate::model::date_range::ResolvedRange::parse(
+            &week.to_string(),
+            &(week + chrono::Duration::days(6)).to_string(),
+            Some(&timezone),
+        )
+        .map_err(|_| anyhow::anyhow!("weekly_window_invalid"))?;
+        let (from, to) = range.unix_bounds();
+        let from = DateTime::from_timestamp(from as i64, 0).context("weekly window start")?;
+        let to = DateTime::from_timestamp(to as i64, 0).context("weekly window end")?;
         let membership = facts.map(|f| f.iter().cloned().collect::<Vec<_>>());
         let people = contributors.iter().copied().collect::<Vec<_>>();
-        tx.execute("INSERT INTO team_weekly_publications(organization_id,week_start,view_key,generation,fingerprint,contributors,fact_membership) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING", &[&org,&week,&key,&generation,&fingerprint,&people,&membership]).await?;
+        tx.execute("INSERT INTO team_weekly_publications(organization_id,week_start,view_key,generation,fingerprint,contributors,fact_membership,report_family,window_start,window_end,calculation_version) VALUES($1,$2,$3,$4,$5,$6,$7,'team_weekly_cost',$8,$9,'team-weekly-v1') ON CONFLICT DO NOTHING", &[&org,&week,&key,&generation,&fingerprint,&people,&membership,&from,&to]).await?;
         tx.execute("UPDATE team_report_policies SET locked_at=COALESCE(locked_at,now()) WHERE organization_id=$1", &[&org]).await?;
         tx.commit().await?;
         Ok(true)
@@ -251,21 +333,22 @@ impl TeamTrustRepository {
             serde_json::from_slice::<Registry>(&std::fs::read(path)?)?
         } else {
             Registry {
-                schema_version: 1,
+                schema_version: 2,
                 checked_at: Utc::now(),
                 organizations: BTreeMap::new(),
                 dispositions: vec![],
             }
         };
         ensure!(
-            previous.schema_version == 1,
+            matches!(previous.schema_version, 1 | 2),
             "privacy registry schema unsupported"
         );
         let staging_path = path.with_extension("tmp");
         if staging_path.exists() {
             let candidate: Registry = serde_json::from_slice(&std::fs::read(&staging_path)?)?;
             ensure!(
-                candidate.schema_version == 1
+                matches!(candidate.schema_version, 1 | 2)
+                    && candidate.schema_version >= previous.schema_version
                     && candidate.checked_at >= previous.checked_at
                     && previous.organizations.iter().all(|(org, old)| candidate
                         .organizations
@@ -287,6 +370,18 @@ impl TeamTrustRepository {
             // A crash between fsync and rename must not discard a newer revocation.
             std::fs::rename(&staging_path, path)?;
             previous = candidate;
+        }
+        if previous.schema_version == 1 {
+            // A v1 ledger without Copilot heads cannot establish a published
+            // source history. Require explicit closed restore, never fill proof
+            // from an enabled database and claim the old history was complete.
+            for row in tx.query("SELECT r.organization_id,r.enabled,bool_and(p.invalidated_at IS NOT NULL) FROM team_weekly_publications p JOIN team_rollouts r USING(organization_id) WHERE p.report_family='copilot_daily_weekly' GROUP BY r.organization_id,r.enabled", &[]).await? {
+                let org: Uuid = row.get(0);
+                if previous.organizations.get(&org).is_none_or(|e| e.copilot_sources.is_empty()) {
+                    ensure!(!row.get::<_,bool>(1) && row.get::<_,bool>(2),
+                        "v1 Copilot source history unconfirmed: closed restore reconciliation required");
+                }
+            }
         }
         let live=tx.query("SELECT r.organization_id FROM team_rollouts r JOIN organizations o ON o.id=r.organization_id WHERE o.deleted_at IS NULL ORDER BY r.organization_id FOR UPDATE OF r", &[]).await?;
         let live_ids = live
@@ -339,6 +434,7 @@ impl TeamTrustRepository {
             "webhook disposition registry regressed after restore"
         );
         previous.dispositions = current_dispositions;
+        previous.schema_version = 2;
         previous.checked_at = Utc::now();
         let staging_path = path.with_extension("tmp");
         let bytes = serde_json::to_vec_pretty(&previous)?;
@@ -364,7 +460,7 @@ impl TeamTrustRepository {
     /// Restore always closes sharing first. Old released weeks stay permanently closed.
     pub async fn reconcile_restore(&self, ledger: &Registry) -> Result<()> {
         ensure!(
-            ledger.schema_version == 1
+            matches!(ledger.schema_version, 1 | 2)
                 && (0..=300).contains(
                     &Utc::now()
                         .signed_duration_since(ledger.checked_at)
@@ -395,6 +491,11 @@ impl TeamTrustRepository {
         tx.execute("UPDATE team_github_sync_jobs SET retry_at='infinity',lease_token=NULL,lease_until=NULL,error_code='restore_reauthorization_required' WHERE completed_at IS NULL",&[]).await?;
         tx.execute(
             "UPDATE team_copilot_daily_integrations SET enabled=FALSE",
+            &[],
+        )
+        .await?;
+        tx.execute(
+            "UPDATE team_copilot_day_manifests SET disposition='restore_unconfirmed'",
             &[],
         )
         .await?;
@@ -432,6 +533,10 @@ impl TeamTrustRepository {
             }
             tx.execute("UPDATE team_rollouts SET generation=GREATEST(generation,$2)+1 WHERE organization_id=$1", &[&org,&entry.generation]).await?;
             tx.execute("INSERT INTO team_privacy_markers(organization_id,retention_before) VALUES($1,$2) ON CONFLICT(organization_id) DO UPDATE SET retention_before=GREATEST(team_privacy_markers.retention_before,EXCLUDED.retention_before)", &[&org,&entry.retention_before]).await?;
+            for (day, (revision, fingerprint)) in &entry.copilot_sources {
+                let day = NaiveDate::parse_from_str(day, "%Y-%m-%d")?;
+                tx.execute("INSERT INTO team_copilot_day_manifests(organization_id,day,revision,fingerprint,disposition) VALUES($1,$2,$3,$4,'restore_unconfirmed') ON CONFLICT(organization_id,day) DO UPDATE SET revision=GREATEST(team_copilot_day_manifests.revision,$3),fingerprint=CASE WHEN team_copilot_day_manifests.revision<=$3 THEN $4 ELSE team_copilot_day_manifests.fingerprint END,disposition='restore_unconfirmed'",&[&org,&day,&revision,&fingerprint]).await?;
+            }
             for week in &entry.weeks {
                 tx.execute("INSERT INTO team_weekly_publications(organization_id,week_start,view_key,generation,fingerprint,contributors,invalidated_at) VALUES($1,$2,'restore_barrier',$3,'withheld','{}',now()) ON CONFLICT DO NOTHING", &[&org,&week,&entry.generation]).await?;
             }
@@ -524,18 +629,39 @@ impl TeamTrustRepository {
     let facts=tx.execute("DELETE FROM team_copilot_daily_facts WHERE (organization_id,user_id,installation_id,day,feature) IN(SELECT f.organization_id,f.user_id,f.installation_id,f.day,f.feature FROM team_copilot_daily_facts f LEFT JOIN organization_analytics_consents c ON c.organization_id=f.organization_id AND c.user_id=f.user_id LEFT JOIN organization_members m ON m.organization_id=f.organization_id AND m.user_id=f.user_id WHERE f.organization_id=$1 AND (f.day::timestamp AT TIME ZONE 'UTC'<$2 OR NOT COALESCE(c.share_aggregate,FALSE) OR c.consent_version<>f.consent_version OR m.deactivated_at IS NOT NULL OR m.user_id IS NULL OR f.blocked) AND EXISTS(SELECT 1 FROM team_webhook_dispositions d WHERE d.provider='copilot_daily' AND d.delivery_id=f.organization_id::text||':'||f.user_id::text||':'||f.installation_id::text||':'||f.day::text||':'||f.feature AND d.payload_hash=f.payload_hash) LIMIT 100)",&[&org,&cutoff]).await?;
     tx.execute("UPDATE team_copilot_daily_jobs SET completed_at=now(),error_code='retention_expired',lease_token=NULL,lease_until=NULL WHERE id IN(SELECT id FROM team_copilot_daily_jobs WHERE organization_id=$1 AND day::timestamp AT TIME ZONE 'UTC'<$2 AND completed_at IS NULL AND (lease_until IS NULL OR lease_until<now()) LIMIT 100)",&[&org,&cutoff]).await?;
     let jobs=tx.execute("DELETE FROM team_copilot_daily_jobs WHERE id IN(SELECT id FROM team_copilot_daily_jobs WHERE organization_id=$1 AND day::timestamp AT TIME ZONE 'UTC'<$2 AND completed_at IS NOT NULL LIMIT 100)",&[&org,&cutoff]).await?;
-    facts.max(jobs)
+    let intervals=tx.execute("DELETE FROM team_copilot_membership_intervals WHERE id IN(SELECT id FROM team_copilot_membership_intervals WHERE organization_id=$1 AND valid_to<$2 LIMIT 100)",&[&org,&cutoff]).await?;
+    tx.execute("UPDATE team_weekly_publications SET invalidated_at=COALESCE(invalidated_at,now()),projection=NULL,source_revisions=NULL WHERE organization_id=$1 AND report_family='copilot_daily_weekly' AND window_start<$2",&[&org,&cutoff]).await?;
+    if intervals>0 {tx.execute("SELECT team_bump_generation($1)",&[&org]).await?;}
+    facts.max(jobs).max(intervals)
    },
    _ => 0,
   };
         if phase >= 13 {
             tx.execute("INSERT INTO team_privacy_markers(organization_id,retention_before) VALUES($1,$2) ON CONFLICT(organization_id) DO UPDATE SET retention_before=GREATEST(team_privacy_markers.retention_before,EXCLUDED.retention_before),changed_at=now()", &[&org,&cutoff]).await?;
-            tx.execute("UPDATE team_weekly_publications SET invalidated_at=COALESCE(invalidated_at,now()),contributors='{}',fingerprint='expired' WHERE organization_id=$1 AND week_start<$2::timestamptz::date", &[&org,&cutoff]).await?;
+            tx.execute("UPDATE team_weekly_publications SET invalidated_at=COALESCE(invalidated_at,now()),contributors='{}',fingerprint='expired',projection=NULL,source_revisions=NULL WHERE organization_id=$1 AND week_start<$2::timestamptz::date", &[&org,&cutoff]).await?;
             tx.execute("UPDATE team_cleanup_jobs SET completed_at=$2,cutoff=NULL,phase=0,lease_token=NULL,lease_until=NULL,error_code=NULL WHERE organization_id=$1", &[&org,&now]).await?;
         } else {
             tx.execute("UPDATE team_cleanup_jobs SET phase=phase+$2,lease_token=NULL,lease_until=NULL,error_code=NULL WHERE organization_id=$1", &[&org,&(if count<100 {1}else{0})]).await?;
         }
         tx.commit().await?;
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod registry_schema_tests {
+    #[test]
+    fn v2_requires_source_heads_and_v1_is_upgrade_only() {
+        let org = uuid::Uuid::nil().to_string();
+        let mut ledger = serde_json::json!({"schema_version":1,"checked_at":chrono::Utc::now(),
+            "organizations":{org:{"generation":1,"retention_before":null,"weeks":[],"access_hash":"hash"}}});
+        assert!(serde_json::from_value::<super::Registry>(ledger.clone()).is_ok());
+        ledger["schema_version"] = serde_json::json!(2);
+        assert!(serde_json::from_value::<super::Registry>(ledger.clone()).is_err());
+        ledger["organizations"][uuid::Uuid::nil().to_string()]["copilot_sources"] =
+            serde_json::json!({});
+        assert!(serde_json::from_value::<super::Registry>(ledger.clone()).is_ok());
+        ledger["schema_version"] = serde_json::json!(3);
+        assert!(serde_json::from_value::<super::Registry>(ledger).is_err());
     }
 }

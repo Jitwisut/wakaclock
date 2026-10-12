@@ -46,6 +46,7 @@ use crate::model::profile::{
 };
 use crate::model::report::{CreateReportScheduleRequest, ReportSchedule};
 
+mod copilot_reports;
 mod heartbeat_readback;
 mod team_github;
 mod team_insights;
@@ -393,6 +394,8 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/organizations/:organization_id/integrations/github/authorize", post(team_github::start))
         .route("/organizations/:organization_id/integrations/github/copilot-daily", put(team_github::copilot_configure))
         .route("/organizations/:organization_id/me/github/copilot-daily", get(team_github::copilot_self_day))
+        .route("/organizations/:organization_id/copilot/reports", get(copilot_reports::report))
+        .route("/organizations/:organization_id/copilot/reports/export", get(copilot_reports::export))
         .route("/organizations/:organization_id/integrations/github/installations", get(team_github::installations))
         .route("/organizations/:organization_id/integrations/github/installations/:installation_id/repositories", get(team_github::repositories))
         .route("/organizations/:organization_id/integrations/github/repositories", put(team_github::select))

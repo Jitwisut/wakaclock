@@ -1,0 +1,77 @@
+{
+  "checked_at": "2026-10-12T17:38:00.577923+00:00",
+  "branch": "codex/heartbeat-capture-release",
+  "base_commit": "2c44b16ddff9c6780253338f05e79f03115eddd0",
+  "source_scope": "uncommitted source tree",
+  "os": "Darwin",
+  "os_version": "27.0.1",
+  "architecture": "arm64",
+  "server_library": {
+    "passed": 429,
+    "failed": 0,
+    "ignored": 37
+  },
+  "core_library": {
+    "passed": 404,
+    "failed": 0,
+    "ignored": 2
+  },
+  "frontend_targeted": {
+    "passed": 18,
+    "failed": 0
+  },
+  "strict_clippy_all_targets": "passed",
+  "frontend_typecheck": "passed",
+  "frontend_production_targeted_eslint": "passed; repository intentionally ignores test files",
+  "duration_golden": "pass; unchanged input; total/daily error zero",
+  "idle_1191_regression": {
+    "passed": true,
+    "seconds": 37.25530075,
+    "distinct_ids": 1192
+  },
+  "native_pg_daily_and_registry_regression": "2 passed",
+  "concurrent_read_correction_rollback_final_fence": "passed",
+  "restore": {
+    "checked_at": "2026-10-12T17:29:28.290703+00:00",
+    "base_commit": "2c44b16ddff9c6780253338f05e79f03115eddd0",
+    "source_scope": "uncommitted source tree",
+    "fixture": "synthetic_metadata_only",
+    "postgres_backup_sha256": "59b2756586787c20cc3fb7bc3abeaa6fcc8d72cbaf34d54d40b89081e08fdac5",
+    "restore_to_new_native_instance": "passed",
+    "pre_revocation_restore_read_denied": "passed",
+    "regressed_registry_export_denied": "passed",
+    "reconciled_rollout_integration_and_read_closed": "passed",
+    "accepted_facts_preserved_and_blocked": "passed",
+    "instances_simultaneously_active": 1,
+    "docker_started": false,
+    "clickhouse_changed": false,
+    "cloud_or_live_certified": false,
+    "local_service_performance": {
+      "days": 90,
+      "facts": 9000,
+      "maximum_microseconds": 1601026,
+      "members": 100,
+      "p95_microseconds": 1567233,
+      "samples": 20,
+      "scope": "native PostgreSQL service with JSON/CSV and final fence; no HTTP/browser/load concurrency"
+    },
+    "source_sha256": {
+      "backend/api/migrations/postgres/037_team_copilot_reports.sql": "793e2875d4dc08012c53619f6cac7d2210eca2c02a831041929430010cd19b03",
+      "backend/api/src/repository/copilot_reports.rs": "91beb14036e3eb0ad940febf7f104dd0854600e866fdd807cdfe0d0f3227fa1e",
+      "backend/api/src/repository/team_trust.rs": "4b423fbb6d06716883b99f67726ae49fe33c5b43136111880ebdacc04a2a0560"
+    }
+  },
+  "source_sha256": {
+    "backend/api/migrations/postgres/037_team_copilot_reports.sql": "793e2875d4dc08012c53619f6cac7d2210eca2c02a831041929430010cd19b03",
+    "backend/api/src/repository/copilot_reports.rs": "91beb14036e3eb0ad940febf7f104dd0854600e866fdd807cdfe0d0f3227fa1e",
+    "backend/api/src/services/copilot_reports.rs": "405f1b57321d087378b0be6d2c29cb4f8f44821781ab0560f85fc1344180e610",
+    "backend/api/src/repository/team_trust.rs": "4b423fbb6d06716883b99f67726ae49fe33c5b43136111880ebdacc04a2a0560",
+    "backend/api/src/repository/copilot_reports_tests.rs": "1fed06495a4d08f505c9a75a1fa6f57405b9c3794bf0814f3eed0bd78be01c38",
+    "backend/api/src/handlers/v2/copilot_reports.rs": "704a224b297e788b4229b8ed00d31d7b232a27351a84b886d699f08d517110a7",
+    "frontend/app/app/dashboard/(auth)/wakaclock/teams/components/copilot-weekly-panel.tsx": "92421fc3f8bc73d97bddb297d4935f30fda5adbc3c161b96a8ee98d6ddea725f"
+  },
+  "external_gates": "GitHub live payload/configuration, actual HTTP/UI/CSV certification, concurrent staging performance and Cloud restore pending",
+  "docker_started": false,
+  "owned_postgresql_running": false,
+  "production_ready": false
+}

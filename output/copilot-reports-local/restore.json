@@ -1,0 +1,30 @@
+{
+  "checked_at": "2026-10-12T17:29:28.290703+00:00",
+  "base_commit": "2c44b16ddff9c6780253338f05e79f03115eddd0",
+  "source_scope": "uncommitted source tree",
+  "fixture": "synthetic_metadata_only",
+  "postgres_backup_sha256": "59b2756586787c20cc3fb7bc3abeaa6fcc8d72cbaf34d54d40b89081e08fdac5",
+  "restore_to_new_native_instance": "passed",
+  "pre_revocation_restore_read_denied": "passed",
+  "regressed_registry_export_denied": "passed",
+  "reconciled_rollout_integration_and_read_closed": "passed",
+  "accepted_facts_preserved_and_blocked": "passed",
+  "instances_simultaneously_active": 1,
+  "docker_started": false,
+  "clickhouse_changed": false,
+  "cloud_or_live_certified": false,
+  "local_service_performance": {
+    "days": 90,
+    "facts": 9000,
+    "maximum_microseconds": 1601026,
+    "members": 100,
+    "p95_microseconds": 1567233,
+    "samples": 20,
+    "scope": "native PostgreSQL service with JSON/CSV and final fence; no HTTP/browser/load concurrency"
+  },
+  "source_sha256": {
+    "backend/api/migrations/postgres/037_team_copilot_reports.sql": "793e2875d4dc08012c53619f6cac7d2210eca2c02a831041929430010cd19b03",
+    "backend/api/src/repository/copilot_reports.rs": "91beb14036e3eb0ad940febf7f104dd0854600e866fdd807cdfe0d0f3227fa1e",
+    "backend/api/src/repository/team_trust.rs": "4b423fbb6d06716883b99f67726ae49fe33c5b43136111880ebdacc04a2a0560"
+  }
+}
