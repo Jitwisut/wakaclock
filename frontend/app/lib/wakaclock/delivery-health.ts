@@ -1,5 +1,5 @@
-import { assessPipeline, healthRank } from '@/lib/wakaclock/pipeline-health';
 import type { DeliveryStatusResponse } from '@/lib/wakaclock/measurement-types';
+import { assessPipeline, healthRank } from '@/lib/wakaclock/pipeline-health';
 
 export interface DeliveryHealth {
   deadLetter: number;
@@ -11,6 +11,8 @@ export interface DeliveryHealth {
 
 /** A successful new send is separate from a fully reconciled queue. Missing v2
  * details and old snapshots cannot establish completeness. */
+// Each branch is one ordered delivery/pipeline signal; splitting it would obscure the precedence.
+// eslint-disable-next-line sonarjs/cognitive-complexity
 export function deliveryHealth(
   data: DeliveryStatusResponse | undefined,
   unavailable = false,
@@ -171,7 +173,7 @@ export function deliveryHealth(
   for (const device of devices) {
     const pipeline = assessPipeline(device.capture?.pipeline, now);
     if (healthRank[pipeline.state] > healthRank[state]) {
-      state = pipeline.state;
+      ({ state } = pipeline);
       message = pipeline.stage
         ? `${pipeline.stage.adapter_id}/${pipeline.stage.execution_surface} ${pipeline.stage.stage}: ${pipeline.stage.status}. Data completeness remains unconfirmed.`
         : 'Context and pipeline details are unavailable. Update/check the local client.';
