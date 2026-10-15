@@ -180,13 +180,8 @@ impl TeamInsightsService {
         );
         let trust = crate::repository::team_trust::TeamTrustRepository::new(repo.postgres.clone());
         let timezone = trust.policy(org).await?;
-        crate::services::team_trust::validate_week(&range, &timezone, Utc::now()).map_err(
-            |_| {
-                TeamError::Invalid(
-                    "request one closed Monday-Sunday week in the organization timezone",
-                )
-            },
-        )?;
+        crate::services::team_trust::validate_week(&range, &timezone, Utc::now())
+            .map_err(TeamError::Invalid)?;
         let (from, to) = range.unix_bounds();
         anyhow::ensure!(
             from >= 0.0 && to <= u32::MAX as f64,

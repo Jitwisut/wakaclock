@@ -11,12 +11,13 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | --- | --- | --- |
 | `JWT_SECRET` | **yes** | Server refuses to start without it unless `ALLOW_INSECURE_JWT_SECRET=1`. |
 | `ALLOW_INSECURE_JWT_SECRET` | no | `1`/`true` permits a hardcoded dev secret. Local only — every session it issues is forgeable. |
-| `CLICKHOUSE_URL` | yes | Primary datastore. |
+| `CLICKHOUSE_URL` | yes | Primary datastore. The server does not create the database: it must already exist (docker-compose creates `wakaclock` via `CLICKHOUSE_DB`), or startup fails with `UNKNOWN_DATABASE`. |
 | `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` | no | |
 | `CLICKHOUSE_DATABASE` / `CLICKHOUSE_DB` | no | Both names are read; defaults exist. |
 | `POSTGRES_URL` | no | Absent ⇒ `AppState.postgres` is `None` and Phase 10 org/billing paths degrade. |
 | `ATOAXIS_TEAM_PRIVACY_LEDGER_PATH` | Team reads/worker | Absolute path to shared independent privacy registry outside database backups; missing/stale fails closed. |
-| `ATOAXIS_COPILOT_DAILY_ENABLED` | no | Explicit opt-in for separate GitHub Copilot provider-day counters. Defaults off; requires existing installation permissions and Team rollout/consent. No session, token or PR cost inference. |
+| `ATOAXIS_COPILOT_DAILY_ENABLED` | no | Explicit opt-in for separate GitHub Copilot provider-day counters. Defaults off; accepts `1`/`true`/`on`, and an unrecognised value refuses startup. Requires existing installation permissions and Team rollout/consent. No session, token or PR cost inference. |
+| `ATOAXIS_COPILOT_WEEKLY_ENABLED` | no | Opt-in for privacy-safe UTC weekly Copilot reports/CSV; also needs `ATOAXIS_COPILOT_DAILY_ENABLED` and Team enabled for the organization. Accepts `1`/`true`/`on`; an unrecognised value refuses startup. |
 | `ATOAXIS_BUILD_REVISION` | build metadata | Compile-time revision for Team readiness; unset is unavailable, never inferred from runtime checkout. |
 | `POSTGRES_MAX_CONNECTIONS` | no | |
 | `DATABASE_URL` | no | Also read; overlaps with `POSTGRES_URL` — `Unknown / Needs verification` which wins. |
@@ -46,7 +47,7 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `ATOAXIS_JOB_RENEW_SECONDS` | no | Lease renewal interval; defaults to `60`. |
 | `ATOAXIS_JOB_SHUTDOWN_SECONDS` | no | Grace period for in-flight jobs during shutdown; defaults to `30`. |
 | `ATOAXIS_JOB_WORKER_HEALTH_HOST`, `ATOAXIS_JOB_WORKER_HEALTH_PORT` | no | Worker liveness/readiness listener; defaults to `0.0.0.0:8081`. |
-| `ATOAXIS_REDIS_URL` | no | Redis-compatible cache/lock provider. |
+| `REDIS_URL` | Presence v2 | Redis (`redis://` or `rediss://`) used by Presence v2; required when `PRESENCE_V2_ENABLED=true`. `ATOAXIS_REDIS_URL` is not read by the server. |
 | `ATOAXIS_OBJECT_STORE_S3_ENDPOINT`, `ATOAXIS_OBJECT_STORE_S3_BUCKET` | no | Together enable the S3-compatible export artifact store; endpoint must be HTTPS in non-local deployments. A partial configuration refuses startup. |
 | `ATOAXIS_OBJECT_STORE_S3_REGION` | no | SigV4 region; defaults to `us-east-1` when the object store is configured. |
 | `ATOAXIS_OBJECT_STORE_S3_ACCESS_KEY`, `ATOAXIS_OBJECT_STORE_S3_SECRET_KEY` | no | Required with the S3 endpoint/bucket; never logged or committed. |

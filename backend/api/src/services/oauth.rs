@@ -31,6 +31,32 @@ pub const SUPPORTED_SCOPES: &[&str] = &[
     "export_data",
 ];
 
+/// A client mistake in an OAuth request, carrying its RFC 6749 error code. Handlers
+/// answer it with 400; anything else is a server-side failure.
+#[derive(Debug)]
+pub struct OAuthRequestError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl OAuthRequestError {
+    fn error(code: &'static str, message: impl Into<String>) -> anyhow::Error {
+        Self {
+            code,
+            message: message.into(),
+        }
+        .into()
+    }
+}
+
+impl std::fmt::Display for OAuthRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for OAuthRequestError {}
+
 #[derive(Debug, Serialize)]
 pub struct RegisteredApp {
     pub client_id: String,
@@ -253,7 +279,7 @@ impl OAuthService {
             )
             .await
             .context("failed to resolve OAuth application")?
-            .ok_or_else(|| anyhow!("unknown OAuth client_id"))?;
+            .ok_or_else(|| OAuthRequestError::error("invalid_client", "unknown OAuth client_id"))?;
         let app_id: Uuid = app.get("id");
         let redirect_exists = postgres
             .client()
@@ -265,10 +291,16 @@ impl OAuthService {
             .context("failed to validate OAuth redirect URI")?
             .is_some();
         if !redirect_exists {
-            return Err(anyhow!("redirect_uri is not registered"));
+            return Err(OAuthRequestError::error(
+                "invalid_request",
+                "redirect_uri is not registered",
+            ));
         }
         if code_challenge.is_none() || code_challenge_method != Some("S256") {
-            return Err(anyhow!("authorization code flow requires PKCE S256"));
+            return Err(OAuthRequestError::error(
+                "invalid_request",
+                "authorization code flow requires PKCE S256",
+            ));
         }
 
         let code = auth::generate_key();
@@ -524,7 +556,7 @@ impl OAuthService {
             )
             .await
             .context("failed to resolve OAuth device client")?
-            .ok_or_else(|| anyhow!("unknown OAuth client_id"))?;
+            .ok_or_else(|| OAuthRequestError::error("invalid_client", "unknown OAuth client_id"))?;
         let is_confidential: bool = app.get("is_confidential");
         if is_confidential {
             return Err(anyhow!("OAuth device flow requires a public client"));
@@ -688,13 +720,19 @@ impl OAuthService {
 
 fn validate_scopes(scopes: &[String]) -> Result<()> {
     if scopes.is_empty() {
-        return Err(anyhow!("at least one OAuth scope is required"));
+        return Err(OAuthRequestError::error(
+            "invalid_scope",
+            "at least one OAuth scope is required",
+        ));
     }
     if let Some(scope) = scopes
         .iter()
         .find(|scope| !SUPPORTED_SCOPES.contains(&scope.as_str()))
     {
-        return Err(anyhow!("unsupported OAuth scope: {scope}"));
+        return Err(OAuthRequestError::error(
+            "invalid_scope",
+            format!("unsupported OAuth scope: {scope}"),
+        ));
     }
     Ok(())
 }
@@ -762,7 +800,9 @@ mod tests {
     #[test]
     fn unsupported_scope_is_rejected() {
         assert!(validate_scopes(&["read_stats".to_string()]).is_ok());
-        assert!(validate_scopes(&["admin".to_string()]).is_err());
+        let error = validate_scopes(&["admin".to_string()]).unwrap_err();
+        let request = error.downcast_ref::<OAuthRequestError>().unwrap();
+        assert_eq!(request.code, "invalid_scope");
     }
 
     #[test]

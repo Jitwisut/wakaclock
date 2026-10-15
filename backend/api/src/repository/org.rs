@@ -116,8 +116,8 @@ impl OrgRepository {
             .get_client()
             .query(
                 "SELECT o.org_id, o.name, o.owner_user_id, o.created_at, o.updated_at
-                 FROM wakaclock.orgs FINAL AS o
-                 INNER JOIN wakaclock.org_members FINAL AS m ON m.org_id = o.org_id
+                 FROM wakaclock.orgs AS o FINAL
+                 INNER JOIN wakaclock.org_members AS m FINAL ON m.org_id = o.org_id
                  WHERE m.user_id = ?
                  ORDER BY o.created_at ASC",
             )
@@ -127,5 +127,42 @@ impl OrgRepository {
             .map_err(|e| anyhow::anyhow!("ClickHouse query error: {e}"))?;
 
         Ok(rows)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires an isolated ClickHouse 24.10 instance via CLICKHOUSE_TEST_URL"]
+    async fn list_for_user_parses_and_returns_member_orgs() {
+        let clickhouse = crate::test_support::clickhouse_client().await;
+        let repo = OrgRepository::new(clickhouse);
+        repo.migrate().await.unwrap();
+        let (org_id, user_id) = (Uuid::new_v4(), Uuid::new_v4());
+        repo.insert_org(&OrgRow {
+            org_id,
+            name: "regression".into(),
+            owner_user_id: user_id,
+            created_at: 1,
+            updated_at: 1,
+        })
+        .await
+        .unwrap();
+        repo.upsert_member(&OrgMemberRow {
+            org_id,
+            user_id,
+            role: "owner".into(),
+            joined_at: 1,
+            updated_at: 1,
+        })
+        .await
+        .unwrap();
+
+        let orgs = repo.list_for_user(user_id).await.unwrap();
+        assert_eq!(orgs.len(), 1);
+        assert_eq!(orgs[0].org_id, org_id);
+        assert!(repo.list_for_user(Uuid::new_v4()).await.unwrap().is_empty());
     }
 }
