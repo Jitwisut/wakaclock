@@ -24,9 +24,9 @@ import {
   ORGANIZATIONS_QUERY_KEY,
 } from './components/organization-invites';
 import { OrganizationTeamsPanel } from './components/organization-teams-panel';
+import { TeamGithubPanel } from './components/team-github-panel';
 import { TeamInsightsPanel } from './components/team-insights-panel';
 import { TeamTrustPanel } from './components/team-trust-panel';
-import { TeamGithubPanel } from './components/team-github-panel';
 
 function OrganizationCard({ organization }: { organization: Organization }) {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';

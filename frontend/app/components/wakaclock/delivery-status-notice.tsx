@@ -11,7 +11,7 @@ import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 // Shared across Overview/Heartbeats navigation; unchanged poll results do not
 // create another notification. A recovery dismisses the previous warning.
-const lastStates = new Map<string, { state: string; key: string }>();
+const lastStates = new Map<string, { key: string; state: string }>();
 export function DeliveryStatusNotice() {
   const health = useDeliveryHealth();
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
@@ -83,10 +83,10 @@ export function DeliveryStatusNotice() {
           {device.capture?.editor_journal?.pending ?? 'unknown'}
           {' · context/pipeline '}
           {device.capture?.pipeline
-            ?.map(
-              (stage) =>
-                `${stage.adapter_id}/${stage.execution_surface} ${stage.stage}: ${stage.status}, pending ${stage.pending ?? 'unknown'}${stage.error_code ? ` (${stage.error_code})` : ''}`
-            )
+            ?.map((stage) => {
+              const error = stage.error_code ? ` (${stage.error_code})` : '';
+              return `${stage.adapter_id}/${stage.execution_surface} ${stage.stage}: ${stage.status}, pending ${stage.pending ?? 'unknown'}${error}`;
+            })
             .join(' · ') ?? 'details unavailable'}
           {' · ready '} {device.details?.eligible ?? 'unknown'} · leased{' '}
           {device.details?.leased ?? 'unknown'}

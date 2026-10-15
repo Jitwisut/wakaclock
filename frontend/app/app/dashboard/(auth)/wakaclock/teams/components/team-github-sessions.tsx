@@ -1,7 +1,6 @@
 'use client';
 
 import * as React from 'react';
-import { SessionRepositoryBinding } from './session-repository-binding';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -10,6 +9,8 @@ import { QueryState } from '@/components/wakaclock/query-state';
 import * as github from '@/lib/wakaclock/github-endpoints';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+
+import { SessionRepositoryBinding } from './session-repository-binding';
 
 export function TeamGithubSessions({ organizationId }: { organizationId: string }) {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
