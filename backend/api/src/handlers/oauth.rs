@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
-use crate::services::oauth::{DEFAULT_SCOPES, SUPPORTED_SCOPES};
+use crate::services::oauth::{OAuthRequestError, DEFAULT_SCOPES, SUPPORTED_SCOPES};
 
 #[derive(Debug, Deserialize)]
 pub struct AuthorizeQuery {
@@ -374,7 +374,18 @@ impl OAuthError {
         }
     }
 
+    fn from_request(error: &OAuthRequestError) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: error.code,
+            message: error.message.clone(),
+        }
+    }
+
     fn invalid_grant(error: anyhow::Error) -> Self {
+        if let Some(request) = error.downcast_ref::<OAuthRequestError>() {
+            return Self::from_request(request);
+        }
         Self {
             status: StatusCode::BAD_REQUEST,
             code: "invalid_grant",
@@ -383,6 +394,9 @@ impl OAuthError {
     }
 
     fn service_unavailable(error: anyhow::Error) -> Self {
+        if let Some(request) = error.downcast_ref::<OAuthRequestError>() {
+            return Self::from_request(request);
+        }
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             code: "temporarily_unavailable",
@@ -406,6 +420,9 @@ impl OAuthError {
     }
 
     fn bad_request_or_service(error: anyhow::Error) -> Self {
+        if let Some(request) = error.downcast_ref::<OAuthRequestError>() {
+            return Self::from_request(request);
+        }
         let message = error.to_string();
         if message.contains("required") || message.contains("redirect URI") {
             Self::bad_request(message)
@@ -425,5 +442,24 @@ impl IntoResponse for OAuthError {
             })),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_request_errors_are_400_not_service_failures() {
+        let unknown = anyhow::Error::from(OAuthRequestError {
+            code: "invalid_client",
+            message: "unknown OAuth client_id".into(),
+        });
+        let error = OAuthError::service_unavailable(unknown);
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.code, "invalid_client");
+
+        let outage = OAuthError::service_unavailable(anyhow::anyhow!("database down"));
+        assert_eq!(outage.status, StatusCode::SERVICE_UNAVAILABLE);
     }
 }

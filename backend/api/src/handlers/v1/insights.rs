@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::infrastructure::app::AppState;
 use crate::middleware::auth;
 use crate::model::insights::InsightsResponse;
+use crate::services::insights::InvalidInsightsRequest;
 
 #[derive(Debug, Deserialize)]
 pub struct InsightsQuery {
@@ -32,7 +33,14 @@ pub async fn get(
             query.timezone.as_deref(),
         )
         .await
-        .map_err(|error| app_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
+        .map_err(|error| {
+            let status = if error.downcast_ref::<InvalidInsightsRequest>().is_some() {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            app_error(status, &error.to_string())
+        })?;
 
     Ok(Json(response))
 }

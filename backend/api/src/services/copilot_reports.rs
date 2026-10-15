@@ -9,10 +9,7 @@ use uuid::Uuid;
 pub const VERSION: &str = "copilot-weekly-v1";
 pub fn enabled() -> bool {
     super::copilot_daily::enabled()
-        && std::env::var("ATOAXIS_COPILOT_WEEKLY_ENABLED")
-            .ok()
-            .as_deref()
-            == Some("1")
+        && crate::config::opt_in_env_flag("ATOAXIS_COPILOT_WEEKLY_ENABLED")
 }
 pub fn week(
     start: NaiveDate,

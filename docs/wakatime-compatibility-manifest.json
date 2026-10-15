@@ -409,7 +409,7 @@
       "path": "/api/v1/users/current/data_dumps",
       "pattern": "/users/current/data_dumps",
       "section": "Data Dumps",
-      "status": "beta",
+      "status": "partial",
       "owner": "api-platform",
       "authorization": [
         "api_key_basic",
@@ -420,7 +420,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Routed; returns 503 unless ATOAXIS_EXPORT_MODE=job with PostgreSQL, the job queue, the export worker and an S3 object store."
     },
     {
       "method": "GET",
@@ -1291,7 +1291,7 @@
       "path": "/api/v1/users/current/leaderboards",
       "pattern": "/users/current/leaderboards",
       "section": "Private Leaderboards",
-      "status": "beta",
+      "status": "partial",
       "owner": "api-platform",
       "authorization": [
         "api_key_basic",
@@ -1302,7 +1302,7 @@
       "pagination": "wakatime_page_and_limit",
       "date_format": "ISO-8601",
       "rate_limit_headers": true,
-      "notes": "Covered by the current compatibility router; contract tests still gate production readiness."
+      "notes": "Routed, but private_leaderboards is closed in this build: every request returns 503 until the runtime feature is enabled."
     },
     {
       "method": "GET",
