@@ -1,0 +1,114 @@
+# AtoAxis production runtime with Kafka and RabbitMQ always on.
+#
+# Every process reads the same `.env` (copy `.env.example`; `.env` is git-ignored).
+# Data stores and brokers are managed services outside this file: PostgreSQL,
+# ClickHouse, Redis, Kafka (SASL + TLS), RabbitMQ (amqps) and S3.
+# The API refuses to boot when a broker mode is set without its dependency, so a
+# missing URL or cohort fails the deploy instead of silently falling back.
+# Rollout order (verify → kafka cohort → all) is in README.md.
+name: atoaxis-production
+
+x-backend: &backend
+  image: ${ATOAXIS_IMAGE:-atoaxis-backend:local}
+  build:
+    context: ../../backend/api
+  env_file: .env
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *backend
+    ports: ["127.0.0.1:8080:8080"]
+
+  # Kafka heartbeat fact-sink: ATOAXIS_INGEST_MODE=kafka writes through this consumer.
+  heartbeat-enrichment:
+    <<: *backend
+    entrypoint: ["/usr/local/bin/heartbeat-enrichment"]
+    environment:
+      KAFKA_CONSUMER_HEALTH_PORT: "8082"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8082/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # AI usage Kafka fact-sink: ATOAXIS_AI_USAGE_INGEST_MODE=kafka.
+  ai-usage-ingest:
+    <<: *backend
+    entrypoint: ["/usr/local/bin/ai-usage-ingest"]
+    environment:
+      AI_USAGE_CONSUMER_HEALTH_PORT: "8084"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8084/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # RabbitMQ outbox relay and job processors (reprocess and other `job` modes).
+  job-worker:
+    <<: *backend
+    entrypoint: ["/usr/local/bin/job-worker"]
+    environment:
+      ATOAXIS_JOB_WORKER_HEALTH_PORT: "8081"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8081/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # `ai.session.reconcile` jobs; AI usage kafka mode requires the job queue for them.
+  ai-session-worker:
+    <<: *backend
+    entrypoint: ["/usr/local/bin/ai-session-worker"]
+    environment:
+      AI_SESSION_WORKER_HEALTH_PORT: "8085"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8085/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  projection-worker:
+    <<: *backend
+    entrypoint: ["/usr/local/bin/projection-worker"]
+    environment:
+      PROJECTION_WORKER_HEALTH_PORT: "8086"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8086/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  export-worker:
+    <<: *backend
+    entrypoint: ["/usr/local/bin/export-worker"]
+    environment:
+      EXPORT_WORKER_HEALTH_PORT: "8082"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8082/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  account-deletion:
+    <<: *backend
+    entrypoint: ["/usr/local/bin/account-deletion"]
+    environment:
+      ACCOUNT_DELETION_WORKER_HEALTH_PORT: "8087"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8087/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Rollout-only shadow verifiers. Start them with `--profile verify` while the
+  # ingest modes are `verify`; stop them once both modes are `kafka`.
+  heartbeat-verifier:
+    <<: *backend
+    profiles: ["verify"]
+    entrypoint: ["/usr/local/bin/heartbeat-verifier"]
+
+  ai-usage-verifier:
+    <<: *backend
+    profiles: ["verify"]
+    entrypoint: ["/usr/local/bin/ai-usage-verifier"]
