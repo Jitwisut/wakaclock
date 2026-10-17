@@ -28,6 +28,7 @@ export function useStoryScroll(root: RefObject<HTMLElement | null>) {
     gsap.registerPlugin(ScrollTrigger);
     const chapters = [...element.querySelectorAll<HTMLElement>('[data-chapter]')];
     const progress = chapters.map(() => 0);
+    let lastDusk = '';
 
     const publish = () => {
       let g = 0;
@@ -36,7 +37,16 @@ export function useStoryScroll(root: RefObject<HTMLElement | null>) {
       // a jump (restoration, anchor, keyboard Home/End), not motion to animate through.
       if (Math.abs(g - motion.target) > 0.6) motion.teleport = true;
       motion.target = g;
-      element.style.setProperty('--axx-g', g.toFixed(4));
+      // Every colour token derives from dusk, so rewriting it restyles and repaints the
+      // whole experience. Only write when the rounded value changes: never in daylight.
+      const dusk = Math.min(
+        Math.min(Math.max((g - 1.62) / 0.28, 0), 1),
+        Math.min(Math.max((3.3 - g) / 0.35, 0), 1)
+      ).toFixed(2);
+      if (dusk !== lastDusk) {
+        lastDusk = dusk;
+        element.style.setProperty('--axx-dusk', dusk);
+      }
       const chapter = chapterAt(g);
       // Drives the reading veil: which side of the backdrop gives way to text.
       if (element.dataset.active !== String(chapter)) element.dataset.active = String(chapter);

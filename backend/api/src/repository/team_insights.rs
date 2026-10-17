@@ -158,7 +158,8 @@ impl TeamInsightsRepository {
         })
     }
 
-    /// FINAL resolves corrections before event time/project filtering. Never resurrect an old revision.
+    /// Resolve the logical (user, event) identity across physical date keys before
+    /// applying time/retention filters. Choose the whole latest row, preserving nulls.
     pub async fn facts(&self, users: &[Uuid], from: u32, to: u32) -> Result<Vec<AiUsageEventRow>> {
         if users.is_empty() {
             return Ok(vec![]);
@@ -169,7 +170,8 @@ impl TeamInsightsRepository {
              ai_agent, ai_provider, ai_model, prompt_count, prompt_character_count,
              input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
              estimated_cost_microusd, pricing_version, token_source, version, received_at
-             FROM (SELECT * FROM wakaclock.ai_usage_events FINAL WHERE user_id IN ?)
+             FROM (SELECT * FROM wakaclock.ai_usage_events FINAL WHERE user_id IN ?
+                   ORDER BY user_id, usage_event_id, version DESC LIMIT 1 BY user_id, usage_event_id)
              WHERE event_time >= ? AND event_time < ? ORDER BY event_time, user_id, usage_event_id LIMIT 100001")
             .bind(users).bind(from).bind(to).fetch_all::<AiUsageEventRow>().await
             .context("Team canonical usage query unavailable")?;

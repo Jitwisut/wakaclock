@@ -153,6 +153,10 @@ impl AccountDeletionService {
         let mut client = postgres.transaction_client().await?;
         let tx = client.transaction().await?;
         PostgresClient::account_activity_transaction_lock(&tx, account_id).await?;
+        // Capture before deactivation lets the cleanup worker remove workflow
+        // metadata without erasing the request's independent proof obligation.
+        tx.query_one("SELECT pg_advisory_xact_lock(74103031)", &[])
+            .await?;
 
         // The row is the idempotency boundary for the destructive operation. A
         // repeated request returns the original system job rather than creating a
@@ -224,6 +228,7 @@ impl AccountDeletionService {
         if !is_active || deleted_at.is_some() {
             anyhow::bail!("account is already unavailable for deletion");
         }
+        let team_proof_required = team_action_deletion_required(&tx, account_id).await?;
 
         tx.execute(
             "UPDATE users
@@ -253,9 +258,9 @@ impl AccountDeletionService {
         .await
         .context("disable account ingest access")?;
         tx.execute(
-            "INSERT INTO account_deletion_requests (account_id, status)
-             VALUES ($1, 'requested')",
-            &[&account_id],
+            "INSERT INTO account_deletion_requests (account_id, status,team_action_ledger_required)
+             VALUES ($1, 'requested',$2)",
+            &[&account_id, &team_proof_required],
         )
         .await
         .context("create account deletion request")?;
@@ -331,7 +336,7 @@ impl AccountDeletionService {
     ) -> Result<Value> {
         let request = connection
             .query_opt(
-                "SELECT status, async_job_id
+                "SELECT status, async_job_id, postgres_purged_at
                    FROM account_deletion_requests
                   WHERE account_id = $1",
                 &[&account_id],
@@ -347,6 +352,23 @@ impl AccountDeletionService {
         }
         if !matches!(status.as_str(), "requested" | "running") {
             anyhow::bail!("account deletion is not executable");
+        }
+        if request
+            .get::<_, Option<chrono::DateTime<chrono::Utc>>>("postgres_purged_at")
+            .is_some()
+        {
+            lease.ensure_active()?;
+            let result = finish_postgres_deletion(
+                self.postgres
+                    .as_ref()
+                    .context("PostgreSQL unavailable")?
+                    .clone(),
+                connection,
+                account_id,
+            )
+            .await?;
+            lease.ensure_active()?;
+            return Ok(result);
         }
 
         let user = connection
@@ -500,6 +522,11 @@ impl AccountDeletionService {
         )
         .await
         .context("purge PostgreSQL AI usage identities")?;
+        // Serialize the dependency snapshot with workflow writes and restores,
+        // so every tombstone emitted by the following DELETE requires export.
+        tx.query_one("SELECT pg_advisory_xact_lock(74103031)", &[])
+            .await?;
+        let team_action_proof = team_action_deletion_required(&tx, account_id).await?;
         tx.execute(
             "DELETE FROM users WHERE id = $1 AND is_active = FALSE AND deleted_at IS NOT NULL",
             &[&account_id],
@@ -515,22 +542,29 @@ impl AccountDeletionService {
         });
         tx.execute(
             "UPDATE account_deletion_requests
-             SET status = 'succeeded', finished_at = now(), error_code = NULL, verification = $2
+             SET postgres_purged_at = now(), team_action_ledger_required=team_action_ledger_required OR $3, verification = $2
              WHERE account_id = $1",
-            &[&account_id, &verification],
+            &[&account_id, &verification, &team_action_proof],
         )
         .await
-        .context("mark account deletion succeeded")?;
-        insert_audit(&tx, account_id, "finalize", "succeeded", &verification).await?;
+        .context("checkpoint PostgreSQL deletion awaiting Team proof")?;
+        insert_audit(&tx, account_id, "postgres", "purged", &verification).await?;
         tx.commit()
             .await
             .context("commit final account deletion transaction")?;
 
-        Ok(json!({
-            "deleted": true,
-            "objects_purged": object_keys.len(),
-            "clickhouse_tables": clickhouse.tables,
-        }))
+        lease.ensure_active()?;
+        let result = finish_postgres_deletion(
+            self.postgres
+                .as_ref()
+                .context("PostgreSQL unavailable")?
+                .clone(),
+            connection,
+            account_id,
+        )
+        .await?;
+        lease.ensure_active()?;
+        Ok(result)
     }
 
     async fn account_object_keys(
@@ -692,6 +726,61 @@ struct UnknownClickHouseUserTable {
     table: String,
 }
 
+/// Resume after the PostgreSQL commit, including when the user no longer exists.
+/// Called under the account activity lock. No transaction stays open during disk
+/// export; an export failure keeps the request running and retryable.
+pub(crate) async fn team_action_deletion_required(
+    tx: &tokio_postgres::Transaction<'_>,
+    account_id: Uuid,
+) -> Result<bool> {
+    Ok(tx.query_one("SELECT EXISTS(SELECT 1 FROM team_action_account_proof_requirements WHERE account_id=$1) OR EXISTS(SELECT 1 FROM team_improvement_actions a WHERE a.owner_id=$1 OR a.created_by=$1 OR a.changed_by=$1) OR EXISTS(SELECT 1 FROM team_improvement_action_history h WHERE h.changed_by=$1 OR h.snapshot->>'owner_id'=$1::uuid::text OR h.snapshot->>'created_by'=$1::uuid::text OR h.snapshot->>'changed_by'=$1::uuid::text)",&[&account_id]).await?.get(0))
+}
+pub(crate) async fn finish_postgres_deletion(
+    postgres: Arc<PostgresClient>,
+    connection: &mut deadpool_postgres::ClientWrapper,
+    account_id: Uuid,
+) -> Result<Value> {
+    let row=connection.query_one("SELECT status,postgres_purged_at,team_action_ledger_required,verification FROM account_deletion_requests WHERE account_id=$1",&[&account_id]).await?;
+    let status: String = row.get(0);
+    if status == "succeeded" {
+        return Ok(json!({"deleted":true,"already_completed":true}));
+    }
+    anyhow::ensure!(
+        matches!(status.as_str(), "requested" | "running")
+            && row
+                .get::<_, Option<chrono::DateTime<chrono::Utc>>>(1)
+                .is_some(),
+        "PostgreSQL deletion checkpoint required"
+    );
+    anyhow::ensure!(
+        !connection
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)",
+                &[&account_id]
+            )
+            .await?
+            .get::<_, bool>(0),
+        "account row still present"
+    );
+    let required: bool = row.get::<_,bool>(2)||connection.query_one("SELECT EXISTS(SELECT 1 FROM team_action_account_proof_requirements WHERE account_id=$1)",&[&account_id]).await?.get::<_,bool>(0);
+    let mut verification: Value = row.get(3);
+    if required {
+        let path = std::env::var("ATOAXIS_TEAM_PRIVACY_LEDGER_PATH")
+            .context("Team deletion proof storage unavailable")?;
+        crate::repository::team_trust::TeamTrustRepository::new(postgres)
+            .export_registry(std::path::Path::new(&path))
+            .await
+            .context("persist independent Team deletion proof")?;
+        verification["team_action_ledger"] = json!("durable");
+    }
+    let tx = connection.transaction().await?;
+    tx.execute("UPDATE account_deletion_requests SET status='succeeded',finished_at=now(),error_code=NULL,verification=$2,team_action_ledger_required=team_action_ledger_required OR $3 WHERE account_id=$1 AND postgres_purged_at IS NOT NULL AND status IN ('requested','running')",&[&account_id,&verification,&required]).await?;
+    insert_audit(&tx, account_id, "finalize", "succeeded", &verification).await?;
+    tx.commit().await?;
+    Ok(
+        json!({"deleted":true,"objects_purged":verification.get("objects_purged"),"clickhouse_tables":verification.get("clickhouse_tables")}),
+    )
+}
 async fn existing_job(tx: &tokio_postgres::Transaction<'_>, job_id: Uuid) -> Result<CreatedJob> {
     let row = tx
         .query_one(

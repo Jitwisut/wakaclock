@@ -348,8 +348,13 @@ impl EnterpriseService {
         }
         let postgres = self.required()?;
         let id = user_id.unwrap_or_else(Uuid::now_v7);
-        let row = postgres
-            .client()
+        let mut db = postgres.transaction_client().await?;
+        let tx = db.transaction().await?;
+        crate::repository::team_seats::lock(&tx, organization_id).await?;
+        let existing = tx.query_opt("SELECT role,seat_type FROM organization_members WHERE organization_id=$1 AND user_id=$2", &[&organization_id,&id]).await?;
+        let (role,seat) = existing.map(|r| (r.get::<_,String>(0),r.get::<_,String>(1))).unwrap_or(("member".into(),"developer".into()));
+        crate::repository::team_seats::admit(&tx,organization_id,id,&role,&seat).await?;
+        let row = tx
             .query_one(
                 "INSERT INTO users (id, username, email, display_name, is_active)
                  VALUES ($1, $2, $3, $4, $5)
@@ -369,8 +374,7 @@ impl EnterpriseService {
             .await
             .context("failed to provision SCIM user")?;
         if let Some(email) = email.as_deref() {
-            postgres
-                .client()
+            tx
                 .execute(
                     "INSERT INTO user_emails (id, user_id, email, is_primary, is_verified)
                      VALUES ($1, $2, $3, TRUE, TRUE)
@@ -380,8 +384,7 @@ impl EnterpriseService {
                 .await
                 .context("failed to provision SCIM email")?;
         }
-        postgres
-            .client()
+        tx
             .execute(
                 "INSERT INTO organization_members (organization_id, user_id, role, seat_type)
                  VALUES ($1, $2, 'member', 'developer')
@@ -390,6 +393,7 @@ impl EnterpriseService {
             )
             .await
             .context("failed to attach SCIM user to organization")?;
+        tx.commit().await?;
         scim_user_from_row(row)
     }
 

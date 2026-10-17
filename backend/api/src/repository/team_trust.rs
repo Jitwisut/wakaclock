@@ -470,6 +470,106 @@ impl TeamTrustRepository {
         );
         let mut client = self.postgres.transaction_client().await?;
         let tx = client.transaction().await?;
+        // Restore the independent operational head before any scope mutation can
+        tx.query_one("SELECT pg_advisory_xact_lock(74103031)", &[])
+            .await?;
+        // advance a clock from the older backup. Preserve the exact original
+        // dispositions: allocating an old ordinal with a new timestamp would
+        // make subsequent registry exports fail their append-only proof.
+        // Minimal participant requirements survive even a backup before create.
+        // They are deletion proofs, never an analytics/consent participant set.
+        for d in ledger
+            .dispositions
+            .iter()
+            .filter(|d| d.provider == "team_action_participant")
+        {
+            let parts = d.delivery_id.split(':').collect::<Vec<_>>();
+            ensure!(
+                parts.len() == 3
+                    && parts.iter().all(|p| Uuid::parse_str(p).is_ok())
+                    && d.reason == "workflow_participant"
+                    && d.payload_hash == format!("{:x}", Sha256::digest(d.delivery_id.as_bytes())),
+                "action participant restore proof invalid"
+            );
+            let account = Uuid::parse_str(parts[0])?;
+            tx.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",&[&d.provider,&d.delivery_id,&d.payload_hash,&d.reason,&d.disposed_at]).await?;
+            let stored=tx.query_one("SELECT payload_hash,reason,disposed_at FROM team_webhook_dispositions WHERE provider=$1 AND delivery_id=$2",&[&d.provider,&d.delivery_id]).await?;
+            ensure!(
+                stored.get::<_, String>(0) == d.payload_hash
+                    && stored.get::<_, String>(1) == d.reason
+                    && stored.get::<_, DateTime<Utc>>(2) == d.disposed_at,
+                "action participant disposition conflict"
+            );
+            tx.execute("INSERT INTO team_action_account_proof_requirements(account_id) VALUES($1) ON CONFLICT DO NOTHING",&[&account]).await?;
+        }
+        // Action history has its own proof; workflow edits never change the
+        // aggregate privacy generation. Import exact heads before closing rows.
+        for d in ledger
+            .dispositions
+            .iter()
+            .filter(|d| d.provider == "team_improvement_action")
+        {
+            let parts = d.delivery_id.split(':').collect::<Vec<_>>();
+            ensure!(
+                parts.len() == 3
+                    && Uuid::parse_str(parts[0]).is_ok()
+                    && Uuid::parse_str(parts[1]).is_ok()
+                    && parts[2].parse::<i64>().is_ok_and(|v| v > 0)
+                    && matches!(
+                        d.reason.as_str(),
+                        "action_revision"
+                            | "action_deleted"
+                            | "action_retention_expired"
+                            | "action_restore_blocked"
+                    ),
+                "action restore proof invalid"
+            );
+            tx.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",&[&d.provider,&d.delivery_id,&d.payload_hash,&d.reason,&d.disposed_at]).await?;
+            let row=tx.query_one("SELECT payload_hash,reason,disposed_at FROM team_webhook_dispositions WHERE provider=$1 AND delivery_id=$2",&[&d.provider,&d.delivery_id]).await?;
+            ensure!(
+                row.get::<_, String>(0) == d.payload_hash
+                    && row.get::<_, String>(1) == d.reason
+                    && row.get::<_, DateTime<Utc>>(2) == d.disposed_at,
+                "action restore disposition conflict"
+            );
+        }
+        // Deletion is absorbing for the UUID, including its history. Imported
+        // newer active heads never authenticate older backup metadata: a restore
+        // barrier closes every remaining row and all historical reads.
+        tx.execute("DELETE FROM team_improvement_action_history h WHERE EXISTS(SELECT 1 FROM team_webhook_dispositions d WHERE d.provider='team_improvement_action' AND split_part(d.delivery_id,':',1)=h.organization_id::text AND split_part(d.delivery_id,':',2)=h.action_id::text AND d.reason IN ('action_deleted','action_retention_expired'))",&[]).await?;
+        tx.execute("DELETE FROM team_improvement_actions a WHERE EXISTS(SELECT 1 FROM team_webhook_dispositions d WHERE d.provider='team_improvement_action' AND split_part(d.delivery_id,':',1)=a.organization_id::text AND split_part(d.delivery_id,':',2)=a.id::text AND d.reason IN ('action_deleted','action_retention_expired'))",&[]).await?;
+        tx.execute("UPDATE team_improvement_actions SET blocked=TRUE,request_id=gen_random_uuid(),request_hash='restore_barrier' WHERE NOT blocked AND NOT deleted",&[]).await?;
+        // A backup may predate creation entirely. Close the missing UUID without
+        // inventing its former payload, so one missing row cannot block the org
+        // forever and cannot later be recreated under the same identity.
+        tx.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) SELECT 'team_improvement_action',org||':'||action||':'||(revision+1)::text,encode(sha256(convert_to(delivery_id||':'||payload_hash||':restore_missing','UTF8')),'hex'),'action_restore_blocked',now() FROM (SELECT DISTINCT ON (split_part(delivery_id,':',1),split_part(delivery_id,':',2)) split_part(delivery_id,':',1) AS org,split_part(delivery_id,':',2) AS action,split_part(delivery_id,':',3)::bigint AS revision,delivery_id,payload_hash,reason FROM team_webhook_dispositions WHERE provider='team_improvement_action' ORDER BY split_part(delivery_id,':',1),split_part(delivery_id,':',2),split_part(delivery_id,':',3)::bigint DESC) d WHERE reason='action_revision' AND NOT EXISTS(SELECT 1 FROM team_improvement_actions a WHERE a.organization_id::text=d.org AND a.id::text=d.action)",&[]).await?;
+        for d in ledger
+            .dispositions
+            .iter()
+            .filter(|d| d.provider == "team_cost_source")
+        {
+            let (org, revision) = d
+                .delivery_id
+                .split_once(':')
+                .context("cost source disposition identity missing")?;
+            let org = Uuid::parse_str(org)?;
+            let revision = revision.parse::<i64>()?;
+            ensure!(
+                revision > 0
+                    && d.reason == "cost_source_advanced"
+                    && d.payload_hash == format!("{:x}", Sha256::digest(d.delivery_id.as_bytes())),
+                "cost source disposition proof invalid"
+            );
+            tx.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",&[&d.provider,&d.delivery_id,&d.payload_hash,&d.reason,&d.disposed_at]).await?;
+            let stored = tx.query_one("SELECT payload_hash,reason,disposed_at FROM team_webhook_dispositions WHERE provider=$1 AND delivery_id=$2",&[&d.provider,&d.delivery_id]).await?;
+            ensure!(
+                stored.get::<_, String>(0) == d.payload_hash
+                    && stored.get::<_, String>(1) == d.reason
+                    && stored.get::<_, DateTime<Utc>>(2) == d.disposed_at,
+                "restored cost source disposition conflicts with independent ledger"
+            );
+            tx.execute("INSERT INTO team_cost_source_revisions(organization_id,revision) SELECT id,$2 FROM organizations WHERE id=$1 ON CONFLICT(organization_id) DO UPDATE SET revision=GREATEST(team_cost_source_revisions.revision,$2)",&[&org,&revision]).await?;
+        }
         tx.execute(
             "UPDATE team_repository_scopes SET enabled=FALSE WHERE enabled",
             &[],
@@ -634,9 +734,19 @@ impl TeamTrustRepository {
     if intervals>0 {tx.execute("SELECT team_bump_generation($1)",&[&org]).await?;}
     facts.max(jobs).max(intervals)
    },
+   13 => {
+    // History never receives an extended life from editing updated_at. Current
+    // rows expire by creation time; former owners close reads immediately and
+    // cleanup leaves a durable absorbing marker before removing metadata.
+    tx.query_one("SELECT pg_advisory_xact_lock(74103031)",&[]).await?;
+    let actions=tx.execute("UPDATE team_improvement_actions a SET deleted=TRUE,request_id=gen_random_uuid(),request_hash='retention_or_owner_removed' WHERE (organization_id,id) IN (SELECT organization_id,id FROM team_improvement_actions x WHERE x.organization_id=$1 AND NOT x.deleted AND NOT x.blocked AND (x.created_at<$2 OR NOT EXISTS(SELECT 1 FROM organization_members m JOIN users u ON u.id=m.user_id WHERE m.organization_id=x.organization_id AND m.user_id=x.owner_id AND m.deactivated_at IS NULL AND u.is_active AND u.deleted_at IS NULL AND (x.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=x.team_id AND tm.user_id=x.owner_id)))) ORDER BY id LIMIT 100)",&[&org,&cutoff]).await?;
+    let history=tx.execute("DELETE FROM team_improvement_action_history WHERE (organization_id,action_id,revision) IN (SELECT h.organization_id,h.action_id,h.revision FROM team_improvement_action_history h LEFT JOIN team_improvement_actions a ON a.organization_id=h.organization_id AND a.id=h.action_id WHERE h.organization_id=$1 AND (h.changed_at<$2 OR a.deleted OR a.created_at<$2) ORDER BY action_id,revision LIMIT 100)",&[&org,&cutoff]).await?;
+    let removed=tx.execute("DELETE FROM team_improvement_actions WHERE (organization_id,id) IN (SELECT organization_id,id FROM team_improvement_actions a WHERE a.organization_id=$1 AND (a.deleted OR a.created_at<$2) AND EXISTS(SELECT 1 FROM team_webhook_dispositions d WHERE d.provider='team_improvement_action' AND split_part(d.delivery_id,':',1)=a.organization_id::text AND split_part(d.delivery_id,':',2)=a.id::text AND d.reason IN ('action_deleted','action_restore_blocked','action_retention_expired')) AND NOT EXISTS(SELECT 1 FROM team_improvement_action_history h WHERE h.organization_id=a.organization_id AND h.action_id=a.id) ORDER BY id LIMIT 100)",&[&org,&cutoff]).await?;
+    actions.max(history).max(removed)
+   },
    _ => 0,
   };
-        if phase >= 13 {
+        if phase >= 14 {
             tx.execute("INSERT INTO team_privacy_markers(organization_id,retention_before) VALUES($1,$2) ON CONFLICT(organization_id) DO UPDATE SET retention_before=GREATEST(team_privacy_markers.retention_before,EXCLUDED.retention_before),changed_at=now()", &[&org,&cutoff]).await?;
             tx.execute("UPDATE team_weekly_publications SET invalidated_at=COALESCE(invalidated_at,now()),contributors='{}',fingerprint='expired',projection=NULL,source_revisions=NULL WHERE organization_id=$1 AND week_start<$2::timestamptz::date", &[&org,&cutoff]).await?;
             tx.execute("UPDATE team_cleanup_jobs SET completed_at=$2,cutoff=NULL,phase=0,lease_token=NULL,lease_until=NULL,error_code=NULL WHERE organization_id=$1", &[&org,&now]).await?;

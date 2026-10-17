@@ -18,6 +18,12 @@ members = [
 version = "0.2.0"
 edition = "2021"
 
+# Keep local artifacts bounded; the test profile inherits these settings.
+# See ../../.context/storage.md for the cache/worktree lifecycle.
+[profile.dev]
+debug = 1
+incremental = false
+
 [profile.release]
 opt-level = 3
 lto = true

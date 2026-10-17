@@ -4,6 +4,7 @@ import type {
   TeamConsent,
   TeamInsights,
   TeamMeasurementHealth,
+  TeamWeeklyComparison,
   TeamWorkItem,
   WorkReceipt,
 } from './team-types';
@@ -73,6 +74,30 @@ export async function getTeamMeasurementHealth(organizationId: string) {
   return unwrapV2(
     await wakaclockV2Client.get<V2Envelope<TeamMeasurementHealth>>(
       `/organizations/${organizationId}/measurement-health`
+    )
+  );
+}
+
+export async function getTeamWeeklyComparison(
+  org: string,
+  family: 'copilot' | 'team_cost',
+  baselineWeek: string,
+  followupWeek: string,
+  timezone: string,
+  teamId?: string
+) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<TeamWeeklyComparison>>(
+      `/organizations/${org}/reports/comparison`,
+      {
+        params: {
+          family,
+          baseline_week: baselineWeek,
+          followup_week: followupWeek,
+          timezone,
+          team_id: teamId,
+        },
+      }
     )
   );
 }

@@ -14,3 +14,5 @@ pub mod rabbitmq;
 pub mod rate_limiter;
 pub mod redis_presence;
 pub mod secret_box;
+
+pub mod stripe;

@@ -2,9 +2,9 @@
  * AtoAxis homepage experience — "the invisible world of work".
  *
  * One material throughout: ivory daylight, forest ink, fine marks. The Human + AI chapter
- * happens at dusk; every token below is interpolated from the story position `--axx-g`
+ * happens at dusk; every token below is interpolated from `--axx-dusk`, derived from the story position
  * (written by use-story-scroll.ts), so the HTML text and the WebGL scene change light
- * together. Without JavaScript `--axx-g` is unset, the page stays in daylight, and every
+ * together. Without JavaScript `--axx-dusk` stays 0, the page stays in daylight, and every
  * chapter reads as ordinary document flow.
  */
 
@@ -16,11 +16,9 @@
 
 .wakaclock-marketing .axx {
   transition: --axx-pool-x 1.2s cubic-bezier(0.22, 1, 0.36, 1);
-  --axx-g: 0;
-  --axx-dusk: min(
-    clamp(0, (var(--axx-g) - 1.62) / 0.28, 1),
-    clamp(0, (3.3 - var(--axx-g)) / 0.35, 1)
-  );
+  /* 0 = daylight, 1 = dusk. Written by use-story-scroll.ts only when it changes, so
+     daylight scrolling never invalidates the colour tokens below. */
+  --axx-dusk: 0;
   --axx-mix: calc(var(--axx-dusk) * 100%);
   --axx-bg: color-mix(in srgb, #0f2019 var(--axx-mix), #f1efe7);
   --axx-panel: color-mix(in srgb, #152b21 var(--axx-mix), #faf9f4);

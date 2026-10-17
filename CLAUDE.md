@@ -91,6 +91,13 @@ Full list and known-broken targets: [.context/commands.md](.context/commands.md)
     commits/pushes. Do not merge or update remote `main` through a PR or another
     refspec without explicit authorization either. See
     [.context/conventions.md](.context/conventions.md).
+11. **Keep build storage bounded.** Owner preference recorded 2026-10-14 after
+    a 441 GiB cache/worktree incident. Reuse checkouts and task targets, keep the
+    smaller development/test profiles, measure substantial builds and clean up
+    disposable artifacts after tasks. Review at 10 GiB per Rust target, 30 GiB
+    for `.worktrees`, or 50 GiB for the repo; preserve work, evidence and active
+    binaries. Read [.context/storage.md](.context/storage.md) before builds,
+    worktree creation, compiler-setting changes or cache cleanup.
 
 ## Context Routing — MANDATORY
 
@@ -134,6 +141,7 @@ from verified repository state.
 | If the task involves | Read BEFORE starting |
 | --- | --- |
 | Running, building, or testing anything | [.context/commands.md](.context/commands.md) — several Makefile targets are broken |
+| Builds/tests, worktrees, compiler flags, disk usage or cache cleanup | [.context/storage.md](.context/storage.md) — storage budgets and safe artifact lifecycle |
 | Adding a config value or env var | [.context/environment.md](.context/environment.md) |
 | Naming, style, error handling, or "what is the convention here" | [.context/conventions.md](.context/conventions.md) — never present a Recommended Convention as an existing rule |
 | The VS Code / browser / desktop / AI-agent clients | [.context/extensions/overview.md](.context/extensions/overview.md) |

@@ -87,6 +87,11 @@ export interface TeamHealthState {
   updated_at?: null | string;
 }
 export interface TeamMeasurementHealth {
+  capabilities?: {
+    improvement_actions?: boolean;
+    weekly_comparison?: boolean;
+    weekly_summary?: boolean;
+  };
   checked_at: string;
   own: { capture: TeamHealthState; delivery: TeamHealthState };
   report_timezone: string;
@@ -97,4 +102,34 @@ export interface TeamMeasurementHealth {
     integration: TeamHealthState;
     retention: TeamHealthState;
   };
+}
+
+export interface TeamWeeklyComparison {
+  baseline: {
+    generation: number;
+    measurement_health: string[];
+    timezone: string;
+    week_start: string;
+  };
+  calculation_version: string;
+  changes: Array<{
+    baseline_coverage: null | number;
+    baseline_value: null | string;
+    difference: null | string;
+    followup_coverage: null | number;
+    followup_value: null | string;
+    metric: string;
+    percent_change: null | number;
+    reason: string;
+    status: string;
+    unit: string;
+  }>;
+  followup: {
+    generation: number;
+    measurement_health: string[];
+    timezone: string;
+    week_start: string;
+  };
+  interpretation: string;
+  pricing_changed: boolean | null;
 }

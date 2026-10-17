@@ -17,6 +17,7 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `POSTGRES_URL` | no | Absent ⇒ `AppState.postgres` is `None` and Phase 10 org/billing paths degrade. |
 | `ATOAXIS_TEAM_PRIVACY_LEDGER_PATH` | Team reads/worker | Absolute path to shared independent privacy registry outside database backups; missing/stale fails closed. |
 | `ATOAXIS_COPILOT_DAILY_ENABLED` | no | Explicit opt-in for separate GitHub Copilot provider-day counters. Defaults off; requires existing installation permissions and Team rollout/consent. No session, token or PR cost inference. |
+| `ATOAXIS_STRIPE_PRICE_CATALOG_PATH` | Team billing catalog | Server-managed approved package configuration; absent/invalid stays unavailable. No default prices. Contract is preparatory; Checkout remains disabled until its separate gates pass. |
 | `ATOAXIS_BUILD_REVISION` | build metadata | Compile-time revision for Team readiness; unset is unavailable, never inferred from runtime checkout. |
 | `POSTGRES_MAX_CONNECTIONS` | no | |
 | `DATABASE_URL` | no | Also read; overlaps with `POSTGRES_URL` — `Unknown / Needs verification` which wins. |
@@ -100,3 +101,10 @@ means adding it to **both** the schema block and `runtimeEnv`.
 [../docker-compose.dev.yaml](../docker-compose.dev.yaml) set credentials for
 containers. Treat any value there as a local-development default, not something
 to reuse or document.
+
+## Team Checkout worker (internal, not a launch approval)
+
+- `ATOAXIS_TEAM_STRIPE_CHECKOUT_WORKER_ENABLED`: default false; accepts explicit true/1 or false/0. When enabled, processes one already accepted checkout intent per tick using the existing Stripe account cooldown and approved price catalog. Does not enable a customer-facing confirmation endpoint or paid entitlement.
+- `ATOAXIS_TEAM_STRIPE_TEST_CHECKOUT_ENABLED`: default off; explicit `1`/`true` allows the internal confirmation API only with Stripe **test mode** and an approved policy. Live mode is rejected even with this flag. This does not enable paid entitlement or production readiness.
+- `ATOAXIS_STRIPE_CHECKOUT_POLICY_PATH`: server-owned JSON file with `schema_version: 1`, `owner_approved: true`, HTTPS `return_origin` (origin only, no credentials/path/query/fragment), and explicit boolean `automatic_tax`. The accepted request freezes these values; browsers cannot supply them. No owner values/configuration have been created.
+- Price quotes add `test_checkout_confirmation_available`; absent/false means preview only. API/UI confirmation and fresh hosted destination lookup are implemented for internal testing; browser/Stripe certification and complete payment/seat verification remain pending.

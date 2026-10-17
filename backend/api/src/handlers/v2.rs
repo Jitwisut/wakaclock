@@ -48,9 +48,13 @@ use crate::model::report::{CreateReportScheduleRequest, ReportSchedule};
 
 mod copilot_reports;
 mod heartbeat_readback;
+mod team_actions;
+mod team_comparison;
 mod team_github;
 mod team_insights;
 mod team_webhooks;
+mod team_weekly_summary;
+mod team_stripe;
 mod work_sessions;
 
 const WAKATIME_ROUTE_INVENTORY: &str = include_str!("../../../../wakatime-api-routes.json");
@@ -388,6 +392,21 @@ pub struct WakaTimeImportJob {
 pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
         .route("/team/webhooks/github", post(team_webhooks::github))
+        .route("/organizations/:organization_id/billing/checkout", get(team_stripe::checkout_status).post(team_stripe::checkout_prepare))
+        .route("/organizations/:organization_id/billing/checkout/recover", post(team_stripe::checkout_recover))
+        .route("/organizations/:organization_id/billing/checkout/destination", post(team_stripe::checkout_destination))
+        .route("/organizations/:organization_id/billing/quotes", post(team_stripe::quote_create))
+        .route("/organizations/:organization_id/billing/quotes/:quote_id", get(team_stripe::quote_get))
+        .route("/organizations/:organization_id/billing/customer/recover", post(team_stripe::customer_recover))
+        .route("/organizations/:organization_id/billing/customer", get(team_stripe::customer_status).post(team_stripe::customer_prepare))
+        .route("/team/webhooks/stripe", post(team_stripe::webhook).layer(axum::extract::DefaultBodyLimit::max(2_000_000)))
+        .route("/organizations/:organization_id/reports/comparison", get(team_comparison::read))
+        .route("/organizations/:organization_id/reports/weekly-summary", get(team_weekly_summary::read))
+        .route("/organizations/:organization_id/reports/weekly-summary/export", get(team_weekly_summary::export))
+        .route("/organizations/:organization_id/improvement-actions", get(team_actions::list).post(team_actions::create))
+        .route("/organizations/:organization_id/improvement-actions/:action_id", put(team_actions::update).delete(team_actions::delete))
+        .route("/organizations/:organization_id/improvement-actions/:action_id/history", get(team_actions::history))
+        .route("/organizations/:organization_id/improvement-actions/:action_id/comparison", get(team_actions::comparison))
         .route("/me/session-context/capability", get(team_github::capability))
         .route("/me/github/oauth/callback", post(team_github::callback))
         .route("/organizations/:organization_id/integrations/github", get(team_github::status).delete(team_github::disconnect))

@@ -325,6 +325,62 @@ impl PostgresClient {
                 "Copilot UTC reports and source revisions",
                 include_str!("../../migrations/postgres/037_team_copilot_reports.sql"),
             ),
+            (
+                "Team cost source revision",
+                include_str!("../../migrations/postgres/038_team_cost_source_revision.sql"),
+            ),
+            (
+                "Team improvement actions",
+                include_str!("../../migrations/postgres/039_team_improvement_actions.sql"),
+            ),
+            (
+                "Account deletion Team proof checkpoint",
+                include_str!("../../migrations/postgres/040_account_deletion_team_proof.sql"),
+            ),
+            (
+                "Team Stripe durable metadata",
+                include_str!("../../migrations/postgres/041_team_stripe_runtime.sql"),
+            ),
+            (
+                "Team Stripe worker state",
+                include_str!("../../migrations/postgres/042_team_stripe_worker.sql"),
+            ),
+            (
+                "Team Stripe invoice observations",
+                include_str!("../../migrations/postgres/043_team_stripe_invoice_observations.sql"),
+            ),
+            (
+                "Team Stripe customer provenance",
+                include_str!("../../migrations/postgres/044_team_stripe_customers.sql"),
+            ),
+            (
+                "Team Stripe customer recovery",
+                include_str!("../../migrations/postgres/045_team_stripe_customer_recovery.sql"),
+            ),
+            (
+                "Team Stripe base price quotes",
+                include_str!("../../migrations/postgres/046_team_stripe_quotes.sql"),
+            ),
+            (
+                "Team Stripe checkout intents",
+                include_str!("../../migrations/postgres/047_team_stripe_checkout_intents.sql"),
+            ),
+            (
+                "Team Stripe frozen checkout request",
+                include_str!("../../migrations/postgres/048_team_stripe_checkout_request.sql"),
+            ),
+            (
+                "Team Stripe checkout recovery authorization",
+                include_str!("../../migrations/postgres/049_team_stripe_checkout_recovery.sql"),
+            ),
+            (
+                "Team Stripe invoice coverage assessment",
+                include_str!("../../migrations/postgres/050_team_stripe_payment_assessment.sql"),
+            ),
+            (
+                "Team prospective commercial coverage",
+                include_str!("../../migrations/postgres/051_team_analytics_entitlements.sql"),
+            ),
         ] {
             client
                 .batch_execute(sql)

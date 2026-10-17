@@ -35,6 +35,26 @@ mod team_github_tests;
 pub mod copilot_daily;
 
 pub mod copilot_reports;
+pub mod team_actions;
+#[cfg(test)]
+mod team_actions_tests;
 
 #[cfg(test)]
 mod copilot_reports_tests;
+
+#[cfg(test)]
+mod team_cost_tests;
+
+pub mod team_stripe;
+#[cfg(test)]
+mod team_stripe_tests;
+
+pub mod team_stripe_customer;
+
+pub mod team_stripe_quote;
+
+pub mod team_stripe_checkout;
+
+pub mod team_seats;
+
+pub mod team_analytics_entitlement;
