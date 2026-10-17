@@ -183,3 +183,89 @@ it('context failure and parser failure remain visible while heartbeat delivery i
   delete data.devices[0].capture!.pipeline;
   expect(deliveryHealth(data, false, now).state).toBe('unknown');
 });
+
+describe('on-demand clients without a background collector', () => {
+  function onDemand(overrides: Partial<DeliveryStatusResponse['devices'][number]> = {}) {
+    const data = report(overrides);
+    const capture = data.devices[0].capture!;
+    // Leftover state of an uninstalled collector: disabled, stale, old parser errors.
+    Object.assign(capture, {
+      enabled: false,
+      status: 'disabled',
+      captured_at: new Date(now - 2 * 86_400_000).toISOString(),
+      parser_errors: 6,
+    });
+    delete capture.producer_spool;
+    delete capture.pipeline;
+    return data;
+  }
+
+  it('treats an emptied queue with a ready journal as complete', () => {
+    expect(deliveryHealth(onDemand(), false, now)).toMatchObject({
+      state: 'complete',
+      incomplete: false,
+    });
+  });
+
+  it('does not call an idle, emptied on-demand snapshot stale', () => {
+    const old = new Date(now - 600_000).toISOString();
+    expect(deliveryHealth(onDemand({ captured_at: old, received_at: old }), false, now).state).toBe(
+      'complete'
+    );
+    expect(
+      deliveryHealth(onDemand({ captured_at: old, received_at: old, pending: 2 }), false, now).state
+    ).toBe('stale');
+  });
+
+  it('still reports backlog, journal and reported producer failures', () => {
+    expect(
+      deliveryHealth(
+        onDemand({ pending: 1, oldest_pending_at: new Date(now - 1801_000).toISOString() }),
+        false,
+        now
+      ).state
+    ).toBe('critical');
+    const journal = onDemand();
+    journal.devices[0].capture!.editor_journal!.status = 'corrupt';
+    expect(deliveryHealth(journal, false, now).state).toBe('critical');
+    const spool = onDemand();
+    spool.devices[0].capture!.producer_spool = {
+      status: 'observed',
+      pending: null,
+      accepted: 0,
+      failure_count: 0,
+      paused_excluded: 0,
+      last_scan_success_at: new Date(now).toISOString(),
+    };
+    expect(deliveryHealth(spool, false, now).state).toBe('unknown');
+    const pipeline = onDemand();
+    pipeline.devices[0].capture!.pipeline = report().devices[0].capture!.pipeline!.map((stage) => ({
+      ...stage,
+      status: 'auth_required',
+    }));
+    expect(deliveryHealth(pipeline, false, now).state).toBe('critical');
+  });
+
+  it('keeps requiring editor journal evidence when no capture object is sent', () => {
+    const data = report();
+    delete data.devices[0].capture;
+    expect(deliveryHealth(data, false, now).message).toMatch(/Editor journal details/);
+  });
+});
+
+it('reports stale editor journal and producer spool observations', () => {
+  const journal = report();
+  journal.devices[0].capture!.editor_journal!.last_observed_at = new Date(
+    now - 301_000
+  ).toISOString();
+  expect(deliveryHealth(journal, false, now).state).toBe('stale');
+  const spool = report();
+  spool.devices[0].capture!.producer_spool!.last_scan_success_at = new Date(
+    now - 301_000
+  ).toISOString();
+  expect(deliveryHealth(spool, false, now).state).toBe('stale');
+});
+
+it('treats an unreported dead-letter count as zero', () => {
+  expect(deliveryHealth(report({ dead_letter: null }), false, now).deadLetter).toBe(0);
+});
