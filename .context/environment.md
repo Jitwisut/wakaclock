@@ -16,6 +16,7 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `CLICKHOUSE_DATABASE` / `CLICKHOUSE_DB` | no | Both names are read; defaults exist. |
 | `POSTGRES_URL` | no | Absent ⇒ `AppState.postgres` is `None` and Phase 10 org/billing paths degrade. |
 | `ATOAXIS_TEAM_PRIVACY_LEDGER_PATH` | Team reads/worker | Absolute path to shared independent privacy registry outside database backups; missing/stale fails closed. |
+| `ATOAXIS_EDITOR_LINE_METRICS_ENABLED` | production: yes | Accepts versioned editor line metrics (`editor-before-after-v1`) and advertises them in `/api/v2/capabilities`. Defaults off. While off, clients keep the line-measurement corrections in their local queue and report them as pending, so dashboards show delivery as incomplete; enable it on every server clients send to. Accepts `1`/`true`/`on`. |
 | `ATOAXIS_COPILOT_DAILY_ENABLED` | no | Explicit opt-in for separate GitHub Copilot provider-day counters. Defaults off; accepts `1`/`true`/`on`, and an unrecognised value refuses startup. Requires existing installation permissions and Team rollout/consent. No session, token or PR cost inference. |
 | `ATOAXIS_COPILOT_WEEKLY_ENABLED` | no | Opt-in for privacy-safe UTC weekly Copilot reports/CSV; also needs `ATOAXIS_COPILOT_DAILY_ENABLED` and Team enabled for the organization. Accepts `1`/`true`/`on`; an unrecognised value refuses startup. |
 | `ATOAXIS_BUILD_REVISION` | build metadata | Compile-time revision for Team readiness; unset is unavailable, never inferred from runtime checkout. |
