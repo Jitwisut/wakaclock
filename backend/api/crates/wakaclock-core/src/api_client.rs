@@ -498,6 +498,27 @@ pub struct ApiClient {
     config: Config,
     client: Client,
     line_metric_capability: Arc<Mutex<Option<(Instant, bool)>>>,
+    /// Status uploads still in flight, so a short-lived command can let them finish.
+    background: StatusUploads,
+}
+
+/// Delivery status uploads a client has started. A short-lived command keeps a handle
+/// and settles it before exiting, so its last status is not lost with the process.
+#[derive(Clone, Default)]
+pub struct StatusUploads(Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>);
+
+impl StatusUploads {
+    /// Waits, up to `limit`, for status uploads still in flight. Heartbeats are already
+    /// durable before this point; anything slower is left to the next run.
+    pub async fn settle(&self, limit: Duration) {
+        let pending = std::mem::take(&mut *self.0.lock().await);
+        let _ = tokio::time::timeout(limit, async {
+            for task in pending {
+                let _ = task.await;
+            }
+        })
+        .await;
+    }
 }
 
 impl ApiClient {
@@ -519,6 +540,7 @@ impl ApiClient {
             config,
             client,
             line_metric_capability: Arc::new(Mutex::new(None)),
+            background: StatusUploads::default(),
         })
     }
 
@@ -1451,9 +1473,11 @@ impl ApiClient {
         })
     }
 
-    /// Queue status is ancillary telemetry. Read it synchronously from the local
-    /// queue, reserve at most one upload per minute, and send in the background so
-    /// diagnostics never delays heartbeat collection or delivery.
+    /// Queue status is ancillary telemetry. Read it from the local queue, reserve an
+    /// upload (an identical state at most once a minute, a changed one at once) and
+    /// send it in the background so diagnostics never delays heartbeat collection or
+    /// delivery. Short-lived commands settle [`Self::status_uploads`] before exiting,
+    /// so the last state actually reaches the server instead of dying with the process.
     fn schedule_delivery_snapshot(&self, _delivery_succeeded: bool) {
         if crate::runtime::paused("delivery") {
             return;
@@ -1464,15 +1488,16 @@ impl ApiClient {
             "{}/api/v2/me/delivery-status",
             self.config.server_url.trim_end_matches('/')
         );
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let snapshot_scope = scope.clone();
             let snapshot = tokio::task::spawn_blocking(move || {
                 let queue = Queue::open()?;
-                queue.capture_delivery_snapshot_scoped(&scope)
+                let local = local_status_state(&scope);
+                queue.reserve_delivery_snapshot_scoped(&scope, &local, false)
             })
             .await;
-            let mut snapshot = match snapshot {
-                Ok(Ok(Some(snapshot))) => snapshot,
+            let (mut snapshot, reserved) = match snapshot {
+                Ok(Ok(Some(reserved))) => (reserved.snapshot.clone(), reserved),
                 Ok(Ok(None)) => return,
                 Ok(Err(error)) => {
                     tracing::debug!(%error, "could not read local delivery queue for status snapshot");
@@ -1513,10 +1538,32 @@ impl ApiClient {
                 .send()
                 .await
                 .and_then(reqwest::Response::error_for_status);
-            if let Err(error) = result {
-                tracing::debug!(%error, "delivery status snapshot upload failed");
+            match result {
+                Ok(_) => {
+                    let recorded = tokio::task::spawn_blocking(move || {
+                        Queue::open()?.record_delivery_snapshot_uploaded(&snapshot_scope, &reserved)
+                    })
+                    .await;
+                    if !matches!(recorded, Ok(Ok(()))) {
+                        tracing::debug!("could not record the accepted delivery status snapshot");
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "delivery status snapshot upload failed");
+                }
             }
         });
+        // Only `StatusUploads::settle` holds this lock, as the command exits; an
+        // upload started then is not waited for, exactly as before this tracking.
+        if let Ok(mut pending) = self.background.0.try_lock() {
+            pending.retain(|task| !task.is_finished());
+            pending.push(handle);
+        }
+    }
+
+    /// A handle on this client's status uploads, to settle before the command exits.
+    pub fn status_uploads(&self) -> StatusUploads {
+        self.background.clone()
     }
 
     /// Fail closed while offline or talking to a pre-activity receiver. The
@@ -1754,9 +1801,11 @@ impl ApiClient {
 
     pub async fn publish_delivery_status(&self) -> AppResult<()> {
         let queue = Queue::open()?;
-        if let Some(mut snapshot) =
-            queue.capture_delivery_snapshot_force_scoped(&self.queue_scope())?
+        let scope = self.queue_scope();
+        if let Some(reserved) =
+            queue.reserve_delivery_snapshot_scoped(&scope, &local_status_state(&scope), true)?
         {
+            let mut snapshot = reserved.snapshot.clone();
             let capabilities = self
                 .client
                 .get(format!("{}/api/v2/capabilities", self.config.server_url))
@@ -1773,9 +1822,10 @@ impl ApiClient {
                 snapshot.schema_version = 1;
                 snapshot.details = None;
             }
-            attach_capture_health(&mut snapshot, &capabilities, &self.queue_scope(), v2)?;
+            attach_capture_health(&mut snapshot, &capabilities, &scope, v2)?;
             self.post_json("/api/v2/me/delivery-status", &snapshot)
                 .await?;
+            queue.record_delivery_snapshot_uploaded(&scope, &reserved)?;
         }
         Ok(())
     }
@@ -2313,6 +2363,47 @@ struct FilteredHeartbeats {
 /// it matters most.
 ///
 /// Pure and I/O-free so the rule can be tested without touching `~/.wakaclock`.
+/// Metadata-only summary of the local capture and editor state that a status snapshot
+/// carries: counts and statuses, never timestamps that change on their own, so an
+/// unchanged state compares equal and a changed one is reported at once.
+fn local_status_state(scope: &crate::queue::QueueScope) -> String {
+    let journal = crate::runtime::directory()
+        .map(|directory| crate::editor_health::read(&directory, scope, chrono::Utc::now()))
+        .map_or_else(
+            |_| "-".to_string(),
+            |health| {
+                format!(
+                    "{}/{}/{}",
+                    health.status,
+                    health
+                        .pending
+                        .map_or_else(|| "-".to_string(), |pending| pending.to_string()),
+                    health.dead_letter
+                )
+            },
+        );
+    let capture = dirs::home_dir()
+        .and_then(|home| fs::read(home.join(".wakaclock/capture-state.json")).ok())
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .map_or_else(
+            || "-".to_string(),
+            |value| {
+                let spool = &value["producer_spool"];
+                format!(
+                    "{}/{}/{}/{}|spool:{}/{}/{}",
+                    value["enabled"],
+                    value["status"],
+                    value["pending"],
+                    value["parser_errors"],
+                    spool["status"],
+                    spool["pending"],
+                    spool["failure_count"]
+                )
+            },
+        );
+    format!("journal:{journal}|capture:{capture}")
+}
+
 fn attach_capture_health(
     snapshot: &mut crate::queue::DeliveryQueueSnapshot,
     capabilities: &Value,
@@ -2450,6 +2541,33 @@ mod tests {
     use super::*;
     use crate::heartbeat::EntityType;
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn exiting_commands_wait_briefly_for_status_uploads_in_flight() {
+        let api = ApiClient::new(Config {
+            user_id: Uuid::new_v4(),
+            server_url: "http://127.0.0.1:9".into(),
+            api_key: None,
+        })
+        .unwrap();
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = finished.clone();
+        api.background.0.lock().await.push(tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+        api.status_uploads().settle(Duration::from_secs(2)).await;
+        assert!(finished.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(api.background.0.lock().await.is_empty());
+
+        // A stuck upload never holds the command beyond the limit.
+        api.background.0.lock().await.push(tokio::spawn(async {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }));
+        let started = Instant::now();
+        api.status_uploads().settle(Duration::from_millis(50)).await;
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[tokio::test]
     #[ignore = "requires isolated loopback sockets"]
