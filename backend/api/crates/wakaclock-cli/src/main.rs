@@ -1323,7 +1323,22 @@ async fn run() -> Result<(), Box<dyn Error>> {
     }
 
     let api_client = ApiClient::new(config.clone())?;
+    let status_uploads = api_client.status_uploads();
+    let result = run_command(cli, config, api_client).await;
+    // Heartbeats are durable by now; this only lets a status snapshot still in flight
+    // reach the server, so the dashboard sees this run's final queue state.
+    status_uploads.settle(STATUS_SETTLE_LIMIT).await;
+    result
+}
 
+/// The longest a command waits on exit for its delivery status upload to finish.
+const STATUS_SETTLE_LIMIT: Duration = Duration::from_secs(2);
+
+async fn run_command(
+    cli: Cli,
+    config: Config,
+    api_client: ApiClient,
+) -> Result<(), Box<dyn Error>> {
     match cli.command {
         Commands::JournalHealth => {
             let mut input = String::new();
