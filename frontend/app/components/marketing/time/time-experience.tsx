@@ -9,6 +9,7 @@ import { CountUp } from './count-up';
 import { Scramble } from './scramble';
 import { SmoothScroll } from './smooth-scroll';
 import { TIME_COPY } from './time-copy';
+import { TimeIntro } from './time-intro';
 import { TimeStage } from './time-stage';
 import { TimeStill } from './time-still';
 
@@ -91,6 +92,7 @@ export function TimeExperience({ locale }: { locale: SiteLocale }) {
   return (
     // The site-wide reveal animations stay out: this experience choreographs its own.
     <div className="tx-root" data-motion-owner="experience" id={TIME_ROOT_ID}>
+      <TimeIntro copy={copy.loader} rootId={TIME_ROOT_ID} />
       <SmoothScroll />
       <TimeStage copy={copy} rootId={TIME_ROOT_ID}>
         <TimeStill />
