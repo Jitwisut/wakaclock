@@ -167,8 +167,6 @@ describe('delivery completeness', () => {
     capture.captured_at = new Date(now).toISOString();
     capture.pending = 2;
     expect(deliveryHealth(data, false, now).incomplete).toBe(true);
-    delete data.devices[0].capture;
-    expect(deliveryHealth(data, false, now)).toMatchObject({ state: 'unknown', incomplete: true });
   });
 });
 
@@ -246,10 +244,43 @@ describe('on-demand clients without a background collector', () => {
     expect(deliveryHealth(pipeline, false, now).state).toBe('critical');
   });
 
-  it('keeps requiring editor journal evidence when no capture object is sent', () => {
+  it('treats a device with no capture object as an editor that is not running', () => {
     const data = report();
     delete data.devices[0].capture;
-    expect(deliveryHealth(data, false, now).message).toMatch(/Editor journal details/);
+    expect(deliveryHealth(data, false, now).state).toBe('complete');
+  });
+
+  it('treats a closed or idle editor with nothing pending as complete', () => {
+    const old = new Date(now - 3_600_000).toISOString();
+    for (const status of ['ready', 'stale', 'stopped', 'unavailable'] as const) {
+      for (const pending of [0, null]) {
+        const data = onDemand();
+        Object.assign(data.devices[0].capture!.editor_journal!, {
+          status,
+          pending,
+          last_observed_at: old,
+        });
+        expect(deliveryHealth(data, false, now).state).toBe('complete');
+      }
+    }
+    const missing = onDemand();
+    delete missing.devices[0].capture!.editor_journal;
+    expect(deliveryHealth(missing, false, now).state).toBe('complete');
+  });
+
+  it('still reports editor activity the journal has not handed off', () => {
+    const stale = onDemand();
+    Object.assign(stale.devices[0].capture!.editor_journal!, { status: 'stale', pending: 3 });
+    expect(deliveryHealth(stale, false, now).state).toBe('stale');
+    const waiting = onDemand();
+    waiting.devices[0].capture!.editor_journal!.pending = 2;
+    expect(deliveryHealth(waiting, false, now).state).toBe('pending');
+    const dead = onDemand();
+    Object.assign(dead.devices[0].capture!.editor_journal!, { status: 'stale', dead_letter: 1 });
+    expect(deliveryHealth(dead, false, now).state).toBe('critical');
+    const paused = onDemand();
+    paused.devices[0].capture!.editor_journal!.status = 'paused_by_user';
+    expect(deliveryHealth(paused, false, now).state).toBe('unavailable');
   });
 });
 
