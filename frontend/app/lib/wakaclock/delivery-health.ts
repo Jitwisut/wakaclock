@@ -20,6 +20,20 @@ const isOnDemand = (device: DeliveryDevice) => !device.capture || device.capture
 const isIdleOnDemand = (device: DeliveryDevice) =>
   isOnDemand(device) && !device.pending && !device.dead_letter;
 
+/** On an on-demand device a closed or idle editor (or one that exited before its final
+ * report) leaves a journal that is stopped, unavailable, stale or an aged-out ready with
+ * nothing pending: the editor is not running, which is not missing data. */
+const isClosedEditor = (device: DeliveryDevice) => {
+  if (!isOnDemand(device)) return false;
+  const journal = device.capture?.editor_journal;
+  if (!journal) return true;
+  return (
+    !journal.dead_letter &&
+    !journal.pending &&
+    ['ready', 'stale', 'stopped', 'unavailable'].includes(journal.status)
+  );
+};
+
 /** A successful new send is separate from a fully reconciled queue. Missing v2
  * details and old snapshots cannot establish completeness. */
 // Each branch is one ordered delivery/pipeline signal; splitting it would obscure the precedence.
@@ -117,11 +131,14 @@ export function deliveryHealth(
     message =
       'Editor capture needs attention. Durable journal or handoff failed; queued data is retained.';
   } else if (state === 'complete') {
-    if (journals.some((journal) => !journal || journal.pending == null)) {
+    const open = devices
+      .filter((device) => !isClosedEditor(device))
+      .map((device) => device.capture?.editor_journal);
+    if (open.some((journal) => !journal || journal.pending == null)) {
       state = 'unknown';
       message = 'Editor journal details not available. Completion remains unconfirmed.';
     } else if (
-      journals.some(
+      open.some(
         (journal) =>
           journal &&
           (journal.status === 'stale' || now - Date.parse(journal.last_observed_at) > 300_000)
@@ -129,10 +146,10 @@ export function deliveryHealth(
     ) {
       state = 'stale';
       message = 'Editor journal status is stale. Check the local client.';
-    } else if (journals.some((journal) => journal && journal.status !== 'ready')) {
+    } else if (open.some((journal) => journal && journal.status !== 'ready')) {
       state = 'unavailable';
       message = 'Editor capture is paused or unavailable. Existing data is retained.';
-    } else if (journals.some((journal) => (journal?.pending ?? 0) > 0)) {
+    } else if (open.some((journal) => journal!.pending! > 0)) {
       state = 'pending';
       message =
         'Editor activity awaits durable CLI handoff. An empty server queue does not confirm completeness.';
