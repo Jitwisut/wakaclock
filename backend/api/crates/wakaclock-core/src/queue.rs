@@ -456,6 +456,18 @@ impl Queue {
                 UNIQUE(destination, owner_scope, heartbeat_id)
             );
 
+            -- A later correction that differs from the retained one for the same
+            -- heartbeat ID. Kept for inspection instead of aborting delivery.
+            CREATE TABLE IF NOT EXISTS line_measurement_conflicts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                destination TEXT NOT NULL,
+                owner_scope TEXT NOT NULL,
+                heartbeat_id TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                detected_at INTEGER NOT NULL,
+                UNIQUE(destination, owner_scope, heartbeat_id, payload)
+            );
+
             -- Unsent activity is never expired implicitly. Delivery, explicit
             -- recovery, or a visible dead-letter transition owns deletion.
 
@@ -1579,9 +1591,16 @@ impl Queue {
             .map_err(AppError::Queue)?;
         if let Some(existing) = existing {
             if existing != encoded {
-                return Err(AppError::Conflict(
-                    "stable heartbeat ID has different retained line metrics".to_string(),
-                ));
+                // Keep the retained correction and quarantine the differing one. A
+                // line-count disagreement must never stop time heartbeats from flushing.
+                self.conn
+                    .execute(
+                        "INSERT OR IGNORE INTO line_measurement_conflicts
+                            (destination, owner_scope, heartbeat_id, payload, detected_at)
+                         VALUES (?1, ?2, ?3, ?4, strftime('%s', 'now'))",
+                        params![&scope.destination, &scope.owner, heartbeat_id, encoded],
+                    )
+                    .map_err(AppError::Queue)?;
             }
             return Ok(false);
         }
@@ -1698,16 +1717,15 @@ impl Queue {
         let queue_id = opaque_queue_id(scope);
         let status = self.status_scoped(scope)?;
         let now = Utc::now();
+        // The snapshot reports the time-heartbeat backlog only. Retained line-metric
+        // corrections stay visible locally (`line_metrics_pending`) but must not make
+        // fully delivered time look like an old, critical backlog.
+        let heartbeat_pending = status.pending.saturating_sub(status.line_metrics_pending);
         let oldest_pending: Option<i64> = self
             .conn
             .query_row(
-                "SELECT MIN(created_at) FROM (
-                    SELECT created_at FROM heartbeat_queue
-                     WHERE destination = ?1 AND owner_scope = ?2
-                    UNION ALL
-                    SELECT created_at FROM line_measurement_outbox
-                     WHERE destination = ?1 AND owner_scope = ?2
-                )",
+                "SELECT MIN(created_at) FROM heartbeat_queue
+                 WHERE destination = ?1 AND owner_scope = ?2",
                 params![&scope.destination, &scope.owner],
                 |row| row.get(0),
             )
@@ -1765,7 +1783,7 @@ impl Queue {
             sequence: sequence.max(0) as u64,
             captured_at: now,
             read_status: QueueReadStatus::Available,
-            pending: Some(status.pending.min(u32::MAX as usize) as u32),
+            pending: Some(heartbeat_pending.min(u32::MAX as usize) as u32),
             retry: Some(status.retry.min(u32::MAX as usize) as u32),
             dead_letter: Some(status.dead_letter.min(u32::MAX as usize) as u32),
             oldest_pending_at: oldest_pending
@@ -3401,6 +3419,92 @@ mod tests {
             .unwrap();
         assert_eq!(first.device_id, separate.device_id);
         assert_ne!(first.queue_id, separate.queue_id);
+    }
+
+    #[test]
+    fn conflicting_line_measurement_is_quarantined_instead_of_failing() {
+        let temp = TempQueue::new();
+        let target = scope(ORIGIN, "mine");
+        let retained = serde_json::json!({
+            "heartbeat_id": "conflict-id",
+            "revision": 0,
+            "line_metric_version": "editor-before-after-v1",
+            "ai_lines_added": 2
+        });
+        let mut differing = retained.clone();
+        differing["ai_lines_added"] = serde_json::json!(3);
+
+        assert!(temp
+            .queue
+            .retain_line_measurement_scoped(&target, &retained)
+            .unwrap());
+        // Previously an AppError::Conflict that aborted the whole flush.
+        for _ in 0..2 {
+            assert!(!temp
+                .queue
+                .retain_line_measurement_scoped(&target, &differing)
+                .unwrap());
+        }
+
+        temp.queue
+            .mark_line_measurement_base_accepted(&target, "conflict-id")
+            .unwrap();
+        let pending = temp
+            .queue
+            .pending_line_measurements_scoped(&target, 100)
+            .unwrap();
+        assert_eq!(pending.len(), 1, "the first retained correction is kept");
+        assert_eq!(pending[0].1["ai_lines_added"], 2);
+        let quarantined: Vec<String> = temp
+            .queue
+            .conn
+            .prepare("SELECT payload FROM line_measurement_conflicts WHERE heartbeat_id = ?1")
+            .unwrap()
+            .query_map(["conflict-id"], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(quarantined.len(), 1, "repeat conflicts are stored once");
+        let quarantined: serde_json::Value = serde_json::from_str(&quarantined[0]).unwrap();
+        assert_eq!(quarantined["ai_lines_added"], 3);
+        assert_eq!(quarantined["revision"], 1);
+    }
+
+    #[test]
+    fn delivery_snapshot_counts_only_time_heartbeats_as_backlog() {
+        let temp = TempQueue::new();
+        let target = scope(ORIGIN, "mine");
+        temp.queue
+            .retain_line_measurement_scoped(
+                &target,
+                &serde_json::json!({
+                    "heartbeat_id": "metric-only",
+                    "revision": 0,
+                    "line_metric_version": "editor-before-after-v1"
+                }),
+            )
+            .unwrap();
+
+        let snapshot = temp
+            .queue
+            .capture_delivery_snapshot_force_scoped(&target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.pending, Some(0));
+        assert_eq!(snapshot.oldest_pending_at, None);
+        let status = temp.queue.status_scoped(&target).unwrap();
+        assert_eq!(status.line_metrics_pending, 1, "still visible locally");
+
+        temp.queue
+            .push_scoped(&row("hb-time", 1_000.0, 0), &target)
+            .unwrap();
+        let snapshot = temp
+            .queue
+            .capture_delivery_snapshot_force_scoped(&target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.pending, Some(1));
+        assert!(snapshot.oldest_pending_at.is_some());
     }
 
     #[test]

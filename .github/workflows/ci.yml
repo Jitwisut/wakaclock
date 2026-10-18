@@ -261,13 +261,30 @@ jobs:
           RABBITMQ_TEST_URL: amqp://guest:guest@127.0.0.1:5672/%2f
         # The broker-restart test runs `docker restart` on a named container; CI's
         # service container cannot be restarted from inside the job, so it is skipped.
-        run: cargo test -p wakaclock-server -- --ignored --test-threads=1 --skip survive_a_broker_restart
+        # Team/Copilot tests refuse any database not named atoaxis_team_test; they run below.
+        run: >-
+          cargo test -p wakaclock-server -- --ignored --test-threads=1
+          --skip survive_a_broker_restart --skip repository::team_ --skip repository::copilot_
+      - name: Install PostgreSQL test client
+        run: sudo apt-get install -y postgresql-client
+      - name: Create isolated Team database
+        env:
+          PGPASSWORD: atoaxis-test
+        run: createdb -h 127.0.0.1 -U atoaxis atoaxis_team_test
+      - name: Run ignored Team and Copilot database tests
+        env:
+          CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
+          CLICKHOUSE_TEST_USER: default
+          CLICKHOUSE_TEST_PASSWORD: ""
+          POSTGRES_TEST_URL: postgres://atoaxis:atoaxis-test@127.0.0.1:5432/atoaxis_team_test
+        # The restore drill needs TEAM_DRILL_STAGE and is driven by scripts/team-restore-drill.py.
+        run: >-
+          cargo test -p wakaclock-server -- --ignored --test-threads=1
+          repository::team_ repository::copilot_ --skip restore_drill_fixture_stages
       - name: Run collector process and offline lifecycle tests
         run: cargo test -p wakaclock-cli --tests -- --test-threads=1
       - name: Build API for cross-replica security regression tests
         run: cargo build -p wakaclock-server --bin wakaclock-server
-      - name: Install PostgreSQL test client
-        run: sudo apt-get install -y postgresql-client
       - name: Run cross-replica security and import smoke tests
         run: >-
           python3 ../../scripts/backend-security-smoke-runtime.py

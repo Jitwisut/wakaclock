@@ -1479,9 +1479,14 @@ struct CheckpointMarker {
     checkpointed_at: i64,
 }
 
+const PRESENCE_V2_DISABLED: &str = "Presence v2 is not enabled in this deployment";
+
 fn repo(
     state: &AppState,
 ) -> Result<Arc<crate::repository::presence::PresenceRepository>, PresenceApiError> {
+    if !state.config.presence_v2_enabled {
+        return Err(PresenceApiError::unavailable(PRESENCE_V2_DISABLED));
+    }
     state
         .presence_repo
         .clone()
@@ -1489,6 +1494,9 @@ fn repo(
 }
 
 fn redis(state: &AppState) -> Result<Arc<RedisPresenceStore>, PresenceApiError> {
+    if !state.config.presence_v2_enabled {
+        return Err(PresenceApiError::unavailable(PRESENCE_V2_DISABLED));
+    }
     state
         .redis_presence
         .clone()

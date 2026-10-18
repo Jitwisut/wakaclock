@@ -1,7 +1,9 @@
 'use client';
 
 import * as React from 'react';
+
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+
 import { Button } from '@/components/ui/button';
 import { QueryState } from '@/components/wakaclock/query-state';
 import * as github from '@/lib/wakaclock/github-endpoints';
@@ -20,9 +22,9 @@ export function SessionRepositoryBinding({
   return (
     <BindingForm
       key={`${userId}:${organizationId}:${sessionId}`}
-      userId={userId}
       organizationId={organizationId}
       sessionId={sessionId}
+      userId={userId}
     />
   );
 }
@@ -31,9 +33,9 @@ function BindingForm({
   organizationId,
   sessionId,
 }: {
-  userId: string;
   organizationId: string;
   sessionId: string;
+  userId: string;
 }) {
   const sharingPending =
     useIsMutating({ mutationKey: ['team-sharing', userId, organizationId] }) > 0;
@@ -66,9 +68,9 @@ function BindingForm({
   });
   // Keep an idempotency key across an uncertain response; a changed revision or
   // choice gets a new key. Double click/retry cannot apply a different write.
-  const request = React.useRef<{ key: string; id: string } | undefined>(undefined);
+  const request = React.useRef<{ id: string; key: string } | undefined>(undefined);
   const action = useMutation({
-    mutationFn: async (repository: string | null) => {
+    mutationFn: async (repository: null | string) => {
       if (
         !active.current ||
         sharingPending ||
@@ -77,9 +79,10 @@ function BindingForm({
         binding.isFetching ||
         projects.isError ||
         projects.isFetching
-      )
+      ) {
         throw new Error('Reload mapping and permissions before confirming');
-      const revision = binding.data.revision;
+      }
+      const { revision } = binding.data;
       const key = `${revision}:${repository ?? ''}`;
       if (request.current?.key !== key) request.current = { key, id: crypto.randomUUID() };
       return github.setSessionRepositoryBinding(organizationId, {
@@ -129,8 +132,8 @@ function BindingForm({
                   Repository for this session
                   <select
                     aria-label="Repository for this session"
-                    value={target}
                     onChange={(event) => setTarget(event.target.value)}
+                    value={target}
                   >
                     <option value="">Choose repository</option>
                     {projects.data?.repositories.map((repository) => (

@@ -12,10 +12,7 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 pub fn enabled() -> bool {
-    std::env::var("ATOAXIS_COPILOT_DAILY_ENABLED")
-        .ok()
-        .as_deref()
-        == Some("1")
+    crate::config::opt_in_env_flag("ATOAXIS_COPILOT_DAILY_ENABLED")
 }
 pub const COUNTERS: &[&str] = &[
     "code_generation_activity_count",

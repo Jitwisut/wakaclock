@@ -1,28 +1,29 @@
 //! Team-only policies. Personal canonical facts are never altered here.
 use crate::model::{date_range::ResolvedRange, delivery_status::DeliveryStatusDevice};
-use anyhow::{ensure, Result};
 use chrono::{DateTime, Datelike, Duration, Months, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
-pub fn validate_week(range: &ResolvedRange, timezone: &str, now: DateTime<Utc>) -> Result<()> {
-    ensure!(
-        range.timezone.name() == timezone,
-        "use the organization's report timezone"
-    );
-    ensure!(
-        range.start.weekday() == Weekday::Mon && range.end == range.start + Duration::days(6),
-        "Team aggregates require one Monday-Sunday week"
-    );
-    ensure!(
-        range.end < now.with_timezone(&range.timezone).date_naive(),
-        "Team report week is not closed"
-    );
-    ensure!(
-        range.unix_bounds().0 >= cutoff(now).timestamp() as f64,
-        "week is outside Team retention"
-    );
+/// Returns the specific reason a requested week is rejected so the API can say which
+/// rule failed (timezone, week shape, still open, or retention).
+pub fn validate_week(
+    range: &ResolvedRange,
+    timezone: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), &'static str> {
+    if range.timezone.name() != timezone {
+        return Err("use the organization's report timezone");
+    }
+    if range.start.weekday() != Weekday::Mon || range.end != range.start + Duration::days(6) {
+        return Err("Team aggregates require one Monday-Sunday week");
+    }
+    if range.end >= now.with_timezone(&range.timezone).date_naive() {
+        return Err("Team report week is not closed");
+    }
+    if range.unix_bounds().0 < cutoff(now).timestamp() as f64 {
+        return Err("week is outside Team retention");
+    }
     Ok(())
 }
 pub fn cutoff(now: DateTime<Utc>) -> DateTime<Utc> {

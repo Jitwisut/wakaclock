@@ -1,0 +1,1645 @@
+/* AtoAxis /time — cinematic time ring. Self-contained (no Tailwind), loaded only by the
+   /time root layouts. Colours follow the homepage's dusk palette. */
+
+.tx-root {
+  --tx-bg: #07110d;
+  --tx-bg-raised: #0c1a14;
+  --tx-panel: rgb(12 26 20 / 0.66);
+  --tx-ink: #e4efe7;
+  --tx-muted: #a6b9ad;
+  --tx-dim: #7f948a;
+  --tx-line: rgb(216 232 220 / 0.12);
+  --tx-line-strong: rgb(216 232 220 / 0.24);
+  --tx-human: #9be5b5;
+  --tx-ai: #f2b25c;
+  --tx-unattributed: #6f8479;
+  --tx-lime: #c3ee8a;
+  --tx-font:
+    var(--font-geist, var(--font-mkt-pixel)), 'Sukhumvit Set', 'Thonburi', 'Noto Sans Thai',
+    'Leelawadee UI', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --tx-mono:
+    var(--font-geist-mono, var(--font-mkt-body)), ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --tx-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --tx-nav-h: 68px;
+
+  color-scheme: dark;
+}
+
+.tx-root *,
+.tx-root *::before,
+.tx-root *::after {
+  box-sizing: border-box;
+}
+
+.tx-root h1,
+.tx-root h2,
+.tx-root h3,
+.tx-root p,
+.tx-root ul,
+.tx-root ol,
+.tx-root figure {
+  margin: 0;
+}
+
+.tx-root ul,
+.tx-root ol {
+  padding: 0;
+  list-style: none;
+}
+
+.tx-root a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.tx-root button {
+  font: inherit;
+  color: inherit;
+}
+
+.tx-root svg {
+  display: block;
+}
+
+.tx-root .tx-body {
+  color: var(--tx-muted);
+}
+
+.tx-root {
+  min-height: 100vh;
+  background: var(--tx-bg);
+  color: var(--tx-ink);
+  font-family: var(--tx-font);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tx-root :focus-visible {
+  outline: 2px solid var(--tx-lime);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.tx-root .tx-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.tx-root {
+  position: relative;
+  overflow: clip;
+}
+
+/* ---------- nav ---------- */
+
+/* ---------- buttons, chips ---------- */
+.tx-root .tx-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 36px;
+}
+
+.tx-root .tx-actions--center {
+  justify-content: center;
+}
+
+.tx-root .tx-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 0 24px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 600;
+  transition:
+    background-color 0.25s var(--tx-ease),
+    border-color 0.25s var(--tx-ease),
+    transform 0.25s var(--tx-ease);
+}
+
+.tx-root .tx-btn--sm {
+  min-height: 40px;
+  padding: 0 18px;
+  font-size: 14px;
+}
+
+.tx-root .tx-btn--primary {
+  background: var(--tx-lime);
+  color: #06140e;
+  box-shadow: 0 0 0 0 rgb(195 238 138 / 0.4);
+}
+
+.tx-root .tx-btn--primary:hover {
+  background: #d6f6ab;
+  box-shadow: 0 0 32px -4px rgb(195 238 138 / 0.45);
+}
+
+.tx-root .tx-btn--ghost {
+  border-color: var(--tx-line-strong);
+  background: rgb(7 17 13 / 0.4);
+}
+
+.tx-root .tx-btn--ghost:hover {
+  border-color: var(--tx-human);
+}
+
+@media (max-width: 479px) {
+  .tx-root .tx-actions .tx-btn {
+    flex: 1 1 100%;
+  }
+}
+
+.tx-root .tx-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 28px;
+}
+
+.tx-root .tx-chips li {
+  padding: 6px 12px;
+  border: 1px solid var(--tx-line-strong);
+  border-radius: 999px;
+  background: rgb(7 17 13 / 0.45);
+  font-family: var(--tx-mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--tx-muted);
+}
+
+.tx-root .tx-chips--dense {
+  margin-top: 16px;
+  gap: 6px;
+}
+
+.tx-root .tx-chips--dense li {
+  padding: 4px 10px;
+  font-size: 11.5px;
+}
+
+/* ---------- stage ---------- */
+.tx-root .tx-overlay {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  height: 100svh;
+  margin-bottom: -100vh;
+  margin-bottom: -100svh;
+}
+
+/* Fixed behind the whole homepage. Everything that must sit above it is positioned with
+   a higher z-index: the chapters, the overlay, the light page and the footer. */
+.tx-root .tx-stage {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  background: radial-gradient(ellipse 70% 60% at 68% 48%, #0f2219 0%, var(--tx-bg) 70%);
+}
+
+/* Dawn: --tx-day (0–1, from the scroll hook) lightens every dark layer of the stage. */
+.tx-root .tx-dayfill {
+  position: absolute;
+  inset: 0;
+  background: #f1efe7;
+  opacity: var(--tx-day, 0);
+}
+
+.tx-root .tx-night {
+  position: absolute;
+  inset: 0;
+  opacity: calc(1 - var(--tx-day, 0));
+}
+
+.tx-root .tx-still {
+  position: absolute;
+  top: 50%;
+  left: 71%;
+  width: auto;
+  height: 72%;
+  aspect-ratio: 1;
+  /* Sized and placed to match the 3D hero framing, so the hand-off does not jump. */
+  transform: translate(-50%, -50%);
+  transition:
+    opacity 1.2s var(--tx-ease),
+    left 1.2s var(--tx-ease);
+}
+
+/* The still follows each chapter's layout, clear of the text, like the 3D camera does. */
+.tx-root[data-chapter='1'] .tx-still {
+  left: 30%;
+}
+
+.tx-root[data-chapter='2'] .tx-still,
+.tx-root[data-chapter='4'] .tx-still,
+.tx-root[data-chapter='5'] .tx-still {
+  left: 50%;
+}
+
+.tx-root .tx-canvas {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 1.6s var(--tx-ease);
+}
+
+.tx-root .tx-canvas canvas {
+  display: block;
+}
+
+.tx-root[data-scene='ready'] .tx-canvas {
+  opacity: 1;
+}
+
+.tx-root[data-scene='ready'] .tx-still {
+  opacity: 0;
+}
+
+.tx-root .tx-veil {
+  position: absolute;
+  inset: 0;
+  opacity: calc(var(--veil-on, 0) * (1 - var(--tx-day, 0)));
+  transition: opacity 0.9s var(--tx-ease);
+}
+
+/* A pale wash under the light page's text: the ring stays visible but quiet. */
+.tx-root .tx-veil[data-veil='day'] {
+  background: rgb(250 249 246 / 0.72);
+  opacity: var(--tx-day, 0);
+  transition: none;
+}
+
+.tx-root .tx-veil[data-veil='left'] {
+  background: linear-gradient(
+    90deg,
+    rgb(7 17 13 / 0.94) 0%,
+    rgb(7 17 13 / 0.78) 30%,
+    transparent 60%
+  );
+}
+
+.tx-root .tx-veil[data-veil='right'] {
+  background: linear-gradient(
+    270deg,
+    rgb(7 17 13 / 0.94) 0%,
+    rgb(7 17 13 / 0.78) 30%,
+    transparent 60%
+  );
+}
+
+.tx-root .tx-veil[data-veil='center'] {
+  background: radial-gradient(ellipse 58% 48% at 50% 56%, rgb(7 17 13 / 0.88), transparent 80%);
+}
+
+.tx-root .tx-veil[data-veil='bottom'] {
+  background: linear-gradient(
+    0deg,
+    rgb(7 17 13 / 0.92) 0%,
+    rgb(7 17 13 / 0.55) 32%,
+    transparent 58%
+  );
+}
+
+.tx-root .tx-veil[data-veil='band'] {
+  background: linear-gradient(
+    180deg,
+    rgb(7 17 13 / 0.7) 0%,
+    rgb(7 17 13 / 0.35) 30%,
+    rgb(7 17 13 / 0.82) 55%,
+    rgb(7 17 13 / 0.82) 85%,
+    rgb(7 17 13 / 0.5) 100%
+  );
+}
+
+.tx-root .tx-veil[data-veil='full'] {
+  background: rgb(7 17 13 / 0.6);
+}
+
+/* Which veils each chapter's layout needs; before the scroll hook runs, the hero's. */
+.tx-root:not([data-chapter]) .tx-veil[data-veil='left'],
+.tx-root[data-chapter='0'] .tx-veil[data-veil='left'],
+.tx-root[data-chapter='1'] .tx-veil:is([data-veil='right'], [data-veil='bottom']),
+.tx-root[data-chapter='2'] .tx-veil[data-veil='center'],
+.tx-root[data-chapter='3'] .tx-veil:is([data-veil='left'], [data-veil='bottom']),
+.tx-root[data-chapter='4'] .tx-veil[data-veil='band'],
+.tx-root[data-chapter='5'] .tx-veil[data-veil='center'] {
+  --veil-on: 1;
+}
+
+.tx-root .tx-vignette {
+  position: absolute;
+  inset: 0;
+  opacity: calc(1 - var(--tx-day, 0));
+  background: radial-gradient(ellipse 85% 80% at 55% 50%, transparent 55%, rgb(3 8 6 / 0.85) 100%);
+  pointer-events: none;
+}
+
+@media (max-width: 899px) {
+  .tx-root .tx-still,
+  .tx-root[data-chapter] .tx-still {
+    left: 50%;
+    width: 130vw;
+    height: auto;
+    opacity: 0.6;
+  }
+
+  /* Phones stack text over the scene everywhere: one even veil. */
+  .tx-root[data-chapter] .tx-veil:not([data-veil='day']),
+  .tx-root .tx-veil:not([data-veil='day']) {
+    --veil-on: 0;
+  }
+
+  .tx-root[data-chapter] .tx-veil[data-veil='full'],
+  .tx-root .tx-veil[data-veil='full'] {
+    --veil-on: 1;
+  }
+}
+
+/* still drawing */
+.tx-root .tx-still-ring {
+  fill: none;
+  stroke: rgb(216 232 220 / 0.3);
+  stroke-width: 1;
+}
+
+.tx-root .tx-still-ring--today {
+  stroke: rgb(216 232 220 / 0.55);
+}
+
+.tx-root .tx-still-tick {
+  stroke: rgb(216 232 220 / 0.3);
+  stroke-width: 1;
+}
+
+.tx-root .tx-still-tick--major {
+  stroke: rgb(216 232 220 / 0.6);
+  stroke-width: 1.6;
+}
+
+.tx-root .tx-still-arc {
+  fill: none;
+  stroke-width: 6;
+  stroke-linecap: butt;
+}
+
+.tx-root .tx-still-arc--today {
+  stroke-width: 9;
+  filter: drop-shadow(0 0 6px currentColor);
+}
+
+.tx-root .tx-still-arc[data-kind='human'] {
+  stroke: var(--tx-human);
+  color: var(--tx-human);
+}
+
+.tx-root .tx-still-arc[data-kind='ai'] {
+  stroke: var(--tx-ai);
+  color: var(--tx-ai);
+}
+
+.tx-root .tx-still-arc[data-kind='unattributed'] {
+  stroke: var(--tx-unattributed);
+  color: var(--tx-unattributed);
+}
+
+.tx-root .tx-still-hour {
+  font-family: var(--tx-mono);
+  font-size: 13px;
+  fill: var(--tx-dim);
+}
+
+.tx-root .tx-still-hand {
+  stroke: var(--tx-lime);
+  stroke-width: 1.6;
+  transform: rotate(var(--tx-hand, 120deg));
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+}
+
+.tx-root .tx-still-hub {
+  fill: var(--tx-lime);
+}
+
+/* ---------- overlay: rail, badge, loader ---------- */
+.tx-root .tx-overlay {
+  z-index: 5;
+  /* The rail and the clock belong to the story: they fade out with the dusk. */
+  opacity: calc(1 - var(--tx-day, 0));
+  pointer-events: none;
+}
+
+.tx-root .tx-rail {
+  position: absolute;
+  top: 50%;
+  right: clamp(16px, 3vw, 40px);
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.tx-root .tx-rail ol {
+  display: grid;
+  gap: 4px;
+}
+
+.tx-root .tx-rail a {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 6px 0;
+  font-family: var(--tx-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--tx-dim);
+  transition: color 0.3s var(--tx-ease);
+}
+
+.tx-root .tx-rail-label {
+  opacity: 0;
+  transform: translateX(6px);
+  transition:
+    opacity 0.3s var(--tx-ease),
+    transform 0.3s var(--tx-ease);
+}
+
+.tx-root .tx-rail a::after {
+  content: '';
+  width: 18px;
+  height: 1px;
+  background: currentColor;
+  transition: width 0.3s var(--tx-ease);
+}
+
+.tx-root .tx-rail a[aria-current='step'],
+.tx-root .tx-rail a:hover,
+.tx-root .tx-rail a:focus-visible {
+  color: var(--tx-lime);
+}
+
+.tx-root .tx-rail a[aria-current='step']::after {
+  width: 36px;
+}
+
+.tx-root .tx-rail a[aria-current='step'] .tx-rail-label,
+.tx-root .tx-rail a:hover .tx-rail-label,
+.tx-root .tx-rail a:focus-visible .tx-rail-label {
+  opacity: 1;
+  transform: none;
+}
+
+.tx-root .tx-corner {
+  position: absolute;
+  right: clamp(16px, 3vw, 40px);
+  bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.tx-root .tx-clock {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--tx-mono);
+  color: var(--tx-dim);
+}
+
+.tx-root .tx-clock-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tx-root .tx-clock-time {
+  display: inline-block;
+  font-size: clamp(1.4rem, 2.2vw, 2rem);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--tx-lime);
+}
+
+.tx-root .tx-badge {
+  padding: 4px 10px;
+  border: 1px solid var(--tx-line);
+  border-radius: 999px;
+  background: rgb(7 17 13 / 0.6);
+  font-family: var(--tx-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--tx-dim);
+}
+
+.tx-root .tx-loader {
+  position: absolute;
+  left: clamp(16px, 4vw, 48px);
+  bottom: 20px;
+  font-family: var(--tx-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--tx-dim);
+}
+
+@media (max-width: 1099px) {
+  .tx-root .tx-rail {
+    display: none;
+  }
+}
+
+/* ---------- chapters ---------- */
+.tx-root .tx-chapters {
+  position: relative;
+  z-index: 2;
+}
+
+.tx-root .tx-chapter {
+  display: flex;
+  align-items: center;
+  min-height: 130vh;
+  min-height: 130svh;
+  padding: calc(var(--tx-nav-h) + 48px) clamp(16px, 7vw, 120px) 96px;
+}
+
+.tx-root .tx-hero {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100svh;
+}
+
+.tx-root .tx-begin {
+  justify-content: center;
+  min-height: 115svh;
+}
+
+.tx-root .tx-col {
+  width: 100%;
+  max-width: 580px;
+}
+
+.tx-root .tx-col--center {
+  max-width: 760px;
+  text-align: center;
+}
+
+.tx-root .tx-col--center .tx-lead {
+  margin-inline: auto;
+}
+
+.tx-root .tx-eyebrow,
+.tx-root .tx-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 24px;
+  font-family: var(--tx-mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tx-human);
+}
+
+.tx-root .tx-pulse {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tx-lime);
+}
+
+.tx-root .tx-pulse::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 1px solid var(--tx-lime);
+  border-radius: 50%;
+  animation: tx-beat 1.8s var(--tx-ease) infinite;
+}
+
+.tx-root .tx-h1 {
+  font-size: clamp(2.7rem, 6.4vw, 5.6rem);
+  font-weight: 700;
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+}
+
+.tx-root .tx-line {
+  display: block;
+}
+
+.tx-root .tx-accent {
+  color: var(--tx-lime);
+}
+
+.tx-root .tx-h2 {
+  font-size: clamp(2.1rem, 4.4vw, 3.6rem);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.tx-root .tx-h2--xl {
+  font-size: clamp(2.4rem, 6vw, 5rem);
+}
+
+.tx-root .tx-h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.tx-root .tx-h4 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.tx-root .tx-sub {
+  margin-top: 16px;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--tx-human);
+}
+
+.tx-root .tx-lead {
+  margin-top: 22px;
+  max-width: 54ch;
+  font-size: 1.125rem;
+  color: var(--tx-muted);
+  text-wrap: pretty;
+}
+
+.tx-root .tx-note {
+  margin-top: 18px;
+  font-size: 13px;
+  color: var(--tx-dim);
+}
+
+.tx-root .tx-panel {
+  margin-top: 28px;
+  padding: 20px 22px;
+  border: 1px solid var(--tx-line);
+  border-left: 2px solid var(--tx-human);
+  border-radius: 12px;
+  background: var(--tx-panel);
+  font-size: 15px;
+  color: var(--tx-muted);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.tx-root .tx-tools {
+  margin-top: 36px;
+}
+
+.tx-root .tx-tools .tx-body {
+  margin-top: 8px;
+  font-size: 15px;
+}
+
+.tx-root .tx-count {
+  margin-top: 16px;
+  font-size: 14px;
+  color: var(--tx-muted);
+}
+
+.tx-root .tx-count strong {
+  font-family: var(--tx-mono);
+  font-size: 1.5rem;
+  color: var(--tx-lime);
+}
+
+.tx-root .tx-cards {
+  display: grid;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.tx-root .tx-card {
+  padding: 20px 22px;
+  border: 1px solid var(--tx-line);
+  border-radius: 14px;
+  background: var(--tx-panel);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: border-color 0.3s var(--tx-ease);
+}
+
+.tx-root .tx-card:hover {
+  border-color: rgb(155 229 181 / 0.4);
+}
+
+.tx-root .tx-card-tag {
+  display: inline-block;
+  margin-bottom: 10px;
+  font-family: var(--tx-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--tx-lime);
+}
+
+.tx-root .tx-card .tx-body {
+  margin-top: 6px;
+  font-size: 15px;
+}
+
+.tx-root .tx-features {
+  display: grid;
+  gap: 20px 28px;
+  margin-top: 36px;
+  padding-top: 28px;
+  border-top: 1px solid var(--tx-line);
+}
+
+@media (min-width: 640px) {
+  .tx-root .tx-features {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.tx-root .tx-features .tx-body {
+  margin-top: 6px;
+  font-size: 14px;
+}
+
+/* attribution focus */
+.tx-root .tx-focus {
+  margin-top: 32px;
+}
+
+.tx-root .tx-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--tx-line-strong);
+  border-radius: 999px;
+  background: rgb(7 17 13 / 0.6);
+}
+
+.tx-root .tx-segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 14px;
+  color: var(--tx-muted);
+  cursor: pointer;
+  transition:
+    background-color 0.25s var(--tx-ease),
+    color 0.25s var(--tx-ease);
+}
+
+.tx-root .tx-segmented button[aria-pressed='true'] {
+  background: rgb(216 232 220 / 0.12);
+  color: var(--tx-ink);
+}
+
+.tx-root .tx-swatch {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 3px;
+  background: linear-gradient(135deg, var(--tx-human) 50%, var(--tx-ai) 50%);
+}
+
+.tx-root .tx-swatch[data-kind='human'] {
+  background: var(--tx-human);
+}
+
+.tx-root .tx-swatch[data-kind='ai'] {
+  background: repeating-linear-gradient(90deg, var(--tx-ai) 0 3px, transparent 3px 5px);
+}
+
+.tx-root .tx-swatch[data-kind='unattributed'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--tx-unattributed);
+}
+
+.tx-root .tx-kinds {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.tx-root .tx-kinds li {
+  padding: 16px 18px;
+  border: 1px solid var(--tx-line);
+  border-radius: 12px;
+  background: var(--tx-panel);
+  transition: opacity 0.35s var(--tx-ease);
+}
+
+.tx-root .tx-kinds li[data-dim='true'] {
+  opacity: 0.6;
+}
+
+.tx-root .tx-kinds .tx-body {
+  margin-top: 6px;
+  font-size: 14px;
+}
+
+.tx-root .tx-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 24px;
+  margin-top: 40px;
+}
+
+.tx-root .tx-links a {
+  padding: 6px 0;
+  font-size: 14px;
+  color: var(--tx-muted);
+  border-bottom: 1px solid var(--tx-line-strong);
+}
+
+.tx-root .tx-links a:hover {
+  color: var(--tx-ink);
+  border-color: var(--tx-lime);
+}
+
+.tx-root .tx-scroll-cue {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--tx-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--tx-dim);
+  transform: translateX(-50%);
+}
+
+.tx-root .tx-scroll-cue span {
+  width: 1px;
+  height: 36px;
+  background: linear-gradient(var(--tx-lime), transparent);
+  animation: tx-drop 2.2s var(--tx-ease) infinite;
+  transform-origin: top;
+}
+
+/* ---------- chapter layouts: each chapter presents differently ---------- */
+.tx-root .tx-chapter {
+  position: relative;
+}
+
+/* giant outlined chapter number, placed differently per chapter */
+.tx-root .tx-numeral {
+  position: absolute;
+  z-index: -1;
+  font-size: clamp(9rem, 22vw, 20rem);
+  font-weight: 700;
+  line-height: 0.8;
+  letter-spacing: -0.06em;
+  color: transparent;
+  -webkit-text-stroke: 1px rgb(195 238 138 / 0.16);
+  pointer-events: none;
+  user-select: none;
+}
+
+.tx-root .tx-numeral[data-pos='left'] {
+  top: 16%;
+  left: clamp(16px, 5vw, 80px);
+}
+
+.tx-root .tx-numeral[data-pos='right'] {
+  top: 10%;
+  right: 9%;
+}
+
+.tx-root .tx-numeral[data-pos='top-right'] {
+  top: 6%;
+  right: 14%;
+}
+
+/* 02 — text on the right, editors band across the bottom */
+.tx-root .tx-chapter--right {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 56px;
+}
+
+.tx-root .tx-col--right {
+  align-self: flex-end;
+}
+
+@media (min-width: 1100px) {
+  /* Clear of the chapter rail on the right. */
+  .tx-root .tx-col--right {
+    margin-right: 120px;
+  }
+
+  .tx-root .tx-chapter--right .tx-tools,
+  .tx-root .tx-chapter--stack .tx-wide {
+    max-width: calc(100% - 120px);
+  }
+}
+
+.tx-root .tx-tools {
+  margin-top: 0;
+}
+
+.tx-root .tx-tools-head {
+  display: grid;
+  gap: 16px 40px;
+  align-items: end;
+  margin-bottom: 24px;
+}
+
+@media (min-width: 900px) {
+  .tx-root .tx-tools-head {
+    grid-template-columns: auto minmax(0, 520px);
+  }
+}
+
+.tx-root .tx-count {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin: 0;
+}
+
+.tx-root .tx-count strong {
+  font-family: var(--tx-font);
+  font-size: clamp(4rem, 9vw, 8rem);
+  font-weight: 700;
+  line-height: 0.85;
+  letter-spacing: -0.05em;
+  color: var(--tx-lime);
+}
+
+.tx-root .tx-count span {
+  max-width: 16ch;
+  font-size: 14px;
+  color: var(--tx-muted);
+}
+
+.tx-root .tx-marquee {
+  display: flex;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+
+.tx-root .tx-marquee-track {
+  display: flex;
+  flex: none;
+  gap: 10px;
+  padding-right: 10px;
+  animation: tx-marquee 48s linear infinite;
+}
+
+.tx-root .tx-marquee-track li {
+  padding: 10px 18px;
+  border: 1px solid var(--tx-line-strong);
+  border-radius: 999px;
+  background: rgb(7 17 13 / 0.55);
+  font-family: var(--tx-mono);
+  font-size: 14px;
+  white-space: nowrap;
+  color: var(--tx-ink);
+}
+
+.tx-root .tx-marquee:hover .tx-marquee-track {
+  animation-play-state: paused;
+}
+
+/* 03 — one centred statement, then two cards side by side */
+.tx-root .tx-chapter--center {
+  justify-content: center;
+}
+
+.tx-root .tx-col--wide {
+  max-width: 1040px;
+}
+
+.tx-root .tx-cards--row {
+  margin-top: 48px;
+  text-align: left;
+}
+
+@media (min-width: 760px) {
+  .tx-root .tx-cards--row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.tx-root .tx-word {
+  display: inline-block;
+}
+
+/* 04 — heading on the left, the three kinds across the full width */
+.tx-root .tx-chapter--stack {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 40px;
+}
+
+.tx-root .tx-wide {
+  width: 100%;
+  max-width: 1180px;
+}
+
+@media (min-width: 900px) {
+  .tx-root .tx-chapter--stack .tx-kinds {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* 05 — pinned: the cards slide sideways while the page scrolls down */
+.tx-root .tx-chapter--track {
+  display: block;
+  min-height: 320vh;
+  padding: 0;
+}
+
+.tx-root .tx-pin {
+  --tx-pad: clamp(16px, 7vw, 120px);
+
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 40px;
+  height: 100vh;
+  height: 100svh;
+  padding: calc(var(--tx-nav-h) + 24px) 0 64px;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.tx-root .tx-track-head {
+  max-width: calc(640px + var(--tx-pad));
+  padding-inline: var(--tx-pad);
+}
+
+.tx-root .tx-track {
+  display: flex;
+  gap: 20px;
+  width: max-content;
+  padding-inline: var(--tx-pad);
+  /* 0 → 1 while pinned slides the track until its last card reaches the right edge. */
+  transform: translateX(calc(var(--tx-pin, 0) * min(0px, 100cqw - 100%)));
+  will-change: transform;
+}
+
+.tx-root .tx-track-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: clamp(280px, 30vw, 400px);
+  min-height: 300px;
+  padding: 28px;
+  border: 1px solid var(--tx-line);
+  border-radius: 18px;
+  background: var(--tx-panel);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: border-color 0.3s var(--tx-ease);
+}
+
+.tx-root .tx-track-card:hover {
+  border-color: rgb(155 229 181 / 0.45);
+}
+
+.tx-root .tx-track-index {
+  margin-bottom: auto;
+  padding-bottom: 24px;
+  font-size: 3.5rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: transparent;
+  -webkit-text-stroke: 1px var(--tx-human);
+}
+
+.tx-root .tx-track-card .tx-body {
+  font-size: 15px;
+}
+
+@media (max-width: 899px) {
+  .tx-root .tx-numeral {
+    font-size: 8rem;
+    opacity: 0.6;
+  }
+
+  .tx-root .tx-col--right {
+    align-self: stretch;
+  }
+
+  .tx-root .tx-chapter--track {
+    min-height: 0;
+  }
+
+  .tx-root .tx-pin {
+    position: static;
+    height: auto;
+    padding: calc(var(--tx-nav-h) + 48px) 16px 96px;
+    overflow: visible;
+  }
+
+  .tx-root .tx-track-head {
+    padding-inline: 0;
+  }
+
+  .tx-root .tx-track {
+    flex-direction: column;
+    width: auto;
+    padding-inline: 0;
+    transform: none;
+  }
+
+  .tx-root .tx-track-card {
+    width: auto;
+    min-height: 0;
+  }
+
+  .tx-root .tx-track-index {
+    font-size: 2.5rem;
+  }
+}
+
+/* ---------- hover tooltip ---------- */
+.tx-root .tx-tip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 30;
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+  padding: 10px 12px;
+  border: 1px solid var(--tx-line-strong);
+  border-radius: 10px;
+  background: rgb(7 17 13 / 0.92);
+  font-family: var(--tx-mono);
+  font-size: 12px;
+  color: var(--tx-ink);
+  pointer-events: none;
+  box-shadow: 0 10px 30px -10px rgb(0 0 0 / 0.6);
+}
+
+.tx-root .tx-tip-time {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  color: var(--tx-lime);
+}
+
+.tx-root .tx-tip-kind {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tx-root .tx-tip-demo {
+  font-size: 10.5px;
+  color: var(--tx-dim);
+}
+
+/* ---------- midnight: the day turns over ---------- */
+.tx-root .tx-clock[data-midnight='true'] .tx-clock-time {
+  color: var(--tx-ink);
+  text-shadow: 0 0 18px rgb(195 238 138 / 0.65);
+  animation: tx-strike 1.2s var(--tx-ease) both;
+}
+
+.tx-root[data-midnight='true'] .tx-begin .tx-btn--primary {
+  animation: tx-cta-glow 2.6s ease-in-out infinite;
+}
+
+.tx-root[data-midnight='true'] .tx-begin .tx-h2 {
+  text-shadow: 0 0 42px rgb(195 238 138 / 0.28);
+  transition: text-shadow 1.2s var(--tx-ease);
+}
+
+/* ---------- footer ---------- */
+
+/* ---------- reveal ---------- */
+/* The hero never waits on JavaScript: its entrance is a CSS animation from first paint. */
+.tx-root .tx-hero [data-reveal] {
+  animation: tx-rise 1s var(--tx-ease) both;
+}
+
+.tx-root .tx-hero .tx-col > :nth-child(2) {
+  animation-delay: 0.08s;
+}
+
+.tx-root .tx-hero .tx-col > :nth-child(3) {
+  animation-delay: 0.2s;
+}
+
+.tx-root .tx-hero .tx-col > :nth-child(n + 4) {
+  animation-delay: 0.32s;
+}
+
+.tx-root .tx-hero .tx-line:last-child {
+  animation-delay: 0.16s;
+}
+
+/* Later chapters reveal as they scroll in, once the scroll hook is running. Each layout
+   enters differently: from the side, word by word, or scaling up. */
+.tx-root[data-scroll='ready'] .tx-chapter:not([data-inview]) .tx-word {
+  opacity: 0;
+  filter: blur(8px);
+  transform: translateY(0.55em) rotate(3deg);
+}
+
+.tx-root[data-scroll='ready'] .tx-word {
+  transition:
+    opacity 0.8s var(--tx-ease),
+    filter 0.8s var(--tx-ease),
+    transform 1s var(--tx-ease);
+  transition-delay: calc(var(--i, 0) * 80ms);
+}
+
+.tx-root[data-scroll='ready'] .tx-chapter:not(.tx-hero, [data-inview]) [data-reveal] {
+  opacity: 0;
+  transform: translateY(22px);
+}
+
+.tx-root[data-scroll='ready'] .tx-chapter:not([data-inview]) [data-reveal='right'] {
+  transform: translateX(48px);
+}
+
+.tx-root[data-scroll='ready'] .tx-chapter:not([data-inview]) [data-reveal='scale'] {
+  transform: scale(0.92);
+}
+
+.tx-root[data-scroll='ready'] .tx-chapter:not(.tx-hero) [data-reveal] {
+  transition:
+    opacity 0.9s var(--tx-ease),
+    transform 0.9s var(--tx-ease);
+}
+
+.tx-root .tx-chapter [data-reveal]:nth-child(2) {
+  transition-delay: 0.08s;
+}
+
+.tx-root .tx-chapter [data-reveal]:nth-child(3) {
+  transition-delay: 0.16s;
+}
+
+.tx-root .tx-chapter [data-reveal]:nth-child(4) {
+  transition-delay: 0.24s;
+}
+
+.tx-root .tx-chapter [data-reveal]:nth-child(n + 5) {
+  transition-delay: 0.32s;
+}
+
+/* ---------- Thai ---------- */
+/* Thai lines carry more per word and do not hyphenate: a smaller hero keeps it to two
+   lines in the hero column. */
+.tx-root:lang(th) .tx-h1 {
+  font-size: clamp(2.2rem, 4.4vw, 4rem);
+}
+
+.tx-root:lang(th) .tx-h1,
+.tx-root:lang(th) .tx-h2 {
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.tx-root:lang(th) .tx-lead,
+.tx-root:lang(th) .tx-body,
+.tx-root:lang(th) .tx-panel {
+  line-height: 1.75;
+}
+
+.tx-root:lang(th) .tx-eyebrow,
+.tx-root:lang(th) .tx-kicker {
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+@media (max-width: 599px) {
+  .tx-root:lang(th) .tx-h1 {
+    font-size: clamp(1.9rem, 8.4vw, 2.6rem);
+  }
+
+  /* Phones: the badge and loader sit under the text instead of over it. */
+  .tx-root .tx-overlay {
+    z-index: 1;
+  }
+
+  /* Decoration that only crowds a narrow column. */
+  .tx-root .tx-numeral,
+  .tx-root .tx-clock {
+    display: none;
+  }
+}
+
+/* ---------- inside the homepage ---------- */
+.wakaclock-marketing .tx-root {
+  /* The site's sticky nav is 64px tall. */
+  --tx-nav-h: 64px;
+
+  min-height: 0;
+}
+
+/* Over the dark story the site's nav goes dark too, and the site's floating index steps
+   aside for the chapter rail. Both return as soon as the story scrolls away. */
+.wakaclock-marketing:has(.tx-root[data-onstage='true']:not([data-dawn='true'])) .axis-nav {
+  --mkt-fg: #e4efe7;
+  --mkt-fg-muted: #a6b9ad;
+  --mkt-accent: #c3ee8a;
+  --mkt-border: rgb(216 232 220 / 0.24);
+
+  border-bottom-color: rgb(216 232 220 / 0.12);
+  background: rgb(7 17 13 / 0.86);
+  color: #e4efe7;
+}
+
+.wakaclock-marketing .axis-nav {
+  transition:
+    background-color 0.5s ease,
+    color 0.5s ease,
+    border-color 0.5s ease;
+}
+
+.wakaclock-marketing:has(.tx-root[data-onstage='true']:not([data-dawn='true'])) .axis-scroll-index {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.wakaclock-marketing .axis-scroll-index {
+  transition:
+    opacity 0.4s ease,
+    visibility 0.4s;
+}
+
+.tx-root .tx-handoff {
+  position: relative;
+  /* Over the overlay, so the rail and the clock leave with the story. */
+  z-index: 6;
+  height: 70vh;
+}
+
+.tx-root .tx-anchor {
+  position: absolute;
+  top: 0;
+}
+
+.tx-root .tx-example {
+  margin: 48px auto 0;
+  max-width: 760px;
+  padding: 24px 26px;
+  border: 1px solid var(--tx-line);
+  border-left: 2px solid var(--tx-lime);
+  border-radius: 14px;
+  background: var(--tx-panel);
+  text-align: left;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  scroll-margin-top: calc(var(--tx-nav-h) + 24px);
+}
+
+.tx-root .tx-example .tx-body {
+  margin-top: 10px;
+  font-size: 14.5px;
+}
+
+.tx-root .tx-evidence {
+  margin-top: 14px;
+  max-width: 72ch;
+  font-size: 13px;
+  color: var(--tx-dim);
+}
+
+.tx-root .tx-evidence a {
+  border-bottom: 1px solid var(--tx-line-strong);
+  color: var(--tx-muted);
+}
+
+.tx-root .tx-track-title {
+  margin-top: 22px;
+  font-family: var(--tx-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--tx-lime);
+}
+
+.tx-root .tx-track-intro {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--tx-muted);
+}
+
+/* The facts under a product view: small, quiet, and real text. */
+.tx-root .tx-facts {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+  padding-left: 1.1em;
+  list-style: disc;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--tx-dim);
+}
+
+.tx-root .tx-kinds-all {
+  margin-top: 14px;
+}
+
+/* Scramble and count-up: the document holds the real text once; while it animates, the
+   glyphs are painted over it from data-text and the real letters are made transparent.
+   The second `content` gives the overlay empty alt text where supported. */
+.tx-root .tx-live-text {
+  position: relative;
+}
+
+.tx-root .tx-live-text[data-text] {
+  -webkit-text-fill-color: transparent;
+}
+
+.tx-root .tx-live-text[data-text]::before {
+  content: attr(data-text);
+  content: attr(data-text) / '';
+  position: absolute;
+  inset: 0;
+  white-space: pre;
+  -webkit-text-fill-color: currentcolor;
+}
+
+/* ---------- the light page over the scene (homepage only) ---------- */
+/* The frame stops painting its own ivory so the fixed scene shows; the content and the
+   footer sit above it. Section bands turn translucent so the ring stays in view. */
+.wakaclock-marketing:has(.tx-root) {
+  background: transparent;
+}
+
+.wakaclock-marketing:has(.tx-root) .tx-day,
+.wakaclock-marketing:has(.tx-root) .axis-footer {
+  position: relative;
+  z-index: 1;
+}
+
+.wakaclock-marketing:has(.tx-root) .axis-briefing {
+  background: rgb(239 244 239 / 0.72);
+}
+
+.wakaclock-marketing:has(.tx-root) .axis-pricing {
+  background: rgb(240 243 239 / 0.72);
+}
+
+.tx-root .tx-daybadge {
+  position: fixed;
+  left: clamp(16px, 3vw, 40px);
+  bottom: 20px;
+  z-index: 30;
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid rgb(27 52 41 / 0.18);
+  border-radius: 999px;
+  background: rgb(250 249 246 / 0.86);
+  font-family: var(--tx-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: #4b5a51;
+  opacity: var(--tx-day, 0);
+  pointer-events: none;
+}
+
+/* Sections tilt up out of depth as they scroll in (--rise 0 → 1, set while moving). */
+.wakaclock-marketing .tx-day > [data-rising] {
+  opacity: calc(0.15 + 0.85 * var(--rise, 1));
+  transform: perspective(1600px) translateY(calc((1 - var(--rise, 1)) * 90px))
+    rotateX(calc((1 - var(--rise, 1)) * 16deg)) scale(calc(0.94 + 0.06 * var(--rise, 1)));
+  transform-origin: 50% 0%;
+  will-change: transform, opacity;
+}
+
+/* Lenis drives the scroll on the homepage; the page's own smooth behaviour would fight
+   it. (Lenis's stylesheet rules, inlined.) */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+
+html.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-stopped {
+  overflow: clip;
+}
+
+/* ---------- keyframes ---------- */
+@keyframes tx-strike {
+  0% {
+    transform: scale(1.35);
+    opacity: 0.4;
+  }
+}
+
+@keyframes tx-cta-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(195 238 138 / 0.45);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 10px rgb(195 238 138 / 0),
+      0 0 48px 4px rgb(195 238 138 / 0.45);
+  }
+}
+
+@keyframes tx-marquee {
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+/* Starts faint, never invisible: Chrome does not count an opacity-0 element as the
+   largest contentful paint, so a fade from zero pushed the hero's LCP back by the whole
+   entrance (about 0.9 s on a throttled phone). */
+@keyframes tx-rise {
+  from {
+    opacity: 0.15;
+    transform: translateY(18px);
+  }
+}
+
+@keyframes tx-beat {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.6);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+
+@keyframes tx-drop {
+  0% {
+    transform: scaleY(0);
+  }
+
+  50% {
+    transform: scaleY(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tx-root *,
+  .tx-root *::before,
+  .tx-root *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .tx-root[data-scroll='ready'] .tx-chapter:not(.tx-hero, [data-inview]) [data-reveal],
+  .tx-root[data-scroll='ready'] .tx-chapter:not([data-inview]) .tx-word {
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
+
+  .tx-root .tx-marquee-track:first-child {
+    flex-wrap: wrap;
+    flex: 1;
+  }
+
+  .tx-root .tx-marquee-track[aria-hidden='true'] {
+    display: none;
+  }
+
+  .tx-root[data-midnight='true'] .tx-begin .tx-btn--primary {
+    box-shadow: 0 0 36px 2px rgb(195 238 138 / 0.4);
+  }
+}

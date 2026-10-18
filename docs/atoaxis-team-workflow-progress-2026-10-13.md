@@ -421,3 +421,22 @@ Evidence `output/team-closure-2026-10-13/stripe-seat-admission-local.json`; nati
 หลังแก้ native PG/HTTP5ผ่าน รวม audit failure ของทั้งสามเส้นทาง, inviteกลับpending, ไม่มีmemberหลงเหลือ, removal failureไม่คืนที่นั่ง, removalretryไม่เพิ่มauditซ้ำ; server461ผ่าน/44ignored และstrict workspace all-targetClippyผ่าน. Sourcehashตรงกับnative run2026-10-16T19:11:25Z. ฐานจำลองหยุด/ลบแล้ว ไม่เปิดDocker. Evidence `output/team-closure-2026-10-13/stripe-member-atomic-local.json`.
 
 ขอบเขตผลผ่าน: database mutation+audit atomic. สำเนา privacy ledger ภายนอกยังทำหลังcommitตามเดิม; mirrorล้มเหลวยังเป็น committed-change/retry condition ไม่อ้างว่าข้ามdatabase/filesystem atomic. Recoveryของmirror, fullHTTP/browser และ concurrencyกับlifecycleอื่นยังเป็นงานตรวจต่อ. Paid entitlement/trial/grace/prorate/downgrade/portalยังไม่ครบ. Targetเดิม5,264,216→5,264,224KiB(~5.02GiB), คง cacheของGoal active. ไม่มีcommit/push/newtarget/worktree; production/checkout=false.
+
+## G5 Prospective entitlement history + branch integration — 18 ต.ค. 2026
+
+งานถูกเจ้าของเก็บใน `04daf024` และย้ายไป `codex/team-closure-wip` แล้ว; branch นี้เป็นที่ทำงานต่อ. รวม local `main` (`a49709f3`) เข้ามา: Git พบ explicit conflicts 6 ไฟล์ ไม่ใช่ 7; `team_insights.rs` auto-merge อีกหนึ่งไฟล์และตรวจแล้วว่าเก็บ G4 methods พร้อม error mapping ใหม่ครบ. Environment รวม settings ทั้งสองฝั่ง, Team page เก็บ panels ทั้งหมด, marketing ใช้โครงใหม่จาก main; งานเก่ายังอยู่ใน WIP commit. Cached `origin/main` (`dcba879e`) ใหม่กว่า local main อีก 2 commits ของ Journal ACK และยังไม่รวมใน merge นี้. ไม่อัปเดต/push main.
+
+เพิ่ม migration051 และ policy/repository สำหรับ trial 14 วันครั้งเดียว (package ต้องระบุอย่างชัดเจน), coverage history/revision ถาวร และช่วง paid/grace ที่ไม่เติม gap ย้อนหลัง. Worker ต่อ financial observation + coverage history + ACK ใน transaction เดียวกัน; ไม่มี row activation เดิมจะไม่สร้าง trial/สิทธิ์จาก webhook. การหมดอายุประเมินตาม deadline; snapshot เก่าไม่ยืดสิทธิ์ แต่ไม่ล้างช่วงที่เคยยืนยันแล้ว. Effective cancellation ปิด future coverage; `cancel_at_period_end` รักษาถึงปลายช่วง. Provider-day ต้อง coverage ครบทั้งวันและไม่มีช่องว่าง.
+
+Astra design/review พบและแก้สองจุด: grace ต้องผ่าน accepted-package proof และ first failure ต้องมาจาก unresolved episode ทั้ง subscription ไม่ใช่เฉพาะ latest invoice. เพิ่ม regression ที่มีสองใบแจ้งหนี้ล้มเหลวก่อน reconcile ครั้งแรก, package mismatch และ replay ของ failure ที่ resolved แล้ว. แก้ worker lease ใช้ `clock_timestamp()` หลังรอ billing lock พร้อมตรวจซ้ำหลัง binding/ก่อน ACK; expired result rollback ทั้งชุด. Review follow-up หลังแก้ยังไม่มีคำตอบยืนยัน จึงไม่อ้าง independent final review pass.
+
+| รายการ | พัฒนา | Local evidence | ยังเหลือ |
+|---|---|---|---|
+| Trial/paid/grace state + durable history | internal primitive และ worker hook เสร็จ | pure + native PG ผ่าน | activation API/UI และ restore proof |
+| Package/episode/scope/replay/lease checks | เสร็จในขอบเขตนี้ | regression ผ่าน | provider actual/staging |
+| เพิ่ม/อ่าน analytics ตาม billing | ยังไม่ครบ | ยังไม่เปิด runtime grant | admission receipts/worker และ common report/receipt/CSV fence |
+| Copilot billing | coverage predicate เท่านั้น | whole-day/gap pure tests | daily connector admission + retained report |
+
+ผลหลัง merge: server **469 passed / 46 ignored**, native PostgreSQL/HTTP **6 ชุด**, frontend **152 tests / 13 files**, TypeScript, scoped ESLint และ strict workspace/all-target Clippy ผ่าน. Queue filter **42 unit + 1 integration ผ่าน** รวม fixture1,191รายการ; ไม่อ้าง live drain latency จากผลนี้. การทดสอบ UI รอบแรกติด node_modules เก่าขาด dependencies ของ main; `npm ci --ignore-scripts` ตาม lockfile แล้วผ่าน. ภาวะ sandbox ไม่อนุญาต local HTTP fixture ในรอบก่อนแก้ด้วยสิทธิ์รันทดสอบ loopback; ไม่ตัด test ออก.
+
+Evidence `output/team-closure-2026-10-13/stripe-entitlement-local.json`, native run `2026-10-18T02:29:29.993632+00:00`. ฐานจำลองหยุดและลบแล้ว ไม่มี Docker. ไม่เปิด trial endpoint, live Checkout, paid analytics หรือ production readiness; state history เพียงอย่างเดียวไม่รับรอง admission. Financial retention/restore, prorate/downgrade/portal และ external gates ยัง pending. Goal G1–G6 ยัง active.

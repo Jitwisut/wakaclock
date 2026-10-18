@@ -3,6 +3,7 @@ import localFont from 'next/font/local';
 import { JsonLd } from '@/components/seo/json-ld';
 import GoogleAnalyticsInit from '@/lib/ga';
 import {
+  founderSchema,
   graph,
   organizationSchema,
   softwareApplicationSchema,
@@ -13,6 +14,7 @@ import type { SiteLocale } from '@/lib/seo/site';
 import { MarketingFooter } from './marketing-footer';
 import { MarketingMotion } from './marketing-motion';
 import { MarketingNav } from './marketing-nav';
+import { MarketingPointerEffects } from './marketing-pointer-effects';
 import { MarketingScrollIndex } from './marketing-scroll-index';
 
 /** Shared local display face. Keeping the asset local makes Netlify builds deterministic. */
@@ -36,7 +38,12 @@ const thaiSans = localFont({
   display: 'swap',
 });
 
-const SITE_GRAPH = graph(organizationSchema(), websiteSchema(), softwareApplicationSchema());
+const SITE_GRAPH = graph(
+  organizationSchema(),
+  founderSchema(),
+  websiteSchema(),
+  softwareApplicationSchema()
+);
 
 export function MarketingLayoutFrame({
   children,
@@ -62,6 +69,7 @@ export function MarketingLayoutFrame({
       </a>
       <MarketingNav locale={locale} />
       <MarketingMotion />
+      <MarketingPointerEffects />
       <main className="axis-main flex-1" id="marketing-content" tabIndex={-1}>
         {children}
       </main>

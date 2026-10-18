@@ -1,5 +1,5 @@
-import { assessPipeline, healthRank } from '@/lib/wakaclock/pipeline-health';
 import type { DeliveryStatusResponse } from '@/lib/wakaclock/measurement-types';
+import { assessPipeline, healthRank } from '@/lib/wakaclock/pipeline-health';
 
 export interface DeliveryHealth {
   deadLetter: number;
@@ -9,8 +9,21 @@ export interface DeliveryHealth {
   state: 'complete' | 'critical' | 'pending' | 'stale' | 'unavailable' | 'unknown' | 'warning';
 }
 
+type DeliveryDevice = DeliveryStatusResponse['devices'][number];
+
+/** No background collector on this device (never installed, or uninstalled):
+ * the client runs on demand, so collector evidence is not expected. */
+const isOnDemand = (device: DeliveryDevice) => !device.capture || device.capture.enabled === false;
+
+/** An on-demand client only reports when it runs. An idle, emptied queue is
+ * still the latest truth, not a stale snapshot. */
+const isIdleOnDemand = (device: DeliveryDevice) =>
+  isOnDemand(device) && !device.pending && !device.dead_letter;
+
 /** A successful new send is separate from a fully reconciled queue. Missing v2
  * details and old snapshots cannot establish completeness. */
+// Each branch is one ordered delivery/pipeline signal; splitting it would obscure the precedence.
+// eslint-disable-next-line sonarjs/cognitive-complexity
 export function deliveryHealth(
   data: DeliveryStatusResponse | undefined,
   unavailable = false,
@@ -43,9 +56,10 @@ export function deliveryHealth(
   } else if (
     devices.some(
       (device) =>
-        device.status === 'stale' ||
-        now - Date.parse(device.captured_at) > 300_000 ||
-        now - Date.parse(device.received_at) > 300_000
+        !isIdleOnDemand(device) &&
+        (device.status === 'stale' ||
+          now - Date.parse(device.captured_at) > 300_000 ||
+          now - Date.parse(device.received_at) > 300_000)
     )
   ) {
     state = 'stale';
@@ -69,31 +83,26 @@ export function deliveryHealth(
   if (
     devices.some(
       (device) =>
-        device.capture &&
-        (device.capture.parser_errors > 0 || device.capture.status === 'parser_failure')
+        !isOnDemand(device) &&
+        (device.capture!.parser_errors > 0 || device.capture!.status === 'parser_failure')
     )
   ) {
     state = 'critical';
     message = 'Capture failed to parse activity. Retained events still need processing.';
   }
   if (state === 'complete') {
-    const capture = devices.map((device) => device.capture);
-    if (capture.some((c) => c && (c.parser_errors > 0 || c.status === 'parser_failure'))) {
-      state = 'critical';
-      message =
-        'Capture failed to parse activity. Delivery may be complete while events remain uncaptured.';
-    } else if (capture.some((c) => c && now - Date.parse(c.captured_at) > 300_000)) {
+    // Only installed collectors are judged; on-demand devices report no collector.
+    const capture = devices
+      .filter((device) => !isOnDemand(device))
+      .map((device) => device.capture!);
+    if (capture.some((c) => now - Date.parse(c.captured_at) > 300_000)) {
       state = 'stale';
       message = 'Capture status is stale. Data completeness is unconfirmed.';
     } else if (
-      capture.some((c) => c && (c.status !== 'fresh' || !c.last_scan_success_at || c.pending > 0))
+      capture.some((c) => c.status !== 'fresh' || !c.last_scan_success_at || c.pending > 0)
     ) {
       state = 'unavailable';
       message = 'Capture is unavailable or events await processing. Data remains incomplete.';
-    } else if (capture.some((c) => !c || !c.enabled)) {
-      state = 'unknown';
-      message =
-        'Capture details not available or capture is disabled. Update/check the local collector.';
     }
   }
   const journals = devices.map((device) => device.capture?.editor_journal);
@@ -144,13 +153,13 @@ export function deliveryHealth(
     message = 'Journal can accept new activity, but recovered history remains incomplete.';
   } else if (state === 'complete') {
     if (
-      spools.some(
-        (spool) =>
-          !spool ||
-          spool.pending == null ||
-          !spool.last_scan_success_at ||
-          spool.status === 'unconfirmed'
-      )
+      devices.some((device, index) => {
+        const spool = spools[index];
+        if (!spool) return !isOnDemand(device);
+        return (
+          spool.pending == null || !spool.last_scan_success_at || spool.status === 'unconfirmed'
+        );
+      })
     ) {
       state = 'unknown';
       message =
@@ -169,9 +178,10 @@ export function deliveryHealth(
     }
   }
   for (const device of devices) {
+    if (isOnDemand(device) && !device.capture?.pipeline?.length) continue;
     const pipeline = assessPipeline(device.capture?.pipeline, now);
     if (healthRank[pipeline.state] > healthRank[state]) {
-      state = pipeline.state;
+      ({ state } = pipeline);
       message = pipeline.stage
         ? `${pipeline.stage.adapter_id}/${pipeline.stage.execution_surface} ${pipeline.stage.stage}: ${pipeline.stage.status}. Data completeness remains unconfirmed.`
         : 'Context and pipeline details are unavailable. Update/check the local client.';

@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 
 const HERO_HEIGHT_PROPERTY = '--hero-stage-height';
 const HERO_TOP_PROPERTY = '--hero-top';
-type RevealFrame = { clipPath?: string; transform: string };
+type RevealFrame = { clipPath?: string; filter?: string; opacity?: number; transform: string };
 
 /** Progressive enhancement: content stays readable before JS and without animation APIs. */
 export function MarketingMotion() {
@@ -100,10 +100,17 @@ export function MarketingMotion() {
             const heading = entry.target.matches('h1,h2,h3');
             const picture = entry.target.matches('figure, .mkt-page-art, .mkt-workspace-art');
             let from: RevealFrame = compact
-              ? { transform: 'translateY(10px)' }
-              : { clipPath: 'inset(0 0 0 0)', transform: 'translateY(18px)' };
+              ? { opacity: 0.4, transform: 'translateY(10px)' }
+              : { clipPath: 'inset(0 0 0 0)', opacity: 0.25, transform: 'translateY(18px)' };
             if (heading && !compact) {
-              from = { clipPath: 'inset(0 0 95% 0)', transform: 'translateY(24px)' };
+              // The clip wipes down the heading, so a wrapped heading arrives line by line,
+              // coming into focus as it rises. Played once; the text is real text throughout.
+              from = {
+                clipPath: 'inset(0 0 95% 0)',
+                filter: 'blur(6px)',
+                opacity: 0.35,
+                transform: 'translateY(24px)',
+              };
             } else if (picture && !compact) {
               from = {
                 clipPath: 'inset(6% 4% 6% 4%)',
@@ -113,7 +120,14 @@ export function MarketingMotion() {
             const animation = entry.target.animate(
               [
                 from,
-                compact ? { transform: 'none' } : { clipPath: 'inset(0 0 0 0)', transform: 'none' },
+                compact
+                  ? { opacity: 1, transform: 'none' }
+                  : {
+                      clipPath: 'inset(0 0 0 0)',
+                      ...(from.filter ? { filter: 'blur(0)' } : {}),
+                      opacity: 1,
+                      transform: 'none',
+                    },
               ],
               {
                 duration: compact ? 420 : 1100,

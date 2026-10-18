@@ -1,4 +1,5 @@
 import type { PipelineStage } from '@/lib/wakaclock/pipeline-health';
+
 export interface MeasurementQuality {
   attribution_coverage: {
     attributed_line_changes: number;
@@ -72,27 +73,27 @@ export interface DeliveryStatusResponse {
   devices: Array<{
     age_seconds: number;
     capture?: {
-      pipeline?: PipelineStage[];
       captured_at: string;
-      enabled: boolean;
-      last_scan_success_at: null | string;
-      producer_spool?: {
-        status: string;
-        pending: null | number;
-        accepted: number;
-        failure_count: number;
-        paused_excluded: number;
-        last_scan_success_at: null | string;
-        error_code?: null | string;
-      };
       editor_journal?: {
-        status: string;
-        pending: null | number;
         dead_letter: number;
         last_observed_at: string;
+        pending: null | number;
+        status: string;
       };
+      enabled: boolean;
+      last_scan_success_at: null | string;
       parser_errors: number;
       pending: number;
+      pipeline?: PipelineStage[];
+      producer_spool?: {
+        accepted: number;
+        error_code?: null | string;
+        failure_count: number;
+        last_scan_success_at: null | string;
+        paused_excluded: number;
+        pending: null | number;
+        status: string;
+      };
       schema_version: number;
       status: string;
     } | null;

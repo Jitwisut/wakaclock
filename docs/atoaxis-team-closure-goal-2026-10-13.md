@@ -138,3 +138,7 @@ G5 customer provisioning 14 ต.ค.: owner-only operation/status API, durable s
 ### Progress 2026-10-17: membership/audit failure recovery
 
 Reproduced audit-write failure leaving committed membership, then fixed add/invite/remove to commit their audit atomically with membership/capacity changes. Fault tests now pass; server461/44ignored, nativePG/HTTP5, strictClippy. Evidence `output/team-closure-2026-10-13/stripe-member-atomic-local.json`. External privacy-ledger mirror remains postcommit and needs separate retry/restore evidence. Paid commercial runtime/external gates remain pending; Goal active, source uncommitted, production=false.
+
+### Progress 2026-10-18: preserved branch, main merge and prospective coverage
+
+Owner preserved work in `04daf024`; continue on `codex/team-closure-wip`. Merged local main `a49709f3` with six explicit conflicts resolved, preserving Team changes and main fixes. Added durable internal trial/coverage history plus package/episode/lease safeguards; no public activation or analytics admission grant yet. After merge: server469/46ignored, nativePG6, UI152, TypeScript/scopedESLint/strictClippy, queue42unit+1integration passed. See `stripe-entitlement-local.json` and progress report for exact source/evidence and remaining admission/restore/lifecycle work. No main push, live configuration or external certification; Goal remains active. Cached origin/main has two later commits not included in this local-main merge.

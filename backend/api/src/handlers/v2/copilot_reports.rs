@@ -17,6 +17,9 @@ fn error(e: anyhow::Error) -> ApiError {
     match e.downcast_ref::<TeamError>() {
         Some(TeamError::Invalid(message)) => ApiError::bad_request(*message),
         Some(TeamError::ProjectionChanged) => ApiError::conflict("report changed; reload"),
+        Some(TeamError::Disabled) => ApiError::service_unavailable(
+            "Copilot weekly reports or Team are not enabled for this organization",
+        ),
         _ => ApiError::service_unavailable("Copilot report unavailable"),
     }
 }

@@ -9,6 +9,19 @@ use crate::model::date_range::ResolvedRange;
 use crate::model::insights::{InsightItem, InsightRow, InsightsAllTimeRangeRow, InsightsResponse};
 use crate::services::activity_timeline::{ActivityTimelineService, BridgeConfig, Dimension};
 
+/// A caller-supplied insight type, range or timezone the API does not accept. Handlers
+/// map it to 400; every other error stays a server failure.
+#[derive(Debug)]
+pub struct InvalidInsightsRequest(pub String);
+
+impl std::fmt::Display for InvalidInsightsRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for InvalidInsightsRequest {}
+
 pub struct InsightsService {
     clickhouse: Arc<ClickHouseClient>,
     /// Insights used to read `insights_agg`, a `sum(active_seconds)` rollup, so every
@@ -81,7 +94,7 @@ impl InsightsService {
         timezone: Option<&str>,
     ) -> Result<ResolvedRange> {
         let today = ResolvedRange::today_date_string(timezone)
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            .map_err(|error| InvalidInsightsRequest(error.to_string()))?;
         let today = NaiveDate::parse_from_str(&today, "%Y-%m-%d")?;
 
         match range {
@@ -110,9 +123,11 @@ impl InsightsService {
                 ResolvedRange::parse_unbounded(&start, &end, timezone)
                     .map_err(|error| anyhow::anyhow!(error.to_string()))
             }
-            _ => anyhow::bail!(
+            _ => Err(InvalidInsightsRequest(
                 "Invalid insights range, expected one of: today, last_7_days, last_30_days, all_time"
-            ),
+                    .into(),
+            )
+            .into()),
         }
     }
 
@@ -223,9 +238,11 @@ fn map_insight_type(insight_type: &str) -> Result<Dimension> {
         "editors" => Ok(Dimension::Editor),
         "operating_systems" => Ok(Dimension::OperatingSystem),
         "branches" => Ok(Dimension::Branch),
-        _ => anyhow::bail!(
+        _ => Err(InvalidInsightsRequest(
             "Invalid insight type, expected one of: languages, projects, editors, operating_systems, branches"
-        ),
+                .into(),
+        )
+        .into()),
     }
 }
 
@@ -246,4 +263,16 @@ fn format_duration(secs: f64) -> String {
 
 fn _parse_date(date: &str) -> Result<NaiveDate> {
     NaiveDate::parse_from_str(date, "%Y-%m-%d").context("Invalid date format, expected YYYY-MM-DD")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{map_insight_type, InvalidInsightsRequest};
+
+    #[test]
+    fn unknown_insight_type_is_a_client_error() {
+        let error = map_insight_type("weekday").unwrap_err();
+        assert!(error.downcast_ref::<InvalidInsightsRequest>().is_some());
+        assert!(map_insight_type("languages").is_ok());
+    }
 }

@@ -100,6 +100,18 @@ const nextConfig: NextConfig = {
   },
 
   // ---------------------------------------------------------------------------
+  // Redirects
+  // ---------------------------------------------------------------------------
+  // The /time preview became the homepage's opening experience. Temporary (307), so the
+  // address stays free if a standalone version is ever wanted again.
+  async redirects() {
+    return [
+      { source: '/time', destination: '/', permanent: false },
+      { source: '/time/th', destination: '/th', permanent: false },
+    ];
+  },
+
+  // ---------------------------------------------------------------------------
   // Headers (Security)
   // ---------------------------------------------------------------------------
   async headers() {

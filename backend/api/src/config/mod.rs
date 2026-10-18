@@ -213,6 +213,14 @@ impl Config {
             std::env::var("ATOAXIS_MEASUREMENT_REPAIR_ENABLED").ok(),
             "ATOAXIS_MEASUREMENT_REPAIR_ENABLED",
         )?;
+        // Copilot flags are read per request (tests toggle them); validate them here so a
+        // typo refuses to boot instead of silently leaving the feature off.
+        for name in [
+            "ATOAXIS_COPILOT_DAILY_ENABLED",
+            "ATOAXIS_COPILOT_WEEKLY_ENABLED",
+        ] {
+            parse_opt_in_feature_flag(std::env::var(name).ok(), name)?;
+        }
 
         Ok(Self {
             server: ServerConfig {
@@ -287,6 +295,12 @@ impl Config {
             brokers,
         })
     }
+}
+
+/// Reads an opt-in flag at call time with the same spelling rules as startup config.
+/// Values that fail to parse were already rejected by `Config::from_env`.
+pub(crate) fn opt_in_env_flag(name: &str) -> bool {
+    parse_opt_in_feature_flag(std::env::var(name).ok(), name).unwrap_or(false)
 }
 
 fn parse_opt_in_feature_flag(value: Option<String>, name: &str) -> Result<bool> {

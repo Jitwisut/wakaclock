@@ -113,14 +113,36 @@ export function Subheading({ children }: { children: React.ReactNode }) {
   return <h3 className="mt-8 text-base font-semibold">{children}</h3>;
 }
 
+/** A short "Label: value" lead-in (no sentence before the colon) is set in bold. */
+const LEAD_IN = /^([^!.:?]{2,32}):\s+(\S.*)$/s;
+
+function BulletItem({ item }: { item: string }) {
+  const match = LEAD_IN.exec(item);
+  if (!match) return <li>{item}</li>;
+  return (
+    <li>
+      <strong>{match[1]}:</strong> {match[2]}
+    </li>
+  );
+}
+
 export function Bullets({ items }: { items: readonly string[] }) {
   return (
     <ul className="list-disc space-y-2 pl-5 text-sm" style={MUTED_TEXT}>
       {items.map((item) => (
-        <li key={item}>{item}</li>
+        <BulletItem item={item} key={item} />
       ))}
     </ul>
   );
+}
+
+/**
+ * Escapes only what HTML text requires. React's own escaping also turns every `"` and `'`
+ * into `&quot;` / `&#x27;`, which is valid but makes JSON and shell samples read as runs of
+ * the word "quot" to any crawler that does not decode entities.
+ */
+function escapeCode(value: string) {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
 export function CodeBlock({ children, label }: { children: string; label?: string }) {
@@ -148,7 +170,9 @@ export function CodeBlock({ children, label }: { children: string; label?: strin
           fontFamily: 'var(--font-mkt-body), ui-monospace, monospace',
         }}
       >
-        <code>{children}</code>
+        {/* Escaped by escapeCode above; the sample text is static copy, never user input. */}
+        {/* eslint-disable-next-line react/no-danger */}
+        <code dangerouslySetInnerHTML={{ __html: escapeCode(children) }} />
       </pre>
     </figure>
   );
