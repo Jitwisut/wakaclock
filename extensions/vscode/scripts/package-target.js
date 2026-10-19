@@ -27,6 +27,6 @@ execFileSync(process.execPath, [path.join(__dirname, "generate-cli-manifest.js")
 });
 const vsce = process.env.VSCE_BIN || "npx";
 const vsceArgs = vsce === "npx"
-  ? ["--yes", "@vscode/vsce", "package", "--target", target, "--out", `atoaxis-vscode-${target}.vsix`]
-  : ["package", "--target", target, "--out", `atoaxis-vscode-${target}.vsix`];
+  ? ["--yes", "@vscode/vsce", "package", "--allow-missing-repository", "--target", target, "--out", `atoaxis-vscode-${target}.vsix`]
+  : ["package", "--allow-missing-repository", "--target", target, "--out", `atoaxis-vscode-${target}.vsix`];
 execFileSync(vsce, vsceArgs, { cwd: root, stdio: "inherit" });
