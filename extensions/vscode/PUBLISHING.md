@@ -8,7 +8,10 @@ tokens. Nobody else should publish on the owner's behalf.
 
 ## 1. Decide before the first publish
 
-- [ ] **Public listing while access is invite-only.** Anyone can install a public
+- [x] **Public listing while access is invite-only.** Decided by the owner on
+      2026-10-19: list publicly with the Preview badge, and ship the first-run
+      Join Early Access prompt described below before the first publish. Do not
+      publish a build without that prompt. Background: anyone can install a public
       listing, and someone without a key gets an extension that does nothing. That
       tends to produce 1-star reviews. The listing is marked `preview: true`, and the
       description and README state the invite-only requirement up front. The
