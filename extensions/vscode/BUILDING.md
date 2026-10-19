@@ -30,7 +30,11 @@ release. Configure these repository/environment secrets before tagging a release
 - `MACOS_SIGNING_IDENTITY` — Developer ID Application identity used by `codesign`;
 - `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` — notarization credentials;
 - `WINDOWS_CERTIFICATE_BASE64` — base64-encoded Authenticode `.pfx` including its private key;
-- `WINDOWS_CERTIFICATE_PASSWORD` — password protecting that `.pfx`.
+- `WINDOWS_CERTIFICATE_PASSWORD` — password protecting that `.pfx`;
+- `VSCE_PAT` — Azure DevOps token with Marketplace → Manage scope for publisher `atoaxis`;
+- `OVSX_PAT` — optional Open VSX access token; the Open VSX step is skipped when it is unset.
+
+Gallery publishing steps and the pre-release checklist are in [PUBLISHING.md](PUBLISHING.md).
 
 The Windows certificate thumbprint is derived from the certificate imported into the runner; it
 is not stored as a separate secret.
@@ -42,3 +46,18 @@ at a development override and use the new machine-readable probe:
 WAKACLOCK_SERVER_URL=https://api.atoaxis.com \
   ./wakaclock verify --json
 ```
+
+## Local development
+
+Use Node.js 24 for build and packaging, matching CI. The development dependency
+`@vscode/vsce` 4 requires Node.js 22 or newer; this does not change the minimum
+VS Code version for installed extensions.
+
+```bash
+npm install
+npm run compile
+```
+
+Then press `F5` in VS Code to launch the extension host. If the extension is already
+running from the symlinked checkout, run **Developer: Reload Window** after compiling;
+the Extension Host keeps the previously loaded JavaScript until the window reloads.

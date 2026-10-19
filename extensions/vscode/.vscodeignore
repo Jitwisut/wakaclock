@@ -5,3 +5,9 @@ tsconfig.json
 vitest.config.ts
 node_modules/.vitest/**
 **/*.map
+.vscode/**
+.gitignore
+scripts/**
+BUILDING.md
+PUBLISHING.md
+*.vsix

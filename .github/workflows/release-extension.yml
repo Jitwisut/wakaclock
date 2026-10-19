@@ -16,7 +16,7 @@ jobs:
       matrix:
         include:
           - target: darwin-x64
-            runner: macos-13
+            runner: macos-15-intel
             rust_target: x86_64-apple-darwin
           - target: darwin-arm64
             runner: macos-14
@@ -208,7 +208,7 @@ jobs:
       matrix:
         include:
           - asset: darwin-x64
-            runner: macos-13
+            runner: macos-15-intel
             rust_target: x86_64-apple-darwin
           - asset: darwin-arm64
             runner: macos-14
@@ -392,3 +392,16 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" dist/wakaclock-*.tar.gz dist/wakaclock-*.tar.gz.sha256 --verify-tag --generate-notes --title "AtoAxis $GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
           fi
+      - name: Publish every platform package to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          # Optional until the atoaxis Open VSX namespace exists; each VSIX
+          # carries its own TargetPlatform, so no --target flag is needed.
+          if [[ -z "${OVSX_PAT:-}" ]]; then
+            echo "OVSX_PAT is not configured; skipping Open VSX"
+            exit 0
+          fi
+          for package in dist/*.vsix; do
+            npx --yes ovsx publish "$package" --pat "$OVSX_PAT"
+          done

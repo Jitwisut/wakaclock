@@ -1,34 +1,42 @@
 {
   "name": "atoaxis-vscode",
   "displayName": "AtoAxis \u2014 Developer Time Tracking",
-  "description": "Developer time tracking for VS Code with AI agent attribution. Install, add your AtoAxis API key, and start tracking.",
+  "description": "WakaTime-compatible coding time tracking with AI-agent attribution. Invite-only Early Access: requires an AtoAxis API key.",
   "version": "0.2.0",
   "publisher": "atoaxis",
-  "license": "SEE LICENSE IN LICENSE",
-  "homepage": "https://github.com/Jitwisut/wakaclock#readme",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Jitwisut/wakaclock.git"
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#177044",
+    "theme": "dark"
   },
+  "preview": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://www.atoaxis.com",
   "bugs": {
-    "url": "https://github.com/Jitwisut/wakaclock/issues"
+    "url": "https://www.atoaxis.com/contact"
   },
   "keywords": [
     "time tracking",
+    "time tracker",
     "coding time",
+    "wakatime",
+    "wakatime alternative",
+    "ai",
+    "ai attribution",
+    "claude code",
+    "codex",
+    "gemini cli",
     "developer productivity",
     "analytics",
     "activity tracking",
-    "programming",
-    "self-hosted",
     "metrics"
   ],
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Other",
-    "Visualization"
+    "Visualization",
+    "Other"
   ],
   "main": "./out/src/extension.js",
   "extensionKind": [
