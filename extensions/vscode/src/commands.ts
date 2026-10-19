@@ -152,7 +152,9 @@ export function registerCommands(
     }),
     vscode.commands.registerCommand("wakaclock.setApiKey", async () => {
       const value = await vscode.window.showInputBox({
-        prompt: "API key generated from the AtoAxis dashboard (Settings → API key)",
+        prompt:
+          "API key generated from the AtoAxis dashboard (Settings → API key). " +
+          "Don't have a key? Join Early Access at https://www.atoaxis.com/join",
         placeHolder: "wcl_...",
         password: true,
         ignoreFocusOut: true

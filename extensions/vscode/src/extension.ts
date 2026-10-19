@@ -27,6 +27,7 @@ import { StatusBarController } from "./statusBar";
 import { SingleFlight } from "./singleFlight";
 import { RooBridge, cachedRooProfile, rooProfileOwner, type RooSpool, type RooPublicApi } from "./rooBridge";
 import { registerJournalRecoveryCommands } from "./journalRecoveryCommands";
+import { maybePromptForApiKey } from "./apiKeyPrompt";
 
 let activeBufferManager: HeartbeatBufferManager | undefined;
 
@@ -342,6 +343,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   registerEventSubscriptions(context, configService, bufferManager, logger);
   void vscode.commands.executeCommand("setContext", "wakaclock.enabled", true);
+  // Fire-and-forget: the notification resolves only when the user answers it.
+  void maybePromptForApiKey(context, logger);
 
   // AI discovery/setup is deliberately detached from the editor heartbeat pipeline.
   // It starts only after an authenticated key is available and never blocks the
