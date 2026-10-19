@@ -5,7 +5,10 @@ import { EarlyAccessForm } from '@/components/marketing/early-access-form';
 import { HeroPanel } from '@/components/marketing/hero-panel';
 
 vi.mock('@/lib/env', () => ({ env: { NEXT_PUBLIC_WAKACLOCK_API_URL: 'http://localhost:8080' } }));
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  window.history.replaceState({}, '', '/');
+});
 
 describe('activity studio', () => {
   it('keeps 12 lines across modes and exposes unknown attribution', () => {
@@ -121,6 +124,20 @@ describe('backend signup', () => {
     );
     expect(screen.getByLabelText('อีเมล')).toHaveValue('test@example.com');
     expect(screen.getByRole('button', { name: 'ลงทะเบียน' })).toBeEnabled();
+  });
+  it('records the utm_source of the landing URL in source_page', async () => {
+    window.history.replaceState({}, '', '/join?utm_source=x');
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<EarlyAccessForm sourcePage="en/join" />);
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'test@example.com' },
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.submit(screen.getByRole('button', { name: 'Join the list' }).closest('form')!);
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({ source_page: 'en/join?utm_source=x' });
   });
   it('does not accept a generic 200 response without a persistence acknowledgement', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
