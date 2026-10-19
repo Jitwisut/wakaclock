@@ -2388,14 +2388,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
               'The CLI sends it over HTTPS, authenticated with your API key',
               'If the request fails the heartbeat is queued in a local SQLite file and retried later',
               'Heartbeat data is not sent to any third-party analytics or advertising service',
-              'This public website loads Google Analytics in production to count page visits; the dashboard and the heartbeat pipeline do not',
+              'Only this public website can load Google Analytics, and only if you allow it (see "Website analytics"); the dashboard and the heartbeat pipeline never do',
             ]
           : [
               'กิจกรรมใน editor ถูกพักไว้ในหน่วยความจำ แล้วส่งต่อให้ wakaclock-cli บนเครื่องเดียวกัน',
               'CLI ส่งข้อมูลผ่าน HTTPS โดยยืนยันตัวตนด้วย API key ของคุณ',
               'ถ้าส่งไม่สำเร็จ heartbeat จะถูกคิวไว้ในไฟล์ SQLite ในเครื่องแล้วลองใหม่ภายหลัง',
               'ข้อมูล heartbeat ไม่ถูกส่งไปยังบริการ analytics หรือโฆษณาของบุคคลที่สามใด ๆ',
-              'เว็บไซต์สาธารณะนี้โหลด Google Analytics ในโหมด production เพื่อนับจำนวนผู้เข้าชม ส่วน dashboard และเส้นทางของ heartbeat ไม่ได้ใช้',
+              'มีเพียงเว็บไซต์สาธารณะนี้ที่อาจโหลด Google Analytics และจะโหลดก็ต่อเมื่อคุณอนุญาตเท่านั้น (ดู "Website analytics") ส่วน dashboard และเส้นทางของ heartbeat ไม่เคยใช้',
             ]
       ),
     ],
@@ -2421,6 +2421,33 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
               'ค่า aggregate สร้างจากข้อมูลดิบ การลบข้อมูลดิบจึงลบค่าเหล่านั้นไปด้วย',
               'ขอลบบัญชีหรือข้อมูลได้ทางอีเมล',
               'การเพิกถอน API key จะหยุดข้อมูลใหม่ทันที โดยไม่ลบข้อมูลที่มีอยู่แล้ว',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/privacy#6',
+    (en) => [
+      p(
+        en
+          ? 'The public website (atoaxis.com and its Thai pages) can use Google Analytics 4 to count visits and see which links bring people here. It stays off until you choose "Allow analytics" in the privacy prompt; choosing "Decline" means the Google script is never loaded.'
+          : 'เว็บไซต์สาธารณะ (atoaxis.com และหน้าภาษาไทย) อาจใช้ Google Analytics 4 เพื่อนับจำนวนผู้เข้าชมและดูว่าลิงก์ใดพาคนมาที่นี่ โดยจะปิดอยู่จนกว่าคุณจะเลือก "อนุญาต analytics" ในหน้าต่างตัวเลือกความเป็นส่วนตัว ถ้าเลือก "ไม่อนุญาต" สคริปต์ของ Google จะไม่ถูกโหลดเลย'
+      ),
+      bullets(
+        en
+          ? [
+              "Your choice is remembered in this browser's local storage; no analytics cookie is set before you allow it",
+              'If you allow it, Google receives the page address, the referring link and standard browser and device details, and sets its own analytics cookies',
+              "To change your choice, clear this site's stored data in your browser and the prompt appears again",
+              'The dashboard, the CLI, editor extensions and heartbeat data are never sent to Google Analytics',
+              'An Early Access signup also records which campaign link you arrived from (for example utm_source=reddit), stored with your email so we can tell which channels work',
+            ]
+          : [
+              'ตัวเลือกของคุณถูกจำไว้ใน local storage ของเบราว์เซอร์นี้ และจะไม่มี analytics cookie ใด ๆ ก่อนที่คุณจะอนุญาต',
+              'หากคุณอนุญาต Google จะได้รับที่อยู่หน้าเว็บ ลิงก์ที่พาคุณมา และข้อมูลพื้นฐานของเบราว์เซอร์และอุปกรณ์ และจะตั้ง analytics cookie ของ Google เอง',
+              'หากต้องการเปลี่ยนตัวเลือก ให้ล้างข้อมูลที่เว็บไซต์นี้เก็บไว้ในเบราว์เซอร์ แล้วหน้าต่างตัวเลือกจะแสดงอีกครั้ง',
+              'dashboard, CLI, extension ของ editor และข้อมูล heartbeat ไม่เคยถูกส่งไปยัง Google Analytics',
+              'การสมัคร Early Access จะบันทึกด้วยว่าคุณมาจากลิงก์แคมเปญใด (เช่น utm_source=reddit) เก็บไว้คู่กับอีเมลของคุณ เพื่อให้เรารู้ว่าช่องทางใดได้ผล',
             ]
       ),
     ],
@@ -3138,6 +3165,7 @@ generic(
       'AI-related data',
       'How data travels',
       'Retention and deletion',
+      'Website analytics',
     ],
     faqEntries: [
       {
@@ -3174,6 +3202,11 @@ generic(
         answer:
           'New data stops immediately; revoking a key does not delete data that already exists.',
       },
+      {
+        question: 'Does the website use analytics or cookies?',
+        answer:
+          'Only if you allow it. The public site asks before loading Google Analytics 4; if you decline, the script is never loaded and no analytics cookie is set. The dashboard and heartbeat data are never sent to it.',
+      },
     ],
   },
   {
@@ -3188,6 +3221,7 @@ generic(
       'ข้อมูลที่เกี่ยวกับ AI',
       'ข้อมูลเดินทางอย่างไร',
       'การเก็บรักษาและลบ',
+      'Website analytics',
     ],
     faqEntries: [
       {
@@ -3222,6 +3256,11 @@ generic(
       {
         question: 'ถ้าเพิกถอน API key จะเกิดอะไรขึ้น?',
         answer: 'ข้อมูลใหม่จะหยุดทันที แต่การเพิกถอนไม่ลบข้อมูลที่มีอยู่แล้ว',
+      },
+      {
+        question: 'เว็บไซต์ใช้ analytics หรือ cookie หรือไม่?',
+        answer:
+          'ใช้ก็ต่อเมื่อคุณอนุญาตเท่านั้น เว็บไซต์สาธารณะจะถามก่อนโหลด Google Analytics 4 ถ้าคุณไม่อนุญาต สคริปต์จะไม่ถูกโหลดและไม่มี analytics cookie ส่วน dashboard และข้อมูล heartbeat ไม่เคยถูกส่งไป',
       },
     ],
   }

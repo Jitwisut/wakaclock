@@ -90,3 +90,15 @@ it('pairs every sitemap entry with published English and Thai counterparts', () 
     expect(urls.has(String(entry.alternates?.languages?.th))).toBe(true);
   }
 });
+
+it.each(['en', 'th'] as const)(
+  '%s/privacy: discloses the consent-gated website analytics and campaign attribution',
+  (locale) => {
+    render(<LocalizedMarketingPage locale={locale} path="/privacy" />);
+    const heading = screen.getByRole('heading', { level: 2, name: 'Website analytics' });
+    const section = heading.closest('section')!;
+    expect(section).toHaveTextContent('Google Analytics 4');
+    expect(section).toHaveTextContent('utm_source=reddit');
+    expect(section).toHaveTextContent(locale === 'en' ? 'Allow analytics' : 'อนุญาต analytics');
+  }
+);
