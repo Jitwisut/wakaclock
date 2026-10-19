@@ -15,13 +15,12 @@ tokens. Nobody else should publish on the owner's behalf.
       listing, and someone without a key gets an extension that does nothing. That
       tends to produce 1-star reviews. The listing is marked `preview: true`, and the
       description and README state the invite-only requirement up front. The
-      extension itself has no first-run prompt yet: a fresh install only shows
-      `AtoAxis: Connect` in the status bar. Recommended mitigation (a code change,
-      not made here): on first activation without a key, show a notification with
-      **Set API Key** and **Join Early Access** (`https://www.atoaxis.com/join`), and
-      add a "Don't have a key?" link to the `AtoAxis: Set API Key` input box.
-      Alternative: hold the public listing and hand Early Access members the VSIX
-      from GitHub Releases until keys are self-serve.
+      first-run prompt is in `src/apiKeyPrompt.ts`. On the first activation with no
+      key, it shows a notification once per install, with **Set API Key**,
+      **Join Early Access** (`https://www.atoaxis.com/join`) and
+      **Don't show again**. The `AtoAxis: Set API Key` input box also links to
+      `/join`. Before publishing, still check it manually by installing on a clean
+      VS Code profile with no key.
 - [ ] **End-user license.** `package.json` says `SEE LICENSE IN LICENSE`, but the
       package has no license file (vsce warns `LICENSE not found` and continues).
       The repository-root `LICENSE` is a confidential "all use prohibited" notice.
