@@ -16,7 +16,6 @@ AtoAxis API key, and keys are currently issued to invite-only Early Access membe
   `Offline queued` states.
 - Records writes made outside VS Code to files in the workspace, for example agent
   `apply_patch` edits, without guessing who made them.
-- Nested worktree checkouts inside a workspace no longer count as separate coding.
 - Metadata-only copy/paste counts; clipboard contents are never sent or stored.
 
 ### Reliability
@@ -31,9 +30,11 @@ AtoAxis API key, and keys are currently issued to invite-only Early Access membe
 
 ### AI attribution
 
-- Opt-in, per-tool consent to install metadata-only hooks for Claude Code, Codex CLI,
-  Gemini CLI, Kilo Code and Kimi Code CLI, plus Cline hooks on Windows and an opt-in
-  Roo task bridge.
+- Opt-in, per-tool consent to install metadata-only hooks for Claude Code, Codex CLI
+  and Gemini CLI. Kilo Code and Kimi Code CLI adapters are Beta.
+- `AtoAxis: Configure Native Activity Hooks` (including Cline on Windows) and the
+  opt-in Roo task bridge are included, but their live certification is still
+  pending.
 - AI-written lines are reported separately from human lines. Edits without native
   tool evidence stay `unattributed` instead of being guessed.
 - `AtoAxis: Test AI Detection`, `Show AI Tracking Status` and
