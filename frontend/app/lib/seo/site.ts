@@ -221,6 +221,8 @@ const NEW_GUIDES_DATE = '2026-09-20';
 const ATTRIBUTION_UPDATE_DATE = '2026-09-21';
 const THAI_SEO_UPDATE_DATE = '2026-09-23';
 const MIGRATION_GUIDE_DATE = '2026-09-28';
+/** Privacy page: consent-gated website analytics and campaign attribution disclosed. */
+const WEBSITE_ANALYTICS_DATE = '2026-10-19';
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/': '2026-09-22',
   '/teams': AUDIT_REVIEW_DATE,
@@ -237,7 +239,7 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/about': ATTRIBUTION_UPDATE_DATE,
   '/contact': AUDIT_REVIEW_DATE_ROUND_3,
   '/terms': AUDIT_REVIEW_DATE_ROUND_3,
-  '/privacy': AUDIT_REVIEW_DATE_ROUND_3,
+  '/privacy': WEBSITE_ANALYTICS_DATE,
   '/early-access': AUDIT_REVIEW_DATE_ROUND_3,
   '/docs/getting-started': AUDIT_REVIEW_DATE_ROUND_3,
   '/docs/migrate-from-wakatime': MIGRATION_GUIDE_DATE,
@@ -258,6 +260,7 @@ const TH_ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
   '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
   '/docs/migrate-from-wakatime': MIGRATION_GUIDE_DATE,
+  '/privacy': WEBSITE_ANALYTICS_DATE,
 };
 
 export function contentModified(path: string, locale: SiteLocale): string | undefined {

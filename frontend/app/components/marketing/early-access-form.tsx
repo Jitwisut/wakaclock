@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react';
 
+import { sourcePageWithCampaign } from '@/lib/early-access/campaign-source';
 import { localizedPath, type SiteLocale } from '@/lib/seo/site';
 
 import { MKT_BORDER } from './tokens';
@@ -58,7 +59,9 @@ export function EarlyAccessForm({
       email: String(formData.get('email') || '').trim(),
       interest: String(formData.get('interest') || 'solo'),
       locale,
-      source_page: sourcePage,
+      // Read at submit time so the channel from the landing URL (?utm_source=reddit)
+      // is stored with the signup; see lib/early-access/campaign-source.ts.
+      source_page: sourcePageWithCampaign(sourcePage, window.location.search),
       consent: formData.get('consent') === 'yes',
       bot_field: String(formData.get('bot-field') || ''),
     };
