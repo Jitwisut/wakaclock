@@ -5,6 +5,8 @@ bl_info = {
     "blender": (4, 0, 0),
     "location": "Preferences > Add-ons",
     "description": "Privacy-first modeling activity tracking for AtoAxis",
+    "doc_url": "https://www.atoaxis.com/docs",
+    "tracker_url": "https://www.atoaxis.com/contact",
     "category": "System",
 }
 

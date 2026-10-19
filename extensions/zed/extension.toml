@@ -1,6 +1,6 @@
 id = "atoaxis-lsp"
 name = "AtoAxis"
-description = "Privacy-first developer time tracking for Zed, powered by the AtoAxis language server."
+description = "Privacy-first developer time tracking for Zed, powered by the AtoAxis language server. https://www.atoaxis.com"
 version = "0.1.0"
 schema_version = 1
 authors = ["AtoAxis"]
