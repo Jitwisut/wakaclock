@@ -1,5 +1,7 @@
 # AtoAxis for Zed
 
+Website: <https://www.atoaxis.com>
+
 This extension is intentionally a thin launcher. Zed sends LSP document lifecycle events to
 `wakaclock-ls`; the language server builds privacy-safe AtoAxis heartbeats using the same
 `wakaclock-core` and AST/project detection as the CLI.
@@ -18,7 +20,8 @@ it downloads the matching `wakaclock-ls-<platform>` asset from the latest GitHub
 verifies the accompanying `.sha256` digest before execution.
 
 Configure the normal AtoAxis CLI credentials (`WAKACLOCK_API_KEY` / `~/.wakaclock/config.toml`)
-before enabling tracking.
+before enabling tracking. Don't have an API key yet? Join Early Access at
+<https://www.atoaxis.com/join>.
 
 ## Development
 

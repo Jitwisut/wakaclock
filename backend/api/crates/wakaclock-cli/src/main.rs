@@ -124,7 +124,7 @@ impl AiSyncLock {
 }
 
 #[derive(Parser)]
-#[command(name = "wakaclock", version, about = "AtoAxis CLI Hub")]
+#[command(name = "wakaclock", version, about = "AtoAxis CLI Hub — https://www.atoaxis.com")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -2076,7 +2076,7 @@ async fn run_command(
                     key.unwrap_or_default().trim().to_string()
                 };
                 if key.is_empty() {
-                    return Err("API key is required (pass a positional key or --stdin)".into());
+                    return Err("API key is required (pass a positional key or --stdin). Don't have a key? Join Early Access at https://www.atoaxis.com/join".into());
                 }
                 let mut persisted = Config::load();
                 persisted.api_key = Some(key);
@@ -8136,7 +8136,7 @@ fn identity_line(config: &Config) -> String {
     if config.api_key.is_some() {
         "API key: present in config.toml (not verified here)".to_string()
     } else {
-        "API key: missing — run `printf '<KEY>\\n' | wakaclock config set-key --stdin; requests will be rejected"
+        "API key: missing — run `printf '<KEY>\\n' | wakaclock config set-key --stdin; requests will be rejected. Don't have a key? Join Early Access at https://www.atoaxis.com/join"
             .to_string()
     }
 }

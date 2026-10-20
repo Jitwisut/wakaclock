@@ -16,6 +16,7 @@ class ATOAXIS_Preferences(bpy.types.AddonPreferences):
         layout = self.layout
         layout.prop(self, "cli_path")
         layout.label(text="Configure your AtoAxis API key with the wakaclock CLI before tracking.")
+        layout.label(text="Don't have a key? Join Early Access at https://www.atoaxis.com/join")
 
 
 _CLASSES = (ATOAXIS_Preferences,)
