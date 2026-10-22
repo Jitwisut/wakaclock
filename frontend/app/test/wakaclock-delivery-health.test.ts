@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { deliveryHealth } from '@/lib/wakaclock/delivery-health';
+import { deliveryHealth, syncSummary } from '@/lib/wakaclock/delivery-health';
 import type { DeliveryStatusResponse } from '@/lib/wakaclock/measurement-types';
 
 const now = Date.parse('2026-10-07T05:00:00Z');
@@ -299,4 +299,73 @@ it('reports stale editor journal and producer spool observations', () => {
 
 it('treats an unreported dead-letter count as zero', () => {
   expect(deliveryHealth(report({ dead_letter: null }), false, now).deadLetter).toBe(0);
+});
+
+describe('sync summary', () => {
+  const backlog = (kind: null | string, pending = 2128) =>
+    report({
+      pending,
+      oldest_pending_at: pending ? '2026-10-06T09:51:01Z' : null,
+      details: {
+        eligible: 0,
+        leased: 0,
+        next_retry_at: null,
+        oldest_event_at: null,
+        accepted_total: 1,
+        backlog_error: kind
+          ? { kind, message_code: 'x', http_status: null, failed_at: '2026-10-07T04:00:00Z' }
+          : null,
+      },
+    });
+  const summarize = (data: DeliveryStatusResponse) =>
+    syncSummary(deliveryHealth(data, false, now), data.devices);
+
+  it('reports a fully delivered queue as synced', () => {
+    expect(summarize(report())).toMatchObject({ tone: 'ok', title: 'All activity synced' });
+  });
+  it('names the reported cause instead of the raw pipeline readout', () => {
+    expect(summarize(backlog('network'))).toMatchObject({
+      tone: 'attention',
+      title: "Can't reach the server",
+    });
+    expect(summarize(backlog('network')).detail).toMatch(
+      /^2,128 heartbeats saved on your device since /
+    );
+    expect(summarize(backlog('auth_401')).title).toBe('API key not accepted');
+    expect(summarize(backlog('payment_402')).title).toBe('Subscription needed to sync');
+    expect(summarize(backlog('server_error')).title).toBe('Server asked to retry later');
+    expect(summarize(backlog('validation')).title).toBe('Sending 2,128 queued heartbeats');
+  });
+  it('does not blame the server for an upstream capture failure', () => {
+    const data = backlog('network');
+    data.devices[0].capture!.editor_journal!.status = 'corrupt';
+    expect(summarize(data)).toMatchObject({
+      tone: 'attention',
+      title: 'Capture needs attention',
+      detail: expect.stringMatching(/^Editor capture needs attention/),
+    });
+  });
+  it('keeps a fresh queue amber and singular', () => {
+    const data = backlog('network', 1);
+    data.devices[0].oldest_pending_at = new Date(now - 60_000).toISOString();
+    expect(summarize(data)).toMatchObject({ tone: 'syncing' });
+    expect(summarize(data).detail).toMatch(/^1 heartbeat saved/);
+    data.devices[0].oldest_pending_at = null;
+    expect(summarize(data).detail).toBe(
+      '1 heartbeat saved on your device. They will send automatically when the server is reachable.'
+    );
+  });
+  it('ignores a stale error once the queue is empty and falls back to the health message', () => {
+    const data = backlog('network', 0);
+    data.devices[0].capture!.editor_journal!.pending = 3;
+    const health = deliveryHealth(data, false, now);
+    expect(syncSummary(health, data.devices)).toEqual({
+      tone: 'syncing',
+      title: 'Sync not confirmed',
+      detail: health.message,
+    });
+    expect(syncSummary(health, [{ ...data.devices[0], pending: null }]).title).toBe(
+      'Sync not confirmed'
+    );
+  });
 });

@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { useSidebar } from '@/components/ui/sidebar';
 import { SubscriptionBadge } from '@/components/wakaclock/subscription-badge';
+import { SyncStatusIndicator } from '@/components/wakaclock/sync-status-indicator';
 import { UserSwitcher } from '@/components/wakaclock/user-switcher';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
@@ -108,6 +109,7 @@ const SiteHeader = React.forwardRef<HTMLElement, SiteHeaderProps>(
               className="mx-2 hidden data-[orientation=vertical]:h-4 sm:block"
               orientation="vertical"
             />
+            <SyncStatusIndicator />
             <Notifications labels={notificationsLabels} />
             <ThemeSwitch />
             {/*

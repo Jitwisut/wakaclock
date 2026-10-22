@@ -4,7 +4,6 @@ import * as React from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
-import { DeliveryStatusNotice } from '@/components/wakaclock/delivery-status-notice';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { getHeartbeats } from '@/lib/wakaclock/endpoints';
@@ -119,7 +118,6 @@ function HeartbeatsWorkspace() {
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
-      <DeliveryStatusNotice />
       <PulseMonitor
         beat={live.beat}
         date={date}
