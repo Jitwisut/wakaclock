@@ -223,16 +223,18 @@ const THAI_SEO_UPDATE_DATE = '2026-09-23';
 const MIGRATION_GUIDE_DATE = '2026-09-28';
 /** Privacy page: consent-gated website analytics and campaign attribution disclosed. */
 const WEBSITE_ANALYTICS_DATE = '2026-10-19';
+/** Search-keyword pass: home subtitle, AI tracker/cost, WakaTime and VS Code headings and FAQs. */
+const SEARCH_KEYWORDS_DATE = '2026-10-22';
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
-  '/': '2026-09-22',
+  '/': SEARCH_KEYWORDS_DATE,
   '/teams': AUDIT_REVIEW_DATE,
   '/developer-analytics': AUDIT_REVIEW_DATE,
-  '/ai-coding-tracker': AUDIT_REVIEW_DATE,
-  '/wakatime-alternative': AUDIT_REVIEW_DATE,
+  '/ai-coding-tracker': SEARCH_KEYWORDS_DATE,
+  '/wakatime-alternative': SEARCH_KEYWORDS_DATE,
   '/pricing': AUDIT_REVIEW_DATE,
   '/integrations': AUDIT_REVIEW_DATE,
   '/docs': AUDIT_REVIEW_DATE,
-  '/ai-cost-tracking': '2026-08-23',
+  '/ai-cost-tracking': SEARCH_KEYWORDS_DATE,
   '/docs/how-coding-time-is-calculated': NEW_GUIDES_DATE,
   '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
   '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
@@ -243,14 +245,17 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/early-access': AUDIT_REVIEW_DATE_ROUND_3,
   '/docs/getting-started': AUDIT_REVIEW_DATE_ROUND_3,
   '/docs/migrate-from-wakatime': MIGRATION_GUIDE_DATE,
-  '/integrations/vscode': AUDIT_REVIEW_DATE_ROUND_3,
+  '/integrations/vscode': SEARCH_KEYWORDS_DATE,
   '/join': AUDIT_REVIEW_DATE_ROUND_3,
 };
 /** Thai route-specific content dates, including guides authored in both languages. */
 const TH_ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
+  '/': SEARCH_KEYWORDS_DATE,
   '/about': ATTRIBUTION_UPDATE_DATE,
-  '/wakatime-alternative': THAI_SEO_UPDATE_DATE,
-  '/ai-coding-tracker': THAI_SEO_UPDATE_DATE,
+  '/wakatime-alternative': SEARCH_KEYWORDS_DATE,
+  '/ai-coding-tracker': SEARCH_KEYWORDS_DATE,
+  '/ai-cost-tracking': SEARCH_KEYWORDS_DATE,
+  '/integrations/vscode': SEARCH_KEYWORDS_DATE,
   '/developer-analytics': THAI_SEO_UPDATE_DATE,
   '/teams': THAI_SEO_UPDATE_DATE,
   '/pricing': THAI_SEO_UPDATE_DATE,
@@ -264,13 +269,8 @@ const TH_ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
 };
 
 export function contentModified(path: string, locale: SiteLocale): string | undefined {
-  // The September 11 audit updated English copy only; round 3 (September 12) added
-  // Thai-specific fixes to these two paths without touching their English copy.
-  if (locale === 'th') {
-    if (path === '/') return '2026-09-22';
-    if (path === '/ai-cost-tracking') return '2026-08-23';
-    return TH_ROUTE_CONTENT_DATES[path];
-  }
+  // The September 11 audit updated English copy only, so Thai pages carry their own dates.
+  if (locale === 'th') return TH_ROUTE_CONTENT_DATES[path];
   return ROUTE_CONTENT_DATES[path];
 }
 
