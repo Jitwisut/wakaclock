@@ -1,4 +1,5 @@
 import {
+  CloudUploadIcon,
   DownloadIcon,
   FolderGit2Icon,
   HeartPulseIcon,
@@ -106,6 +107,7 @@ export const navItems: NavGroup[] = [
         requiresFeature: 'private_leaderboards',
       },
       { title: 'Heartbeats', href: '/dashboard/wakaclock/heartbeats', icon: HeartPulseIcon },
+      { title: 'Sync status', href: '/dashboard/wakaclock/sync', icon: CloudUploadIcon },
       {
         title: 'Import WakaTime',
         href: '/dashboard/wakaclock/import',
