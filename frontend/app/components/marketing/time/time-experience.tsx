@@ -118,6 +118,10 @@ export function TimeExperience({ locale }: { locale: SiteLocale }) {
                 {copy.hero.headline[1]}
               </span>
             </h1>
+            {/* The subtitle is a heading so the category keyword sits in the outline under the H1. */}
+            <h2 className="tx-sub" data-reveal>
+              {copy.hero.subtitle}
+            </h2>
             <p className="tx-lead" data-reveal>
               {copy.hero.lead}
             </p>
