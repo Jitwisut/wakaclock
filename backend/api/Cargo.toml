@@ -92,6 +92,7 @@ tokio-postgres = { workspace = true }
 jsonwebtoken = "9.3"
 argon2 = "0.5"
 sha2 = "0.10"
+fs2 = { workspace = true }
 base64 = "0.22"
 ring = "0.17"
 governor = { workspace = true }

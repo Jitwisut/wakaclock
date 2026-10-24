@@ -9,6 +9,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import uuid
@@ -42,6 +43,8 @@ def main():
         run([BIN/'pg_ctl', '-D', data, '-l', TMP/'pg.log', '-o', f'-h 127.0.0.1 -p {PORT} -k {TMP}', 'start'], 'start')
         run([BIN/'createdb', '-h', '127.0.0.1', '-p', PORT, '-U', 'postgres', 'atoaxis_team_test'], 'database')
         env = {**os.environ, 'POSTGRES_TEST_URL': f'postgresql://postgres@127.0.0.1:{PORT}/atoaxis_team_test'}
+        for key in ('ATOAXIS_TEAM_FINANCIAL_GUARD_PATH','ATOAXIS_TEAM_FINANCIAL_GUARD_NAMESPACE','ATOAXIS_TEAM_FINANCIAL_GUARD_REQUIRED'):
+            env.pop(key, None)
         for key in ('COPILOT_DRILL_STAGE', 'COPILOT_DRILL_LEDGER', 'COPILOT_REPORT_BENCHMARK'):
             env.pop(key, None)
         for name in ('improvement_action_cas', 'weekly_copilot_bundle', 'weekly_registry_revocation_cleanup_and_restore'):
@@ -53,6 +56,9 @@ def main():
             'backend/api/migrations/postgres/039_team_improvement_actions.sql',
             'backend/api/migrations/postgres/040_account_deletion_team_proof.sql',
             'backend/api/src/repository/team_actions.rs',
+            'backend/api/src/repository/team_financial_guard.rs',
+            'backend/api/src/infrastructure/team_financial_guard.rs',
+            'scripts/team-actions-local-check.py',
             'backend/api/src/repository/team_actions_tests.rs',
             'backend/api/src/services/team_actions.rs',
             'backend/api/src/services/team_insights.rs',
@@ -95,7 +101,12 @@ def main():
         print(json.dumps(evidence))
     finally:
         if (data/'postmaster.pid').exists():
-            subprocess.run([str(BIN/'pg_ctl'), '-D', str(data), 'stop', '-m', 'fast'], capture_output=True)
+            stopped = subprocess.run([str(BIN/'pg_ctl'), '-D', str(data), 'stop', '-m', 'fast'], capture_output=True)
+            (OUT/'stop.log').write_bytes(stopped.stdout+stopped.stderr)
+        if (TMP/'pg.log').exists():
+            shutil.copy2(TMP/'pg.log', OUT/'postgres.log')
+        if not (data/'postmaster.pid').exists():
+            shutil.rmtree(TMP)
 
 
 if __name__ == '__main__':

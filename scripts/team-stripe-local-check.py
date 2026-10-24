@@ -44,12 +44,41 @@ def main():
         run([BIN/'createdb', '-h', '127.0.0.1', '-p', PORT, '-U', 'postgres', 'atoaxis_stripe_test'], 'database')
         env = {**os.environ, 'POSTGRES_TEST_URL': f'postgresql://postgres@127.0.0.1:{PORT}/atoaxis_stripe_test',
                'STRIPE_TEST_CREDENTIALS_PATH': str(TMP/'credentials.encrypted')}
-        for name in ('stripe_durable_ingress', 'stripe_worker_current_readback', 'stripe_customer_durable_provisioning', 'stripe_quote_owner_customer_catalog', 'stripe_checkout_confirmation_durability', 'team_entitlement_trial_durability'):
+        for key in ('ATOAXIS_TEAM_FINANCIAL_GUARD_PATH','ATOAXIS_TEAM_FINANCIAL_GUARD_NAMESPACE','ATOAXIS_TEAM_FINANCIAL_GUARD_REQUIRED'):
+            env.pop(key,None)
+        run(['cargo', 'build', '-p', 'wakaclock-server', '--bin', 'team-financial-guard',
+             '--target-dir', args.target_dir, '--jobs', '4'], 'inventory-cli-build', env, ROOT/'backend/api')
+        env['TEAM_FINANCIAL_GUARD_TEST_BIN'] = str(Path(args.target_dir).resolve()/'debug/team-financial-guard')
+        env['TEAM_FINANCIAL_INVENTORY_TEST_DIR'] = str(TMP/'inventory-ledger')
+        for name in ('stripe_durable_ingress', 'stripe_worker_current_readback', 'stripe_guarded_observation_commit_and_lost_confirmation', 'stripe_customer_durable_provisioning', 'stripe_quote_owner_customer_catalog', 'stripe_checkout_confirmation_durability', 'team_entitlement_trial_durability', 'team_trial_financial_guard_commit_restore', 'team_usage_admission_expiry', 'financial_source_inventory_consistent_historical_scope_and_loss_detection', 'financial_ingress_runtime_signed_retry_restore_unknown_commit_and_lock_wait'):
             result = run(['cargo', 'test', '-p', 'wakaclock-server', '--lib', name,
                           '--target-dir', args.target_dir, '--jobs', '4', '--', '--ignored', '--nocapture', '--test-threads=1'],
                          name, env, ROOT/'backend/api')
             assert b'1 passed' in result, 'regression did not execute'
-        files = ['backend/api/src/services/team_analytics_entitlement.rs',
+        files = ['backend/api/src/infrastructure/team_financial_guard.rs',
+                 'backend/api/src/services/team_financial_guard.rs',
+                 'backend/api/src/services/team_financial_source.rs',
+                 'backend/api/src/services/team_financial_inventory.rs',
+                 'backend/api/src/repository/team_financial_inventory.rs',
+                 'backend/api/src/repository/team_financial_inventory_tests.rs',
+                 'backend/api/src/bin/team-financial-guard.rs',
+                 'backend/api/migrations/postgres/055_team_financial_source_checkpoints.sql',
+                 'backend/api/src/services/team_financial_ingress.rs',
+                 'backend/api/src/repository/team_financial_ingress.rs',
+                 'backend/api/src/repository/team_financial_ingress_tests.rs',
+                 'backend/api/migrations/postgres/056_team_financial_ingress.sql',
+                 'backend/api/src/repository/team_financial_guard.rs',
+                 'backend/api/src/repository/team_usage_admissions.rs',
+                 'backend/api/src/repository/team_usage_scan.rs',
+                 'backend/api/src/services/team_usage_admission_worker.rs',
+                 'backend/api/src/services/mod.rs',
+                 'backend/api/src/bin/team-privacy-worker.rs',
+                 'backend/api/migrations/postgres/053_team_usage_admission_scans.sql',
+                 'backend/api/src/repository/team_trust.rs',
+                 'backend/api/migrations/postgres/052_team_usage_admissions.sql',
+                 'backend/api/src/services/team_insights.rs',
+                 'backend/api/src/repository/team_insights.rs',
+                 'backend/api/src/services/team_analytics_entitlement.rs',
                  'backend/api/src/repository/team_analytics_entitlement.rs',
                  'backend/api/migrations/postgres/051_team_analytics_entitlements.sql',
                  'backend/api/src/services/user.rs',
@@ -113,6 +142,17 @@ def main():
             'member_invite_and_removal_audit_failure_atomicity': 'passed',
             'entitlement_trial_once_scope_history_and_atomicity': 'passed',
             'entitlement_runtime_admission_enabled': False,
+            'guarded_trial_and_provider_outer_commit': 'passed',
+            'trial_unknown_commit_missing_state_history_audit_and_exact_reconcile': 'passed',
+            'provider_pending_not_recoverable_as_trial': 'passed',
+            'usage_admission_atomic_receipts_expiry_correction_consent_race': 'passed',
+            'usage_scan_lease_checkpoint_response_loss_and_atomicity': 'passed',
+            'financial_inventory_read_only_historical_identities_scope_conflicts_and_limits': 'passed',
+            'financial_inventory_sql_checkpoint_not_independent_authorization': 'passed',
+            'financial_inventory_operator_metadata_only': 'passed',
+            'financial_source_runtime_authorization': 'not_integrated',
+            'account_signed_ingress_runtime_sql_file_retry_unknown_commit_and_scope': 'passed',
+            'account_ingress_real_baseline': 'not_performed',
             'stripe_live': 'pending', 'checkout_available': False, 'production_ready': False,
             'docker_started': False, 'logs': str(OUT.relative_to(ROOT)),
         }

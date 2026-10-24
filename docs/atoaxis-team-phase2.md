@@ -39,6 +39,10 @@
 | ข้อมูล | การล้าง/ป้องกันการอ่าน |
 | --- | --- |
 | `team_session_links` | เกินอายุ, ถอน aggregate หรือ membership ใช้ batch 100; allocations/history cascade |
+| `team_usage_admissions` | Immutable Team metadata receipt; read cutoff 12 เดือน + current consent/scope, cleanup phase 14 ครั้งละ 100; เขียน absorbing disposition ก่อนลบ ไม่ลบ personal usage |
+| `team_usage_admission_scans` | operational checkpoint หนึ่งแถวต่อองค์กร ไม่เก็บ usage/cost; lease/retry ของ autonomous admission, เก็บเพื่อ resume/restore และ cascade เมื่อองค์กรถูกลบ |
+| `team_copilot_admissions` | Immutable commercial proof ของ UTC day/feature; current privacy + read cutoff เดิม, cleanup phase 15 ครั้งละ 100 พร้อม absorbing disposition; temporary provider suspension ไม่ลบหลักฐาน |
+| `team_copilot_schedule_cursor` | operational cursor หนึ่งแถว ไม่เก็บ usage; หมุนเวียนองค์กรเพื่อไม่อดส่งหลังหน้าแรก ไม่มีสิทธิ์รับข้อมูลจาก cursor เอง |
 | `team_usage_allocations` | เกินอายุหรือถอน individual ใช้ batch 100; ไม่สำเนาต้นทุน canonical |
 | `team_link_history` | เกินอายุ/cascade ตาม link |
 | `team_improvement_actions` / history | metadata ที่ผู้ใช้สร้างเอง; read cutoff จาก created_at/changed_at 12 เดือนปฏิทิน, cleanup phase 13, assignment ไม่เปิด analytics consent |

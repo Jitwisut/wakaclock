@@ -101,6 +101,7 @@ export interface TeamMeasurementHealth {
     delivery: TeamHealthState;
     integration: TeamHealthState;
     retention: TeamHealthState;
+    usage_admission?: TeamHealthState;
   };
 }
 

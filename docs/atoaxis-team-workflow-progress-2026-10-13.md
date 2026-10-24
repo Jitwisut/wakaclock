@@ -440,3 +440,28 @@ Astra design/review พบและแก้สองจุด: grace ต้อ�
 ผลหลัง merge: server **469 passed / 46 ignored**, native PostgreSQL/HTTP **6 ชุด**, frontend **152 tests / 13 files**, TypeScript, scoped ESLint และ strict workspace/all-target Clippy ผ่าน. Queue filter **42 unit + 1 integration ผ่าน** รวม fixture1,191รายการ; ไม่อ้าง live drain latency จากผลนี้. การทดสอบ UI รอบแรกติด node_modules เก่าขาด dependencies ของ main; `npm ci --ignore-scripts` ตาม lockfile แล้วผ่าน. ภาวะ sandbox ไม่อนุญาต local HTTP fixture ในรอบก่อนแก้ด้วยสิทธิ์รันทดสอบ loopback; ไม่ตัด test ออก.
 
 Evidence `output/team-closure-2026-10-13/stripe-entitlement-local.json`, native run `2026-10-18T02:29:29.993632+00:00`. ฐานจำลองหยุดและลบแล้ว ไม่มี Docker. ไม่เปิด trial endpoint, live Checkout, paid analytics หรือ production readiness; state history เพียงอย่างเดียวไม่รับรอง admission. Financial retention/restore, prorate/downgrade/portal และ external gates ยัง pending. Goal G1–G6 ยัง active.
+
+
+## ความคืบหน้า 23 ต.ค. 2026 — ตรวจ canonical financial inventory
+
+ทำต่อบน `codex/team-closure-wip` หลัง `b4d68ec7`; source ใหม่ยังไม่ commit และยังไม่อยู่ใน candidate. `main` ปัจจุบันมี25 commits ที่ยังไม่ได้รวม ไม่อ้างว่า branch ทัน main แล้ว.
+
+| รายการ | ผลรอบนี้ | ที่ยังเหลือ |
+|---|---|---|
+| SQL inventory + migration055 + CLI inspect-inventory | พัฒนา diagnostic แบบอ่านอย่างเดียวและ local regression ผ่าน | ยังไม่ใช้ root เป็นสิทธิ์หรือ proof ของ restore |
+| Historical identity/unknown scope/typed JSON/limits | PostgreSQL จริงแบบจำลองและ CLI ตัวจริงผ่าน รวม concurrent write; เก็บ nanosecond ของ JSON ครบ | account-level independent ingress ยังไม่ครบ |
+| การตรวจร่วมกับระบบเดิม | server497ผ่าน/52ignored, Stripe10คำสั่ง, Copilot/restore5คำสั่ง, CLI smoke และ strict Clippy ผ่าน | fixtures ไม่ใช่ live provider/Cloud/Windows certification |
+| Cleanup | fixture ที่เปิดเองหยุดและลบข้อมูลส่วนตัวแล้ว ไม่เปิด Docker; ใช้ target เดิม | cacheรวม18,457,592KiB ผ่านการทบทวนและเก็บสำหรับ checkout ที่ยังทำงาน ไม่สร้าง target/worktree ใหม่ |
+
+หลักฐาน source hash, log, initial fixture failure, precision fix และ cleanup อยู่ใน `output/team-closure-2026-10-13/financial-inventory-local.json`; รายละเอียดใน [รายงาน inventory](atoaxis-team-financial-inventory-2026-10-23.md).
+
+งานพัฒนาถัดไปเรียงลำดับ: (1) independent ingress journal ระดับ account รวม events ที่ยังไม่ผูกองค์กร (2) normalize locks และต่อ Prepare→SQL commit→Commit ให้ครบ semantic writers (3) provider dispatch/outcome boundaries (4) source read/restore fences และ approval/recovery/retention workflow. Cloud/ราคา/Windows/บัญชีที่สอง/provider sessions/pilots ยังรอหลักฐานจริงตาม gate เดิม. Public trial, Checkout และ production readiness ยังคงปิด; Goal G1–G6 ยัง active.
+
+
+## ความคืบหน้า 24 ต.ค. 2026 — account ingress และเตรียมส่ง source
+
+ต่อ signed webhook จริงเข้ากับ independent receipt แบบ scoped account/live ครอบคลุม ignored/unbound events; ไม่ ACK จน SQL และ durable ledger ตรงกัน. คง ID/เวลา/revision เดิมเมื่อ pending retry, ตรวจ exact job predecessor, บล็อก Duplicate ACK หลัง SQL loss และจัด account lock ก่อน org/job/binding รวม Checkout. แก้ authority propagation ตาม Astra review พร้อม native regression ที่ environment ว่าง.
+
+ผลปัจจุบัน: server499ผ่าน/53ignored, PostgreSQL/Stripe11คำสั่ง, Copilot/restore5คำสั่ง, UI12tests, TypeScript, scoped production ESLint, strictClippy และ CLIตัวจริงผ่าน. รายละเอียด/ข้อจำกัดใน [รายงาน ingress](atoaxis-team-financial-ingress-2026-10-24.md); private evidence `output/team-closure-2026-10-13/financial-ingress-local.json`. Fixturesหยุด/ลบแล้ว ไม่เปิดDocker; targetเดิม18,471,004KiBได้รับการทบทวนและรักษาไว้สำหรับcheckoutที่ยังทำงาน.
+
+ผู้ใช้อนุญาต commit/push งานTeamค้างบน `codex/team-closure-wip` หลังชุดนี้ผ่าน ไม่รวมไฟล์ตั้งค่าเครื่องของงานอื่น ผลรันส่วนตัว backups หรือbinaries. ห้ามpush/merge mainยังคงเดิม. หลังส่งsourceยังต้องรวม mainล่าสุด25commitsภายใต้กฎprotected scope และสร้างcandidateใหม่; รอบนี้ไม่รับรองartifactจากcleanSHA. ไม่มีreal baseline seedหรือpaid/source restore activation. งานถัดไป: approved baseline/recovery→semantic source writers/provider boundaries→all source read/restore fences→financial lifecycle/external gates. Goalยังactive และpublic trial/Checkout/production=false.

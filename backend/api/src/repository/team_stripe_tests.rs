@@ -1826,3 +1826,187 @@ async fn stripe_checkout_confirmation_durability_and_owner_fences() {
         .get(0);
     assert_eq!(count, 0);
 }
+
+
+#[tokio::test]
+#[ignore = "requires isolated POSTGRES_TEST_URL"]
+async fn stripe_guarded_observation_commit_and_lost_confirmation_boundary() {
+    let url = std::env::var("POSTGRES_TEST_URL").unwrap();
+    assert_eq!(
+        url.parse::<tokio_postgres::Config>().unwrap().get_dbname(),
+        Some("atoaxis_stripe_test")
+    );
+    let pg = Arc::new(
+        PostgresClient::connect(&PostgresConfig {
+            url: Some(url),
+            max_connections: 8,
+        })
+        .await
+        .unwrap(),
+    );
+    pg.migrate().await.unwrap();
+    for expire_during_prepare in [false, true] {
+        let org = Uuid::now_v7();
+        let owner = Uuid::now_v7();
+        pg.execute(
+            "INSERT INTO organizations(id,slug,name) VALUES($1,$2,'Guarded Stripe observation')",
+            &[&org, &org.to_string()],
+        )
+        .await
+        .unwrap();
+        pg.execute(
+            "INSERT INTO users(id,username) VALUES($1,$2)",
+            &[&owner, &owner.to_string()],
+        )
+        .await
+        .unwrap();
+        pg.execute(
+            "INSERT INTO organization_members(organization_id,user_id,role) VALUES($1,$2,'owner')",
+            &[&org, &owner],
+        )
+        .await
+        .unwrap();
+        let file = crate::infrastructure::team_financial_guard::TestLedger::new(&[org]);
+        let guard = &file.guard;
+        super::team_analytics_entitlement::start_trial(&pg, org, owner, 10, &file.deployment())
+            .await
+            .unwrap();
+        let account = format!("acct_guarded_{}", Uuid::now_v7().simple());
+        let subscription = format!("sub_guarded_{}", Uuid::now_v7());
+        let customer = format!("cus_guarded_{}", Uuid::now_v7());
+        pg.execute("INSERT INTO team_stripe_bindings(organization_id,account_id,livemode,customer_id,subscription_id) VALUES($1,$2,false,$3,$4)", &[&org,&account,&customer,&subscription]).await.unwrap();
+        pg.execute("INSERT INTO team_stripe_reconcile_jobs(account_id,livemode,subscription_id) VALUES($1,false,$2)", &[&account,&subscription]).await.unwrap();
+        let repo = TeamStripeRepository::new_guarded(pg.clone(), file.deployment());
+        super::team_financial_ingress::seed_empty_fixture(&pg,guard,&crate::services::team_financial_ingress::Scope{account:account.clone(),live:false}).await.unwrap();
+        let claim = repo.claim(&account, false).await.unwrap().unwrap();
+        let (mut snapshot, _, _) = crate::services::team_stripe_payment::tests::fixture(Utc::now());
+        snapshot.subscription_id = subscription.clone();
+        snapshot.customer_id = customer;
+        snapshot.observed_at = Utc::now();
+        let token = guard.read().unwrap().organization_token(org).unwrap();
+        let unguarded = TeamStripeRepository::new(pg.clone());
+        // Restored pre-enrollment SQL plus a disabled deployment flag must not
+        // discard the still-configured, independently enrolled roster.
+        let saved=pg.query_one("DELETE FROM team_analytics_entitlements WHERE organization_id=$1 RETURNING revision,state,created_at,updated_at", &[&org]).await.unwrap();
+        {
+            let _environment = guard.environment();
+            std::env::set_var("ATOAXIS_TEAM_FINANCIAL_GUARD_REQUIRED", "false");
+            let restored = TeamStripeRepository::new(pg.clone());
+            assert!(restored.complete(&claim, &snapshot).await.is_err());
+            assert_eq!(pg.query_one("SELECT count(*) FROM team_stripe_snapshots WHERE organization_id=$1", &[&org]).await.unwrap().get::<_,i64>(0),0);
+            assert_eq!(pg.query_one("SELECT applied_revision FROM team_stripe_reconcile_jobs WHERE account_id=$1 AND livemode=false AND subscription_id=$2", &[&account,&subscription]).await.unwrap().get::<_,i64>(0),0);
+        }
+        pg.execute("INSERT INTO team_analytics_entitlements(organization_id,revision,state,created_at,updated_at) VALUES($1,$2,$3,$4,$5)", &[&org,&saved.get::<_,i64>(0),&saved.get::<_,serde_json::Value>(1),&saved.get::<_,chrono::DateTime<Utc>>(2),&saved.get::<_,chrono::DateTime<Utc>>(3)]).await.unwrap();
+
+        assert!(
+            unguarded.complete(&claim, &snapshot).await.is_err(),
+            "enrolled state cannot use precommercial unguarded observations"
+        );
+        assert!(pg
+            .query_opt(
+                "SELECT 1 FROM team_stripe_snapshots WHERE organization_id=$1",
+                &[&org]
+            )
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            guard.read().unwrap().organization_token(org).unwrap(),
+            token
+        );
+        assert!(repo.complete(&claim, &snapshot).await.unwrap());
+        let current: crate::services::team_analytics_entitlement::State = serde_json::from_value(
+            pg.query_one(
+                "SELECT state FROM team_analytics_entitlements WHERE organization_id=$1",
+                &[&org],
+            )
+            .await
+            .unwrap()
+            .get(0),
+        )
+        .unwrap();
+        assert_eq!(current.revision, 2);
+        guard
+            .read()
+            .unwrap()
+            .snapshot
+            .verify(org, Some(&current))
+            .unwrap();
+        pg.execute("UPDATE team_stripe_reconcile_jobs SET requested_revision=2,retry_at=now() WHERE account_id=$1", &[&account]).await.unwrap();
+        let second = repo.claim(&account, false).await.unwrap().unwrap();
+        snapshot.observed_at = Utc::now();
+        if expire_during_prepare {
+            pg.execute("UPDATE team_stripe_reconcile_jobs SET lease_until=clock_timestamp()+interval '1 second' WHERE account_id=$1", &[&account]).await.unwrap();
+            guard.delay_prepare_once_ms(1500);
+        } else {
+            guard.fail_commit_confirmation_once();
+        }
+        assert_eq!(
+            repo.complete(&second, &snapshot)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "financial_guard_commit_reconciliation_required"
+        );
+        assert_eq!(
+            pg.query_one(
+                "SELECT applied_revision FROM team_stripe_reconcile_jobs WHERE account_id=$1",
+                &[&account]
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+            if expire_during_prepare { 1 } else { 2 }
+        );
+        let external = guard.read().unwrap();
+        let pending = external.snapshot.organizations[&org]
+            .pending
+            .as_ref()
+            .unwrap();
+        assert_eq!(pending.state.revision, 3);
+        assert!(
+            super::team_analytics_entitlement::reconcile_trial(
+                &pg,
+                org,
+                owner,
+                pending.transition_id,
+                guard
+            )
+            .await
+            .is_err(),
+            "trial recovery cannot approve provider/payment transitions"
+        );
+        // Even an otherwise no-op older provider revision cannot bypass a pending guard.
+        let mut db = pg.transaction_client().await.unwrap();
+        let tx = db.transaction().await.unwrap();
+        super::team_seats::lock(&tx, org).await.unwrap();
+        let assessment =
+            crate::services::team_stripe_payment::assess(&snapshot, None, None, Utc::now());
+        let mut stale = second.clone();
+        stale.revision = 1;
+        assert!(super::team_analytics_entitlement::observe(
+            &tx,
+            &stale,
+            &snapshot,
+            None,
+            &assessment,
+            Utc::now(),
+            &file.deployment().observation()
+        )
+        .await
+        .is_err());
+        tx.rollback().await.unwrap();
+        pg.execute("DELETE FROM organizations WHERE id=$1", &[&org])
+            .await
+            .unwrap();
+        pg.execute("DELETE FROM users WHERE id=$1", &[&owner])
+            .await
+            .unwrap();
+        pg.execute(
+            "DELETE FROM team_stripe_reconcile_jobs WHERE account_id=$1",
+            &[&account],
+        )
+        .await
+        .unwrap();
+    }
+}

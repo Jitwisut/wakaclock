@@ -167,6 +167,7 @@ impl TeamTrustRepository {
         })
     }
     pub async fn guard(&self, org: Uuid) -> Result<()> {
+        let financial = super::team_financial_guard::read(&self.postgres, org).await?;
         let path = std::env::var("ATOAXIS_TEAM_PRIVACY_LEDGER_PATH")
             .context("Team privacy ledger is not configured")?;
         let ledger: Registry = serde_json::from_slice(
@@ -198,6 +199,7 @@ impl TeamTrustRepository {
                 && covers_history(&current, expected),
             "Team privacy ledger differs from restored/live data"
         );
+        super::team_financial_guard::validate(&self.postgres, org, &financial).await?;
         Ok(())
     }
     /// Under the same row lock used by consent generation triggers. Shared by API and CSV.
@@ -744,9 +746,11 @@ impl TeamTrustRepository {
     let removed=tx.execute("DELETE FROM team_improvement_actions WHERE (organization_id,id) IN (SELECT organization_id,id FROM team_improvement_actions a WHERE a.organization_id=$1 AND (a.deleted OR a.created_at<$2) AND EXISTS(SELECT 1 FROM team_webhook_dispositions d WHERE d.provider='team_improvement_action' AND split_part(d.delivery_id,':',1)=a.organization_id::text AND split_part(d.delivery_id,':',2)=a.id::text AND d.reason IN ('action_deleted','action_restore_blocked','action_retention_expired')) AND NOT EXISTS(SELECT 1 FROM team_improvement_action_history h WHERE h.organization_id=a.organization_id AND h.action_id=a.id) ORDER BY id LIMIT 100)",&[&org,&cutoff]).await?;
     actions.max(history).max(removed)
    },
+   14 => super::team_usage_admissions::cleanup(&tx,org,cutoff,now).await?,
+   15 => super::copilot_admission::cleanup(&tx,org,cutoff,now).await?,
    _ => 0,
   };
-        if phase >= 14 {
+        if phase >= 16 {
             tx.execute("INSERT INTO team_privacy_markers(organization_id,retention_before) VALUES($1,$2) ON CONFLICT(organization_id) DO UPDATE SET retention_before=GREATEST(team_privacy_markers.retention_before,EXCLUDED.retention_before),changed_at=now()", &[&org,&cutoff]).await?;
             tx.execute("UPDATE team_weekly_publications SET invalidated_at=COALESCE(invalidated_at,now()),contributors='{}',fingerprint='expired',projection=NULL,source_revisions=NULL WHERE organization_id=$1 AND week_start<$2::timestamptz::date", &[&org,&cutoff]).await?;
             tx.execute("UPDATE team_cleanup_jobs SET completed_at=$2,cutoff=NULL,phase=0,lease_token=NULL,lease_until=NULL,error_code=NULL WHERE organization_id=$1", &[&org,&now]).await?;

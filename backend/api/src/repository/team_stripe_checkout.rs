@@ -82,10 +82,29 @@ impl CheckoutClaim {
 }
 pub struct CheckoutRepository {
     pg: Arc<PostgresClient>,
+    financial_guard: Option<crate::infrastructure::team_financial_guard::FinancialGuard>,
+    financial_configuration_error: bool,
 }
 impl CheckoutRepository {
     pub fn new(pg: Arc<PostgresClient>) -> Self {
-        Self { pg }
+        match crate::infrastructure::team_financial_guard::FinancialObservation::from_environment()
+        {
+            Ok(observation) => {
+                Self::with_financial_authority(pg, observation.guard().cloned(), false)
+            }
+            Err(_) => Self::with_financial_authority(pg, None, true),
+        }
+    }
+    pub(crate) fn with_financial_authority(
+        pg: Arc<PostgresClient>,
+        financial_guard: Option<crate::infrastructure::team_financial_guard::FinancialGuard>,
+        financial_configuration_error: bool,
+    ) -> Self {
+        Self {
+            pg,
+            financial_guard,
+            financial_configuration_error,
+        }
     }
     async fn serialize(tx: &tokio_postgres::Transaction<'_>, org: Uuid) -> Result<()> {
         super::team_seats::lock(tx, org).await
@@ -168,15 +187,27 @@ impl CheckoutRepository {
         AuthorizationService::require_locked_billing_owner(&tx, actor, org).await?;
         let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4",&[&operation,&org,&account,&live]).await?.ok_or(TeamError::NotFound)?;
         let mut result = Self::view(&row);
-        result.invoice_assessment = Self::invoice_assessment(&tx, org, account, live, operation).await?;
+        result.invoice_assessment =
+            Self::invoice_assessment(&tx, org, account, live, operation).await?;
         tx.commit().await?;
         Ok(result)
     }
-    async fn invoice_assessment(tx: &tokio_postgres::Transaction<'_>, org: Uuid, account: &str, live: bool, operation: Uuid) -> Result<Option<crate::services::team_stripe_payment::Assessment>> {
+    async fn invoice_assessment(
+        tx: &tokio_postgres::Transaction<'_>,
+        org: Uuid,
+        account: &str,
+        live: bool,
+        operation: Uuid,
+    ) -> Result<Option<crate::services::team_stripe_payment::Assessment>> {
         let row = tx.query_opt("SELECT s.payment_assessment,clock_timestamp(),(b.enabled AND b.revision=s.binding_revision AND s.source_revision=j.applied_revision AND j.requested_revision=j.applied_revision) AS current FROM team_stripe_bindings b JOIN team_stripe_snapshots s USING(organization_id) JOIN team_stripe_reconcile_jobs j ON j.account_id=b.account_id AND j.livemode=b.livemode AND j.subscription_id=b.subscription_id JOIN team_stripe_checkout_intents c ON c.organization_id=b.organization_id AND c.account_id=b.account_id AND c.livemode=b.livemode AND c.subscription_id=b.subscription_id WHERE b.organization_id=$1 AND b.account_id=$2 AND b.livemode=$3 AND c.operation_id=$4 AND c.disposition='bound'", &[&org,&account,&live,&operation]).await?;
-        let Some(r) = row else { return Ok(None); };
-        let Some(value) = r.get::<_, Option<serde_json::Value>>(0) else { return Ok(None); };
-        let assessment: crate::services::team_stripe_payment::Assessment = serde_json::from_value(value)?;
+        let Some(r) = row else {
+            return Ok(None);
+        };
+        let Some(value) = r.get::<_, Option<serde_json::Value>>(0) else {
+            return Ok(None);
+        };
+        let assessment: crate::services::team_stripe_payment::Assessment =
+            serde_json::from_value(value)?;
         Ok(Some(assessment.current(r.get(1), r.get(2))))
     }
     pub async fn destination_proof(
@@ -238,7 +269,8 @@ impl CheckoutRepository {
         let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE organization_id=$1 AND account_id=$2 AND livemode=$3 ORDER BY confirmed_at DESC,operation_id DESC LIMIT 1", &[&org,&account,&live]).await?;
         let mut result = row.as_ref().map(Self::view);
         if let Some(status) = result.as_mut() {
-            status.invoice_assessment = Self::invoice_assessment(&tx, org, account, live, status.operation_id).await?;
+            status.invoice_assessment =
+                Self::invoice_assessment(&tx, org, account, live, status.operation_id).await?;
         }
         tx.commit().await?;
         Ok(result)
@@ -466,8 +498,22 @@ impl CheckoutRepository {
         );
         let mut db = self.pg.transaction_client().await?;
         let tx = db.transaction().await?;
+        let scope = crate::services::team_financial_ingress::Scope {
+            account: claim.proof.account.clone(),
+            live: claim.proof.live,
+        };
+        super::team_financial_ingress::lock(&tx, &scope).await?;
+        if binding.is_some() {
+            ensure!(
+                !self.financial_configuration_error,
+                "financial_guard_configuration_unconfirmed"
+            );
+            if let Some(guard) = &self.financial_guard {
+                super::team_financial_ingress::ready(&tx, guard, &scope).await?;
+            }
+        }
         Self::serialize(&tx, claim.proof.org).await?;
-        let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND revision=$2 AND lease_id=$3 AND lease_until>now() AND disposition IN ('pending','session_open','awaiting_verification') FOR UPDATE",&[&claim.operation,&claim.revision,&claim.lease]).await?;
+        let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND revision=$2 AND lease_id=$3 AND lease_until>clock_timestamp() AND disposition IN ('pending','session_open','awaiting_verification') FOR UPDATE",&[&claim.operation,&claim.revision,&claim.lease]).await?;
         let Some(row) = row else {
             tx.commit().await?;
             return Ok(false);

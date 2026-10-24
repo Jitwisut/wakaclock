@@ -234,6 +234,11 @@ impl CopilotDailyWorker {
                         "copilot_download_network" | "copilot_daily_network_timeout"
                     ) {
                         "provider_unavailable"
+                    } else if matches!(
+                        text.as_str(),
+                        "copilot_admission_paused" | "copilot_admission_expired_during_commit"
+                    ) {
+                        "commercial_admission_paused"
                     } else {
                         "copilot_daily_unconfirmed"
                     };

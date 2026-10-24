@@ -14,6 +14,8 @@ use wakaclock_server::{
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let config = Config::from_env()?;
+    // Refuse a required/misconfigured independent guard before any provider request.
+    let deployment = wakaclock_server::infrastructure::team_financial_guard::CommercialDeployment::from_environment()?;
     anyhow::ensure!(config.team_enabled, "Team feature flag disabled");
     let stripe = StripeApiConfig::from_env()?.context("Stripe worker disabled")?;
     let checkout_enabled = match std::env::var("ATOAXIS_TEAM_STRIPE_CHECKOUT_WORKER_ENABLED")
@@ -24,6 +26,10 @@ async fn main() -> Result<()> {
         Some("true") | Some("1") => true,
         _ => anyhow::bail!("Checkout worker flag must be explicit"),
     };
+    anyhow::ensure!(
+        !checkout_enabled || deployment.is_some(),
+        "financial_guard_commercial_deployment_required"
+    );
     let account = stripe.account_id.clone();
     let live = stripe.livemode;
     let client = StripeClient::new(stripe)?;

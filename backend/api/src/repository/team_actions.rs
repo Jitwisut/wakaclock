@@ -68,6 +68,7 @@ impl TeamActionsRepository {
     }
     pub async fn guard(&self, org: Uuid) -> Result<String> {
         TeamTrustRepository::new(self.pg.clone()).guard(org).await?;
+        let financial = super::team_financial_guard::fence(&self.pg, org).await?;
         let ledger: Registry = serde_json::from_slice(&std::fs::read(std::env::var(
             "ATOAXIS_TEAM_PRIVACY_LEDGER_PATH",
         )?)?)?;
@@ -127,7 +128,8 @@ impl TeamActionsRepository {
                 ensure!(self.pg.query_opt("SELECT 1 FROM team_improvement_actions WHERE organization_id=$1 AND id=$2",&[&org,id]).await?.is_some(),TeamError::ProjectionChanged);
             }
         }
-        digest(&(current, access))
+        super::team_financial_guard::validate_fence(&self.pg, org, &financial).await?;
+        digest(&(current, access, financial))
     }
     pub async fn can_manage(&self, actor: Uuid, org: Uuid, team: Option<Uuid>) -> Result<bool> {
         let row=self.pg.query_one("SELECT EXISTS(SELECT 1 FROM organization_members m JOIN users u ON u.id=m.user_id JOIN organizations o ON o.id=m.organization_id WHERE m.organization_id=$1 AND m.user_id=$2 AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND u.is_active AND u.deleted_at IS NULL AND (m.role IN ('owner','admin') OR (m.role='member' AND EXISTS(SELECT 1 FROM teams t JOIN team_members tm ON tm.team_id=t.id WHERE t.organization_id=$1 AND t.id=$3 AND tm.user_id=$2 AND tm.role='lead'))))",&[&org,&actor,&team]).await?;

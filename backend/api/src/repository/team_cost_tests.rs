@@ -234,6 +234,99 @@ async fn team_cost_joint_canonical_correction_and_pg_source_races() {
         true,
     ));
     let actor = users[0];
+    // The commercial path must produce the same independent report ledger after
+    // autonomous admission, rather than admitting on the first dashboard request.
+    let financial_guard_fixture =
+        crate::infrastructure::team_financial_guard::TestLedger::new(&[org]);
+    super::team_analytics_entitlement::start_trial(
+        &pg,
+        org,
+        actor,
+        10,
+        &financial_guard_fixture.deployment(),
+    )
+    .await
+    .unwrap();
+    let mut entitlement = crate::services::team_analytics_entitlement::State::trial(
+        10,
+        at(baseline) - Duration::days(1),
+    )
+    .unwrap();
+    entitlement
+        .windows
+        .push(crate::services::team_analytics_entitlement::Window {
+            kind: crate::services::team_analytics_entitlement::Kind::Paid,
+            start: entitlement.trial_ends_at,
+            end: Utc::now() + Duration::days(30),
+        });
+    // Synthetic historical commercial fixture only; no runtime API backdates trial.
+    pg.execute(
+        "UPDATE team_analytics_entitlements SET state=$2 WHERE organization_id=$1",
+        &[&org, &serde_json::to_value(&entitlement).unwrap()],
+    )
+    .await
+    .unwrap();
+    let read_guard = crate::infrastructure::team_financial_guard::TestLedger::enrolled(org, &entitlement);
+    let _financial_environment = read_guard.environment();
+    trust.export_registry(&path).await.unwrap();
+    assert!(team_repo
+        .admitted_facts(
+            org,
+            &users,
+            at(baseline).timestamp() as u32,
+            Utc::now().timestamp() as u32
+        )
+        .await
+        .unwrap()
+        .is_empty());
+    crate::services::team_usage_admission_worker::tick(&team_repo, &trust)
+        .await
+        .unwrap();
+    assert_eq!(
+        pg.query_one(
+            "SELECT count(*) FROM team_usage_admissions WHERE organization_id=$1",
+            &[&org]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        10
+    );
+    // A completed sweep restarts independently to find late identities, even with
+    // lexical keys before the previous cursor; no received_at watermark is used.
+    let mut delayed = facts[0].clone();
+    delayed.usage_event_id = "000-late-canonical".into();
+    delayed.event_time = Utc::now().timestamp() as u32;
+    delayed.date = (delayed.event_time / 86400) as u16;
+    delayed.received_at = delayed.event_time;
+    usage.insert_usage_events(&[delayed.clone()]).await.unwrap();
+    assert!(team_repo
+        .admitted_facts(org, &users, delayed.event_time, delayed.event_time + 1)
+        .await
+        .unwrap()
+        .is_empty());
+    pg.execute("UPDATE team_usage_admission_scans SET next_run_at=clock_timestamp() WHERE organization_id=$1",&[&org]).await.unwrap();
+    crate::services::team_usage_admission_worker::tick(&team_repo, &trust)
+        .await
+        .unwrap();
+    assert_eq!(
+        pg.query_one(
+            "SELECT count(*) FROM team_usage_admissions WHERE organization_id=$1",
+            &[&org]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        11
+    );
+    assert_eq!(
+        team_repo
+            .admitted_facts(org, &users, delayed.event_time, delayed.event_time + 1)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     let request = Request {
         family: Family::TeamCost,
         baseline_week: baseline,
@@ -374,6 +467,36 @@ async fn team_cost_joint_canonical_correction_and_pg_source_races() {
     usage.insert_usage_events(&[corrected]).await.unwrap();
     gate.release.notify_one();
     assert!(pending.await.unwrap().is_err());
+    // Independent financial proof is not the privacy generation. A completed
+    // billing transition during read/render must still invalidate the response.
+    trust.export_registry(&path).await.unwrap();
+    let range = crate::model::date_range::ResolvedRange::parse(
+        &baseline.to_string(), &(baseline + Duration::days(6)).to_string(), Some("Asia/Bangkok")
+    ).unwrap();
+    let captured = service.insights(actor, org, None, range).await.unwrap();
+    let receipt = service.receipt(actor, org, None, repository, 1).await.unwrap();
+    let own_receipt = service.receipt_page(actor, org, None, repository, 1, None, true).await.unwrap();
+    service.validate_financial_response(org, &receipt.financial_fence).await.unwrap();
+    service.validate_financial_response(org, &own_receipt.financial_fence).await.unwrap();
+    assert!(!serde_json::to_string(&receipt).unwrap().contains("financial_fence"));
+    let serialized = serde_json::to_string(&captured).unwrap();
+    assert!(!serialized.contains("financial_fence"));
+    assert!(!serialized.contains(&read_guard.guard.namespace().unwrap().to_string()));
+    service.validate_financial_response(org, &captured.financial_fence).await.unwrap();
+    let generation = team_repo.generation(org).await.unwrap();
+    let mut changed = entitlement.clone();
+    changed.revision += 1;
+    changed.observed_at = Utc::now();
+    let transition = Uuid::now_v7();
+    read_guard.guard.prepare(org, crate::services::team_financial_guard::Head::Enrolled { state: Box::new(entitlement) }, crate::services::team_financial_guard::Pending { transition_id: transition, state: Box::new(changed.clone()) }).unwrap();
+    assert!(service.validate_financial_response(org, &captured.financial_fence).await.is_err());
+    pg.execute("UPDATE team_analytics_entitlements SET revision=$2,state=$3 WHERE organization_id=$1", &[&org,&changed.revision,&serde_json::to_value(&changed).unwrap()]).await.unwrap();
+    read_guard.guard.confirm_committed(org, transition, &changed).unwrap();
+    assert!(service.validate_financial_response(org, &receipt.financial_fence).await.is_err());
+    assert!(service.validate_financial_response(org, &own_receipt.financial_fence).await.is_err());
+    assert_eq!(team_repo.generation(org).await.unwrap(), generation);
+    assert!(service.validate_financial_response(org, &captured.financial_fence).await.is_err(), "current agreement alone must not approve an older response");
+    assert!(service.weekly_summary(actor, org, summary_request).await.is_ok(), "fresh read may retain expired/historical receipts under a newly matching proof");
     proxy.abort();
     std::env::remove_var("ATOAXIS_TEAM_WORKFLOW_ENABLED");
     std::fs::remove_file(path).unwrap();

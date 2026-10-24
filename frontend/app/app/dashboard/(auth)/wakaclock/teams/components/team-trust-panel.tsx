@@ -31,6 +31,8 @@ export function TeamTrustPanel({ organizationId }: { organizationId: string }) {
           data.own.delivery.status,
           data.own.delivery.reason,
           data.restore.status,
+          data.team.usage_admission?.status ?? 'unconfirmed',
+          data.team.usage_admission?.reason ?? 'admission_details_unavailable',
         ])
       : 'unavailable';
     const previous = sessionStorage.getItem(key);
@@ -58,6 +60,13 @@ export function TeamTrustPanel({ organizationId }: { organizationId: string }) {
             <p>
               Retention: {data.team.retention.status} ·{' '}
               {data.team.retention.updated_at ?? 'evidence unavailable'}
+            </p>
+            <p>
+              Team usage processing: {data.team.usage_admission?.status ?? 'unconfirmed'} ·{' '}
+              {data.team.usage_admission?.reason ?? 'admission_details_unavailable'}
+            </p>
+            <p className="text-muted-foreground">
+              A completed scan does not confirm complete capture or provider coverage.
             </p>
             <p>Restore protection: {data.restore.status}</p>
             <p className="text-muted-foreground">

@@ -79,6 +79,16 @@ impl TeamInsightsService {
         Ok(())
     }
 
+    /// Private source proof retained through rendering; never a client supplied token.
+    pub async fn validate_financial_response(&self, org: Uuid, expected: &str) -> Result<()> {
+        crate::repository::team_financial_guard::validate_fence(
+            &self.repo()?.postgres,
+            org,
+            expected,
+        )
+        .await
+    }
+
     pub async fn copilot_report(
         &self,
         actor: Uuid,
@@ -222,6 +232,7 @@ impl TeamInsightsService {
     ) -> Result<String> {
         use sha2::{Digest, Sha256};
         let repo = self.readable(actor, org, request.team_id).await?;
+        let financial = crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
         let revision:i64=repo.postgres.query_one("SELECT COALESCE((SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1),0)",&[&org]).await?.get(0);
         // Existing shared ledger carries append-only operational heads. A stale
         // restore may not pass as the latest source merely because scopes match.
@@ -282,14 +293,16 @@ impl TeamInsightsService {
         );
         // Canonical source is checked jointly, in one query after PG metadata.
         // In particular a withheld followup cannot skip a corrected baseline.
-        let facts = repo.facts(&users, from, to).await?;
+        let facts = repo.admitted_facts(org, &users, from, to).await?;
         let current:i64=repo.postgres.query_one("SELECT COALESCE((SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1),0)",&[&org]).await?.get(0);
         anyhow::ensure!(revision == current, TeamError::ProjectionChanged);
         self.validate_response(actor, org, request.team_id, scope.generation)
             .await?;
+        self.validate_financial_response(org, &financial).await?;
         Ok(format!(
             "{:x}",
             Sha256::digest(serde_json::to_vec(&(
+                financial,
                 scope.generation,
                 revision,
                 contributors,
@@ -763,12 +776,18 @@ impl TeamInsightsService {
             .require(actor, org, OrganizationAction::ManageSecurity, None)
             .await?;
         let evidence = self.repo()?.release_evidence(org).await?;
+        let financial_deployment = match crate::infrastructure::team_financial_guard::CommercialDeployment::from_environment() {
+            Ok(Some(_)) => "commercial_guard_configured",
+            Ok(None) => "precommercial",
+            Err(_) => "unconfirmed",
+        };
         let local = self.repo()?.postgres.query("SELECT gate,passed,evidence_ref,checked_at,build FROM team_release_evidence WHERE organization_id=$1 AND evidence_scope='local' ORDER BY gate",&[&org]).await?.into_iter().map(|row|serde_json::json!({"gate":row.get::<_,String>(0),"passed":row.get::<_,bool>(1),"evidence_ref":row.get::<_,String>(2),"checked_at":row.get::<_,DateTime<Utc>>(3),"build":row.get::<_,Option<String>>(4)})).collect::<Vec<_>>();
         Ok(serde_json::json!({
             "receiver_enabled": self.enabled,
             "organization_enabled": self.repo()?.enabled(org).await?,
             "production_ready": false,
             "checkout_available": false,
+            "financial_deployment": {"status": financial_deployment, "scope":"enrollment_entitlement_only", "financial_sources":"unconfirmed", "public_activation_enabled":false},
             "implementation_stage": "team_trust_local_verification",
             "evidence_scope": {"local": local, "external": "unconfirmed"},
             "evaluated_at": Utc::now(),
@@ -797,6 +816,8 @@ impl TeamInsightsService {
         range: ResolvedRange,
     ) -> Result<TeamInsights> {
         let repo = self.readable(actor, org, team).await?;
+        let financial_fence =
+            crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
         anyhow::ensure!(
             range.days_included() <= 90,
             TeamError::Invalid("Team range exceeds 90 days")
@@ -816,11 +837,13 @@ impl TeamInsightsService {
         );
         let scope = repo.scope(org, team).await?;
         let users: Vec<_> = scope.contributors.iter().map(|c| c.user_id).collect();
-        let facts = repo.facts(&users, from as u32, to as u32).await?;
+        let facts = repo
+            .admitted_facts(org, &users, from as u32, to as u32)
+            .await?;
         let mut projection = project_cost(&facts, &scope, &range)?;
         let retention = crate::services::team_trust::cutoff(Utc::now());
         let cumulative = repo
-            .facts(&users, retention.timestamp() as u32, to as u32)
+            .admitted_facts(org, &users, retention.timestamp() as u32, to as u32)
             .await?;
         let mut merged_links = repo
             .merged_links(
@@ -931,7 +954,10 @@ impl TeamInsightsService {
                 .reason
                 .get_or_insert("capture_delivery_coverage_unconfirmed");
         }
+        self.validate_financial_response(org, &financial_fence)
+            .await?;
         Ok(TeamInsights {
+            financial_fence,
             organization_id: org,
             team_id: team,
             start: range.start.to_string(),
@@ -957,6 +983,7 @@ impl TeamInsightsService {
         self.authorization
             .require(actor, org, OrganizationAction::ReadSelf, None)
             .await?;
+        let generation = self.repo()?.generation(org).await?;
         let now = Utc::now();
         let devices = delivery
             .latest(actor)
@@ -1003,13 +1030,39 @@ impl TeamInsightsService {
         } else {
             serde_json::json!({"status":"withheld","reason":"administrator_diagnostics","scope":"organization"})
         };
+        // These are organization operations, never group/user counts or scan cursors.
+        let admission = if matches!(
+            role,
+            Some(
+                crate::services::authorization::OrganizationRole::Owner
+                    | crate::services::authorization::OrganizationRole::Admin
+            )
+        ) {
+            let observation =
+                crate::repository::team_usage_scan::observation(&trust.postgres, org, now).await?;
+            serde_json::to_value(super::team_usage_admission_worker::health(
+                &observation,
+                now,
+            ))?
+        } else {
+            serde_json::json!({"status":"withheld","reason":"administrator_diagnostics","scope":"organization_operations"})
+        };
+        let timezone = trust.policy(org).await?;
+        let current = self
+            .authorization
+            .require(actor, org, OrganizationAction::ReadSelf, None)
+            .await?;
+        anyhow::ensure!(
+            current.role == role && self.repo()?.generation(org).await? == generation,
+            TeamError::ProjectionChanged
+        );
         Ok(
-            serde_json::json!({"checked_at":now,"capabilities":{"weekly_comparison":super::team_comparison::enabled(),"improvement_actions":super::team_comparison::enabled(),"weekly_summary":super::team_comparison::enabled()},"report_timezone":trust.policy(org).await?,"own":{"capture":own_capture,"delivery":own_delivery},
+            serde_json::json!({"checked_at":now,"capabilities":{"weekly_comparison":super::team_comparison::enabled(),"improvement_actions":super::team_comparison::enabled(),"weekly_summary":super::team_comparison::enabled()},"report_timezone":timezone,"own":{"capture":own_capture,"delivery":own_delivery},
             "team":{"capture":{"status":"withheld","reason":"group_health_not_certified","scope":"organization"},
               "delivery":{"status":"withheld","reason":"group_health_not_certified","scope":"organization"},
-              "integration":integration,
+              "integration":integration,"usage_admission":admission,
               "retention":{"status":if at.is_some_and(|t|(0..=7200).contains(&now.signed_duration_since(t).num_seconds())) {"observed"}else{"unconfirmed"},"updated_at":at,"reason":"postgres_and_clickhouse_team_cleanup_checkpoints","scope":"organization"}},
-            "restore":{"status":if registry_ready {"observed"}else{"unavailable"},"reason":"independent_privacy_registry_guard"}}),
+            "restore":{"status":if registry_ready {"observed"}else{"unavailable"},"reason":"independent_privacy_and_enrollment_registry_guards"}}),
         )
     }
 
@@ -1096,6 +1149,8 @@ impl TeamInsightsService {
         } else {
             self.readable(actor, org, team).await?
         };
+        let financial_fence =
+            crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
         let mut scope = repo.scope(org, team).await?;
         if owner_only {
             scope.contributors.retain(|c| c.user_id == actor);
@@ -1123,7 +1178,7 @@ impl TeamInsightsService {
             .filter(|r| !owner_only || r.user_id == actor)
         {
             let facts = repo
-                .session_facts(record.user_id, &record.link.session_id)
+                .admitted_session_facts(org, record.user_id, &record.link.session_id)
                 .await?
                 .into_iter()
                 .filter(|f| {
@@ -1244,7 +1299,10 @@ impl TeamInsightsService {
         } else {
             None
         };
+        self.validate_financial_response(org, &financial_fence)
+            .await?;
         Ok(WorkReceipt {
+            financial_fence,
             next,
             repository_id: repository,
             work_item_id: item,
@@ -1282,7 +1340,9 @@ impl TeamInsightsService {
             .aggregate_from
             .ok_or(TeamError::Invalid("aggregate consent required"))?
             .max(crate::services::team_trust::cutoff(Utc::now()));
-        let facts = repo.session_facts(actor, &request.session_id).await?;
+        let facts = repo
+            .admitted_session_facts(org, actor, &request.session_id)
+            .await?;
         anyhow::ensure!(
             !facts.is_empty() && facts.len() <= 10_000,
             TeamError::Invalid("session unavailable")
@@ -1360,6 +1420,8 @@ impl TeamInsightsService {
             .await?;
         let repo = self.repo()?;
         let generation = repo.generation(org).await?;
+        self.validate_own_response(actor, org, generation).await?;
+        let financial = crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
         let result = repo.links_page(org, actor, after).await?;
         self.authorization
             .require(actor, org, OrganizationAction::ReadSelf, None)
@@ -1368,6 +1430,8 @@ impl TeamInsightsService {
             repo.generation(org).await? == generation,
             TeamError::ProjectionChanged
         );
+        self.validate_own_response(actor, org, generation).await?;
+        self.validate_financial_response(org, &financial).await?;
         Ok(result)
     }
     pub async fn replace(
@@ -1416,6 +1480,8 @@ impl TeamInsightsService {
             .await?;
         let repo = self.repo()?;
         let generation = repo.generation(org).await?;
+        self.validate_own_response(actor, org, generation).await?;
+        let financial = crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
         let result = repo.link_history(org, actor, id, after).await?;
         self.authorization
             .require(actor, org, OrganizationAction::ReadSelf, None)
@@ -1424,6 +1490,8 @@ impl TeamInsightsService {
             repo.generation(org).await? == generation,
             TeamError::ProjectionChanged
         );
+        self.validate_own_response(actor, org, generation).await?;
+        self.validate_financial_response(org, &financial).await?;
         Ok(result)
     }
 }

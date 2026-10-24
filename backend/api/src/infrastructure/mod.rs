@@ -16,3 +16,5 @@ pub mod redis_presence;
 pub mod secret_box;
 
 pub mod stripe;
+
+pub mod team_financial_guard;

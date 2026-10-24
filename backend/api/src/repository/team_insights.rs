@@ -182,6 +182,74 @@ impl TeamInsightsRepository {
         Ok(rows)
     }
 
+    /// One lexical page of latest canonical identities, independent of dashboard reads.
+    pub async fn admission_page(
+        &self,
+        claim: &super::team_usage_scan::Claim,
+    ) -> Result<Vec<AiUsageEventRow>> {
+        let users = self
+            .scope(claim.org, None)
+            .await?
+            .contributors
+            .into_iter()
+            .map(|c| c.user_id)
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            users.len() <= 100,
+            "Team admission member scope exceeds supported bound"
+        );
+        if users.is_empty() {
+            return Ok(vec![]);
+        }
+        // Canonical seconds are integer precision. Ceil both half-open boundaries.
+        let second = |at: DateTime<Utc>| -> Result<u32> {
+            Ok(u32::try_from(
+                at.timestamp() + i64::from(at.timestamp_subsec_nanos() > 0),
+            )?)
+        };
+        self.clickhouse
+            .get_client()
+            .query(
+                "SELECT user_id, toUInt16(date) AS date, usage_event_id, event_payload_hash,
+             ai_session_id, collector_id, event_time, project_id, project_attribution_method,
+             ai_agent, ai_provider, ai_model, prompt_count, prompt_character_count,
+             input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+             estimated_cost_microusd, pricing_version, token_source, version, received_at
+             FROM (SELECT * FROM wakaclock.ai_usage_events FINAL WHERE user_id IN ?
+               ORDER BY user_id,usage_event_id,version DESC LIMIT 1 BY user_id,usage_event_id)
+             WHERE event_time>=? AND event_time<? AND (toString(user_id),usage_event_id)>(?,?)
+             ORDER BY toString(user_id),usage_event_id LIMIT 100",
+            )
+            .bind(users)
+            .bind(second(claim.from)?)
+            .bind(second(claim.before)?)
+            .bind(&claim.after_user)
+            .bind(&claim.after_event)
+            .fetch_all::<AiUsageEventRow>()
+            .await
+            .context("Team admission canonical page unavailable")
+    }
+
+    pub async fn admitted_facts(
+        &self,
+        org: Uuid,
+        users: &[Uuid],
+        from: u32,
+        to: u32,
+    ) -> Result<Vec<AiUsageEventRow>> {
+        let facts = self.facts(users, from, to).await?;
+        super::team_usage_admissions::retain(&self.postgres, org, facts).await
+    }
+    pub async fn admitted_session_facts(
+        &self,
+        org: Uuid,
+        user: Uuid,
+        session: &str,
+    ) -> Result<Vec<AiUsageEventRow>> {
+        let facts = self.session_facts(user, session).await?;
+        super::team_usage_admissions::retain(&self.postgres, org, facts).await
+    }
+
     pub async fn session_facts(&self, user: Uuid, session: &str) -> Result<Vec<AiUsageEventRow>> {
         self.clickhouse
             .get_client()

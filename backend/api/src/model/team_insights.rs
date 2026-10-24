@@ -70,6 +70,8 @@ impl<T> Metric<T> {
 
 #[derive(Debug, Serialize)]
 pub struct TeamInsights {
+    #[serde(skip)]
+    pub financial_fence: String,
     pub organization_id: Uuid,
     pub team_id: Option<Uuid>,
     pub start: String,
@@ -146,6 +148,8 @@ pub struct ReceiptSession {
 
 #[derive(Debug, Serialize)]
 pub struct WorkReceipt {
+    #[serde(skip)]
+    pub financial_fence: String,
     pub next: Option<Uuid>,
     pub cost_until: Option<DateTime<Utc>>,
     pub pricing_versions: Vec<String>,

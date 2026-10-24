@@ -381,6 +381,26 @@ impl PostgresClient {
                 "Team prospective commercial coverage",
                 include_str!("../../migrations/postgres/051_team_analytics_entitlements.sql"),
             ),
+            (
+                "Team immutable usage admission receipts",
+                include_str!("../../migrations/postgres/052_team_usage_admissions.sql"),
+            ),
+            (
+                "Team usage admission scan checkpoints",
+                include_str!("../../migrations/postgres/053_team_usage_admission_scans.sql"),
+            ),
+            (
+                "Copilot commercial admissions",
+                include_str!("../../migrations/postgres/054_team_copilot_admissions.sql"),
+            ),
+            (
+                "Financial source checkpoint and deletion inventory",
+                include_str!("../../migrations/postgres/055_team_financial_source_checkpoints.sql"),
+            ),
+            (
+                "Independent account financial ingress",
+                include_str!("../../migrations/postgres/056_team_financial_ingress.sql"),
+            ),
         ] {
             client
                 .batch_execute(sql)
