@@ -50,12 +50,17 @@ def main():
              '--target-dir', args.target_dir, '--jobs', '4'], 'inventory-cli-build', env, ROOT/'backend/api')
         env['TEAM_FINANCIAL_GUARD_TEST_BIN'] = str(Path(args.target_dir).resolve()/'debug/team-financial-guard')
         env['TEAM_FINANCIAL_INVENTORY_TEST_DIR'] = str(TMP/'inventory-ledger')
-        for name in ('stripe_durable_ingress', 'stripe_worker_current_readback', 'stripe_guarded_observation_commit_and_lost_confirmation', 'stripe_customer_durable_provisioning', 'stripe_quote_owner_customer_catalog', 'stripe_checkout_confirmation_durability', 'team_entitlement_trial_durability', 'team_trial_financial_guard_commit_restore', 'team_usage_admission_expiry', 'financial_source_inventory_consistent_historical_scope_and_loss_detection', 'financial_ingress_runtime_signed_retry_restore_unknown_commit_and_lock_wait'):
+        for name in ('financial_ingress_operator_plan_prospective_recovery_and_restore_fences', 'stripe_durable_ingress', 'stripe_worker_current_readback', 'stripe_guarded_observation_commit_and_lost_confirmation', 'stripe_customer_durable_provisioning', 'stripe_quote_owner_customer_catalog', 'stripe_checkout_confirmation_durability', 'team_entitlement_trial_durability', 'team_trial_financial_guard_commit_restore', 'team_usage_admission_expiry', 'financial_source_inventory_consistent_historical_scope_and_loss_detection', 'financial_ingress_runtime_signed_retry_restore_unknown_commit_and_lock_wait'):
             result = run(['cargo', 'test', '-p', 'wakaclock-server', '--lib', name,
                           '--target-dir', args.target_dir, '--jobs', '4', '--', '--ignored', '--nocapture', '--test-threads=1'],
                          name, env, ROOT/'backend/api')
             assert b'1 passed' in result, 'regression did not execute'
-        files = ['backend/api/src/infrastructure/team_financial_guard.rs',
+        files = ['backend/api/src/services/team_financial_recovery.rs',
+                 'backend/api/src/repository/team_financial_recovery.rs',
+                 'backend/api/src/repository/team_financial_recovery_tests.rs',
+                 'backend/api/src/infrastructure/team_financial_plan.rs',
+                 'backend/api/src/infrastructure/mod.rs',
+                 'backend/api/src/infrastructure/team_financial_guard.rs',
                  'backend/api/src/services/team_financial_guard.rs',
                  'backend/api/src/services/team_financial_source.rs',
                  'backend/api/src/services/team_financial_inventory.rs',
@@ -152,6 +157,8 @@ def main():
             'financial_inventory_operator_metadata_only': 'passed',
             'financial_source_runtime_authorization': 'not_integrated',
             'account_signed_ingress_runtime_sql_file_retry_unknown_commit_and_scope': 'passed',
+            'account_ingress_operator_plan_apply_bootstrap_and_pending_recovery': 'passed',
+            'account_ingress_operator_expiry_while_waiting_and_independent_source_race': 'passed',
             'account_ingress_real_baseline': 'not_performed',
             'stripe_live': 'pending', 'checkout_available': False, 'production_ready': False,
             'docker_started': False, 'logs': str(OUT.relative_to(ROOT)),
