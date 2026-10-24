@@ -4,5 +4,5 @@
   "protocolVersion": 1,
   "target": "darwin-arm64",
   "binary": "wakaclock",
-  "sha256": "5b33485d09cb156e18ab6b803c9967820c27f0b09fe3fff6df8bfc6935e0ec5d"
+  "sha256": "91eb55100f41b8a2eaa3f89ac9368758960dd5a214017aa75387dc4fc188ba64"
 }

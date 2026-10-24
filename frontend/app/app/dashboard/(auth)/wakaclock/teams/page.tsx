@@ -24,8 +24,13 @@ import {
   ORGANIZATIONS_QUERY_KEY,
 } from './components/organization-invites';
 import { OrganizationTeamsPanel } from './components/organization-teams-panel';
+import { TeamActionsPanel } from './components/team-actions-panel';
+import { TeamBillingSetupPanel } from './components/team-billing-setup-panel';
+import { TeamComparisonPanel } from './components/team-comparison-panel';
 import { TeamGithubPanel } from './components/team-github-panel';
 import { TeamInsightsPanel } from './components/team-insights-panel';
+import { TeamOnboardingPanel } from './components/team-onboarding-panel';
+import { TeamSummaryPanel } from './components/team-summary-panel';
 import { TeamTrustPanel } from './components/team-trust-panel';
 
 function OrganizationCard({ organization }: { organization: Organization }) {
@@ -47,6 +52,11 @@ function OrganizationCard({ organization }: { organization: Organization }) {
         <CardTitle>{organization.name}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
+        <TeamOnboardingPanel
+          key={`setup:${userId}:${organization.id}`}
+          organizationId={organization.id}
+        />
+        <TeamBillingSetupPanel organizationId={organization.id} />
         <OrganizationTeamsPanel organizationId={organization.id} />
         <OrganizationInvitesPanel organizationId={organization.id} />
         <TeamTrustPanel organizationId={organization.id} />
@@ -66,6 +76,23 @@ function OrganizationCard({ organization }: { organization: Organization }) {
                   </option>
                 ))}
               </select>
+              {health.data?.capabilities?.weekly_comparison && (
+                <TeamComparisonPanel
+                  key={`compare:${userId}:${organization.id}`}
+                  organizationId={organization.id}
+                  organizationTimezone={timezone}
+                />
+              )}
+              {health.data?.capabilities?.weekly_summary && (
+                <TeamSummaryPanel
+                  key={`summary:${userId}:${organization.id}`}
+                  organizationId={organization.id}
+                  organizationTimezone={timezone}
+                />
+              )}
+              {health.data?.capabilities?.improvement_actions && (
+                <TeamActionsPanel organizationId={organization.id} timezone={timezone} />
+              )}
               <TeamInsightsPanel
                 end={week.end}
                 key={`${userId}:${organization.id}:${timezone}`}

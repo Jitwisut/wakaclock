@@ -41,6 +41,11 @@ async fn weekly_copilot_bundle_source_fences_corrections_and_restore() {
             let owner: Uuid = state.get(1);
             let trust = TeamTrustRepository::new(pg.clone());
             if stage == "revoke" {
+                // The backup was taken at cost source revision 3. Preserve a
+                // newer independent head 10 across an actual dump/restore.
+                for _ in 0..7 {
+                    pg.execute("UPDATE team_work_items SET merged_at=merged_at+interval '1 second' WHERE organization_id=$1 AND external_id=991",&[&org]).await.unwrap();
+                }
                 let before: i64 = pg
                     .query_one(
                         "SELECT generation FROM team_rollouts WHERE organization_id=$1",
@@ -81,7 +86,45 @@ async fn weekly_copilot_bundle_source_fences_corrections_and_restore() {
                 assert!(trust.export_registry(&path).await.is_err());
                 let ledger: Registry =
                     serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                let source_head = ledger
+                    .dispositions
+                    .iter()
+                    .filter(|d| {
+                        d.provider == "team_cost_source"
+                            && d.delivery_id.starts_with(&format!("{org}:"))
+                    })
+                    .map(|d| {
+                        d.delivery_id
+                            .split_once(':')
+                            .unwrap()
+                            .1
+                            .parse::<i64>()
+                            .unwrap()
+                    })
+                    .max()
+                    .unwrap();
+                assert_eq!(source_head, 10);
+                assert_eq!(
+                    pg.query_one(
+                        "SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1",
+                        &[&org]
+                    )
+                    .await
+                    .unwrap()
+                    .get::<_, i64>(0),
+                    3
+                );
                 trust.reconcile_restore(&ledger).await.unwrap();
+                assert_eq!(
+                    pg.query_one(
+                        "SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1",
+                        &[&org]
+                    )
+                    .await
+                    .unwrap()
+                    .get::<_, i64>(0),
+                    source_head + 1
+                );
                 assert!(!pg
                     .query_one(
                         "SELECT enabled FROM team_rollouts WHERE organization_id=$1",
@@ -200,6 +243,80 @@ async fn weekly_copilot_bundle_source_fences_corrections_and_restore() {
         commit_day_manifest(&tx, org, day).await.unwrap();
         tx.commit().await.unwrap();
     }
+    // Source-only PR corrections advance an operational clock without wiping
+    // every privacy publication. Rollback rolls back both marker and mutation.
+    let source_repo = Uuid::now_v7();
+    let project = Uuid::now_v7();
+    pg.execute("INSERT INTO team_repository_scopes(organization_id,repository_id,github_repository_id,github_installation_id,project_id,enabled) VALUES($1,$2,$3,$3,$4,TRUE)",&[&org,&source_repo,&account,&project]).await.unwrap();
+    let generation: i64 = pg
+        .query_one(
+            "SELECT generation FROM team_rollouts WHERE organization_id=$1",
+            &[&org],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let revision: i64 = pg
+        .query_one(
+            "SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1",
+            &[&org],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    pg.execute("INSERT INTO team_work_items(organization_id,repository_id,external_id,kind,number,state,opened_at,merged_at,provider_updated_at) VALUES($1,$2,991,'pull_request',991,'merged',$3,$3,$3)",&[&org,&source_repo,&from]).await.unwrap();
+    pg.execute("UPDATE team_work_items SET merged_at=merged_at+interval '1 second' WHERE organization_id=$1 AND external_id=991",&[&org]).await.unwrap();
+    assert_eq!(
+        pg.query_one(
+            "SELECT generation FROM team_rollouts WHERE organization_id=$1",
+            &[&org]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        generation
+    );
+    assert_eq!(
+        pg.query_one(
+            "SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1",
+            &[&org]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        revision + 2
+    );
+    pg.execute("UPDATE team_work_items SET merged_at=merged_at WHERE organization_id=$1 AND external_id=991",&[&org]).await.unwrap();
+    assert_eq!(
+        pg.query_one(
+            "SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1",
+            &[&org]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        revision + 2
+    );
+    let mut clock_client = pg.transaction_client().await.unwrap();
+    let clock_tx = clock_client.transaction().await.unwrap();
+    clock_tx
+        .execute(
+            "DELETE FROM team_work_items WHERE organization_id=$1 AND external_id=991",
+            &[&org],
+        )
+        .await
+        .unwrap();
+    clock_tx.rollback().await.unwrap();
+    assert_eq!(
+        pg.query_one(
+            "SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1",
+            &[&org]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        revision + 2
+    );
     let auth = AuthorizationService::new(Some(pg.clone()));
     assert!(auth.require_team_read(users[0], org, None).await.is_ok());
     assert!(auth
@@ -277,6 +394,7 @@ async fn weekly_copilot_bundle_source_fences_corrections_and_restore() {
         );
         std::env::set_var("ATOAXIS_COPILOT_DAILY_ENABLED", "1");
         std::env::set_var("ATOAXIS_COPILOT_WEEKLY_ENABLED", "1");
+        std::env::set_var("ATOAXIS_TEAM_WORKFLOW_ENABLED", "1");
         // Populate immutable releases from twelve full weeks before timing.
         for w in 1..12 {
             let r = service
@@ -285,6 +403,26 @@ async fn weekly_copilot_bundle_source_fences_corrections_and_restore() {
                 .unwrap();
             assert_eq!(r.cells[0].value, Some(700));
         }
+        let request = crate::services::team_comparison::Request {
+            family: crate::services::team_comparison::Family::Copilot,
+            baseline_week: start - Duration::days(7),
+            followup_week: start,
+            timezone: "UTC".into(),
+            team_id: None,
+        };
+        let comparison = service
+            .weekly_comparison(users[0], org, request)
+            .await
+            .unwrap();
+        assert_eq!(comparison.changes[0].difference.as_deref(), Some("0"));
+        service
+            .validate_weekly_comparison(users[0], &comparison)
+            .await
+            .unwrap();
+        assert!(!serde_json::to_string(&comparison)
+            .unwrap()
+            .contains("copilot_proof"));
+        std::env::remove_var("ATOAXIS_TEAM_WORKFLOW_ENABLED");
         let mut samples = Vec::new();
         for n in 0..20 {
             let at = std::time::Instant::now();
@@ -456,8 +594,159 @@ async fn weekly_copilot_bundle_source_fences_corrections_and_restore() {
         .validate_copilot_response(users[0], &invalid)
         .await
         .unwrap();
-    std::env::remove_var("ATOAXIS_COPILOT_DAILY_ENABLED");
-    std::env::remove_var("ATOAXIS_COPILOT_WEEKLY_ENABLED");
+    // An operational action resolves only current admitted aggregate reports;
+    // its owner receives no individual sharing grant. Editing its revision
+    // during response construction closes the old bound comparison.
+    std::env::set_var("ATOAXIS_TEAM_WORKFLOW_ENABLED", "1");
+    let action_id = Uuid::now_v7();
+    let mut action = crate::services::team_actions::Edit {
+        request_id: Uuid::new_v4(),
+        expected_revision: 0,
+        owner_id: users[0],
+        title: "Evaluate completion adoption".into(),
+        focus: "tool_evaluation".into(),
+        family: crate::services::team_comparison::Family::Copilot,
+        baseline_week: start - Duration::days(7),
+        followup_week: start,
+        status: "active".into(),
+    };
+    service
+        .mutate_action(users[0], org, action_id, None, Some(&action), None)
+        .await
+        .unwrap();
+    let bound = service
+        .action_comparison(users[0], org, action_id, None)
+        .await
+        .unwrap();
+    assert_eq!(bound.action_revision, 1);
+    assert_eq!(bound.report.baseline.timezone, "UTC");
+    assert!(bound.report.changes.iter().all(|c| c.difference.is_none()));
+    let encoded = serde_json::to_vec(&bound).unwrap();
+    assert!(!String::from_utf8(encoded).unwrap().contains("action_proof"));
+    service
+        .validate_action_comparison(users[0], org, &bound)
+        .await
+        .unwrap();
+    let summary_request = crate::services::team_weekly_summary::Request {
+        family: crate::services::team_comparison::Family::Copilot,
+        week_start: start,
+        timezone: "UTC".into(),
+        team_id: None,
+        include_actions: true,
+        actions_after: None,
+    };
+    let first_summary = service
+        .weekly_summary(users[0], org, summary_request.clone())
+        .await
+        .unwrap();
+    assert_eq!(first_summary.actions.len(), 1);
+    assert_eq!(
+        first_summary.action_basis,
+        "current_metadata_at_read_time_not_historical_status"
+    );
+    assert!(first_summary.cells.iter().all(|c| c.value.is_none()));
+    let serialized = serde_json::to_string(&first_summary).unwrap();
+    assert!(!serialized.contains("action_proof") && !serialized.contains("copilot_proof"));
+    // Earliest IDs are a different family or do not intersect the selected week.
+    // Filter before pagination; full CSV must include later matches exactly once.
+    for i in 0..30 {
+        let mut other = action.clone();
+        other.request_id = Uuid::new_v4();
+        other.title = format!("Nonmatching action {i}");
+        if i % 2 == 0 {
+            other.family = crate::services::team_comparison::Family::TeamCost;
+        } else {
+            other.baseline_week = start - Duration::days(21);
+            other.followup_week = start - Duration::days(14);
+        }
+        service
+            .mutate_action(users[0], org, Uuid::now_v7(), None, Some(&other), None)
+            .await
+            .unwrap();
+    }
+    for i in 0..35 {
+        let mut matching = action.clone();
+        matching.request_id = Uuid::new_v4();
+        matching.title = format!("Matching action {i}");
+        service
+            .mutate_action(users[0], org, Uuid::now_v7(), None, Some(&matching), None)
+            .await
+            .unwrap();
+    }
+    let summary = service
+        .weekly_summary(users[0], org, summary_request.clone())
+        .await
+        .unwrap();
+    assert_eq!(summary.actions.len(), 25);
+    assert!(summary.actions.iter().all(|a| a.family
+        == crate::services::team_comparison::Family::Copilot
+        && a.followup_week >= start));
+    let mut next_request = summary_request.clone();
+    next_request.actions_after = summary.actions_next_cursor;
+    let next = service
+        .weekly_summary(users[0], org, next_request.clone())
+        .await
+        .unwrap();
+    assert_eq!(next.actions.len(), 11);
+    assert!(next.actions_next_cursor.is_none());
+    assert!(service
+        .weekly_summary_export(users[0], org, next_request)
+        .await
+        .is_err());
+    let full = service
+        .weekly_summary_export(users[0], org, summary_request.clone())
+        .await
+        .unwrap();
+    assert_eq!(full.actions.len(), 36);
+    assert_eq!(
+        full.actions
+            .iter()
+            .map(|a| a.id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        36
+    );
+    assert!(full.actions_next_cursor.is_none());
+    let full_csv = crate::services::team_weekly_summary::csv(&full);
+    assert_eq!(
+        full_csv
+            .lines()
+            .filter(|l| l.starts_with("\"action_current_metadata\""))
+            .count(),
+        36
+    );
+    service
+        .validate_weekly_summary(users[0], &full)
+        .await
+        .unwrap();
+    assert!(service
+        .validate_weekly_summary(users[0], &first_summary)
+        .await
+        .is_err());
+    let action_generation = trust.registry_entry(org).await.unwrap().generation;
+    action.expected_revision = 1;
+    action.request_id = Uuid::new_v4();
+    action.title = "Follow up on completion adoption".into();
+    service
+        .mutate_action(users[0], org, action_id, None, Some(&action), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        trust.registry_entry(org).await.unwrap().generation,
+        action_generation
+    );
+    assert!(service
+        .validate_action_comparison(users[0], org, &bound)
+        .await
+        .is_err());
+    assert!(service
+        .validate_weekly_summary(users[0], &full)
+        .await
+        .is_err());
+    let fresh_summary = service
+        .weekly_summary_export(users[0], org, summary_request)
+        .await
+        .unwrap();
     // Replaying an old source state cannot overwrite a newer independent ledger.
     let checkpoint=pg.query_one("SELECT revision,fingerprint FROM team_copilot_day_manifests WHERE organization_id=$1 AND day=$2",&[&org,&start]).await.unwrap();
     pg.execute("UPDATE team_copilot_day_manifests SET revision=1,fingerprint='old_backup' WHERE organization_id=$1 AND day=$2",&[&org,&start]).await.unwrap();
@@ -468,9 +757,90 @@ async fn weekly_copilot_bundle_source_fences_corrections_and_restore() {
     let fence = repo.fence(org).await.unwrap();
     pg.execute("UPDATE organization_analytics_consents SET share_aggregate=false WHERE organization_id=$1 AND user_id=$2",&[&org,&users[0]]).await.unwrap();
     assert_ne!(repo.fence(org).await.unwrap(), fence);
+    assert!(service
+        .validate_weekly_summary(users[0], &fresh_summary)
+        .await
+        .is_err());
+    pg.execute("UPDATE organization_members SET deactivated_at=now() WHERE organization_id=$1 AND user_id=$2", &[&org,&users[0]]).await.unwrap();
+    assert!(service
+        .validate_weekly_summary(users[0], &fresh_summary)
+        .await
+        .is_err());
+    pg.execute("UPDATE organization_members SET deactivated_at=NULL WHERE organization_id=$1 AND user_id=$2", &[&org,&users[0]]).await.unwrap();
+    trust.export_registry(&path).await.unwrap();
+    std::env::remove_var("ATOAXIS_TEAM_WORKFLOW_ENABLED");
+    std::env::remove_var("ATOAXIS_COPILOT_DAILY_ENABLED");
+    std::env::remove_var("ATOAXIS_COPILOT_WEEKLY_ENABLED");
+
+    // Independent ledger is newer than the restored backup's operational clock:
+    // revision 3 -> 10. Restore must import the original markers before disabling
+    // the repository creates revision 11, never reuse ordinal 4 with a new date.
+    let backup_revision = revision + 2;
+    for _ in 0..7 {
+        pg.execute("UPDATE team_work_items SET merged_at=merged_at+interval '1 second' WHERE organization_id=$1 AND external_id=991",&[&org]).await.unwrap();
+    }
     trust.export_registry(&path).await.unwrap();
     let ledger: Registry = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let source_head = backup_revision + 7;
+    assert_eq!(
+        pg.query_one(
+            "SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1",
+            &[&org]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        source_head
+    );
+    pg.execute("DELETE FROM team_webhook_dispositions WHERE provider='team_cost_source' AND split_part(delivery_id,':',1)=$1 AND split_part(delivery_id,':',2)::bigint>$2",&[&org.to_string(),&backup_revision]).await.unwrap();
+    pg.execute(
+        "UPDATE team_cost_source_revisions SET revision=$2 WHERE organization_id=$1",
+        &[&org, &backup_revision],
+    )
+    .await
+    .unwrap();
+    let original = ledger
+        .dispositions
+        .iter()
+        .find(|d| {
+            d.provider == "team_cost_source"
+                && d.delivery_id == format!("{}:{}", org, backup_revision + 1)
+        })
+        .unwrap();
+    let conflicting_at = original.disposed_at + Duration::seconds(1);
+    pg.execute("INSERT INTO team_webhook_dispositions(provider,delivery_id,payload_hash,reason,disposed_at) VALUES($1,$2,$3,$4,$5)",&[&original.provider,&original.delivery_id,&original.payload_hash,&original.reason,&conflicting_at]).await.unwrap();
+    assert!(trust.reconcile_restore(&ledger).await.is_err());
+    assert!(pg.query_one("SELECT enabled FROM team_repository_scopes WHERE organization_id=$1 AND repository_id=$2",&[&org,&source_repo]).await.unwrap().get::<_,bool>(0));
+    assert_eq!(
+        pg.query_one(
+            "SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1",
+            &[&org]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        backup_revision
+    );
+    pg.execute(
+        "DELETE FROM team_webhook_dispositions WHERE provider=$1 AND delivery_id=$2",
+        &[&original.provider, &original.delivery_id],
+    )
+    .await
+    .unwrap();
     trust.reconcile_restore(&ledger).await.unwrap();
+    assert_eq!(
+        pg.query_one(
+            "SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1",
+            &[&org]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        source_head + 1
+    );
+    assert_eq!(pg.query_one("SELECT disposed_at FROM team_webhook_dispositions WHERE provider=$1 AND delivery_id=$2",&[&original.provider,&original.delivery_id]).await.unwrap().get::<_,chrono::DateTime<Utc>>(0),original.disposed_at);
+    trust.export_registry(&path).await.unwrap();
+    trust.guard(org).await.unwrap();
     assert!(!pg
         .query_one(
             "SELECT enabled FROM team_copilot_daily_integrations WHERE organization_id=$1",

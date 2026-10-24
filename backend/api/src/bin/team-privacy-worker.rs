@@ -10,6 +10,19 @@ use wakaclock_server::{
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let config = Config::from_env()?;
+    let admissions = wakaclock_server::services::team_usage_admission_worker::enabled(
+        std::env::var("ATOAXIS_TEAM_USAGE_ADMISSION_WORKER_ENABLED")
+            .ok()
+            .as_deref(),
+    )?;
+    anyhow::ensure!(
+        !admissions || config.team_enabled,
+        "Team admission requires Team feature flag"
+    );
+    if admissions {
+        wakaclock_server::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+    }
+    // Cleanup-only mode must remain usable while commercial enrollment is closed.
     let pg = Arc::new(PostgresClient::connect(&config.postgres).await?);
     pg.migrate().await?;
     let path = PathBuf::from(
@@ -18,6 +31,10 @@ async fn main() -> Result<()> {
     );
     let repo = TeamTrustRepository::new(pg.clone());
     let ch = Arc::new(ClickHouseClient::new(&config.clickhouse).await?);
+    let admission_repo = wakaclock_server::repository::team_insights::TeamInsightsRepository::new(
+        pg.clone(),
+        ch.clone(),
+    );
     if std::env::args().any(|a| a == "--initialize-ledger") {
         anyhow::ensure!(!path.exists(), "independent registry already exists");
         anyhow::ensure!(
@@ -75,6 +92,10 @@ async fn main() -> Result<()> {
             }
         }
         repo.export_registry(&path).await?;
+        if admissions {
+            wakaclock_server::services::team_usage_admission_worker::tick(&admission_repo, &repo)
+                .await?;
+        }
         return Ok(());
     }
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
@@ -95,7 +116,10 @@ async fn main() -> Result<()> {
            }
           }
           if wakaclock_server::repository::team_store_retention::tick(pg.clone(),ch.clone(),chrono::Utc::now()).await.is_err() {eprintln!("team_store_cleanup_dependency_failure");}
-          if repo.export_registry(&path).await.is_err() {eprintln!("team_privacy_registry_mirror_failed");}
+          if repo.export_registry(&path).await.is_err() {eprintln!("team_privacy_registry_mirror_failed");continue;}
+          if admissions && wakaclock_server::services::team_usage_admission_worker::tick(&admission_repo,&repo).await.is_err() {
+            eprintln!("team_usage_admission_dependency_unconfirmed");
+          }
          }
         }
     }

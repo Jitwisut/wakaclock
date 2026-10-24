@@ -739,6 +739,8 @@ impl UserService {
             .await
             .context("failed to resolve personal PostgreSQL organization")?
             .get::<_, Uuid>("id");
+        crate::repository::team_seats::lock(&transaction, organization_id).await?;
+        crate::repository::team_seats::admit(&transaction, organization_id, user_id, "owner", "developer").await?;
         transaction
             .execute(
                 "INSERT INTO organization_members (organization_id, user_id, role, seat_type)

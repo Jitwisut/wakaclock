@@ -6515,6 +6515,7 @@ dependencies = [
  "config",
  "deadpool-postgres",
  "dotenvy",
+ "fs2",
  "futures",
  "governor",
  "jsonwebtoken",

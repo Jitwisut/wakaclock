@@ -18,6 +18,12 @@ members = [
 version = "0.2.0"
 edition = "2021"
 
+# Keep local artifacts bounded; the test profile inherits these settings.
+# See ../../.context/storage.md for the cache/worktree lifecycle.
+[profile.dev]
+debug = 1
+incremental = false
+
 [profile.release]
 opt-level = 3
 lto = true
@@ -86,6 +92,7 @@ tokio-postgres = { workspace = true }
 jsonwebtoken = "9.3"
 argon2 = "0.5"
 sha2 = "0.10"
+fs2 = { workspace = true }
 base64 = "0.22"
 ring = "0.17"
 governor = { workspace = true }

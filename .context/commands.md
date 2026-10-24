@@ -1,5 +1,10 @@
 # Commands
 
+Before substantial builds/tests or creating isolated targets, read
+[storage.md](storage.md). Development/test profiles reduce debug information and
+disable incremental caching. Reuse task targets, check their size and clean up
+disposable output after validation; targets outside this repo count too.
+
 ## Backend (`backend/api`)
 
 The **only** valid Cargo workspace root is `backend/api`. Always `cd` there.

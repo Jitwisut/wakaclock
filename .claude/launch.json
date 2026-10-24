@@ -4,9 +4,37 @@
     {
       "name": "wakaclock-frontend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3000,
       "cwd": "frontend/app"
+    },
+    {
+      "name": "time-homepage-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "3001"
+      ],
+      "port": 3001,
+      "cwd": ".worktrees/time-homepage/frontend/app"
+    },
+    {
+      "name": "time-homepage-prod",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "next",
+        "start",
+        "-p",
+        "3003"
+      ],
+      "port": 3003,
+      "cwd": ".worktrees/time-homepage/frontend/app"
     }
   ]
 }

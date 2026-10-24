@@ -79,6 +79,45 @@ describe('closed weekly reports and Trust', () => {
       expect(screen.queryByText('Your delivery: observed · snapshot')).not.toBeInTheDocument()
     );
   });
+  it('keeps missing admission evidence unconfirmed on older servers', async () => {
+    mocks.health.mockResolvedValue(health('observed'));
+    const { ui } = setup();
+    render(ui());
+    expect(
+      await screen.findByText('Team usage processing: unconfirmed · admission_details_unavailable')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/A completed scan does not confirm complete capture/)
+    ).toBeInTheDocument();
+  });
+  it('notifies only on admission state changes and hides detail when scope is withheld', async () => {
+    const response = (status: string) => ({
+      ...health('observed'),
+      team: { ...health('observed').team, usage_admission: state(status) },
+    });
+    mocks.health.mockResolvedValue(response('pending'));
+    const { client, ui } = setup();
+    render(ui());
+    await screen.findByText('Team usage processing: pending · snapshot');
+    await act(() =>
+      client.invalidateQueries({ queryKey: wakaclockKeys.teamHealth('alice', 'org') })
+    );
+    expect(mocks.toast).not.toHaveBeenCalled();
+    mocks.health.mockResolvedValue(response('observed'));
+    await act(() =>
+      client.invalidateQueries({ queryKey: wakaclockKeys.teamHealth('alice', 'org') })
+    );
+    await screen.findByText('Team usage processing: observed · snapshot');
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalledTimes(1));
+    mocks.health.mockResolvedValue(response('withheld'));
+    await act(() =>
+      client.invalidateQueries({ queryKey: wakaclockKeys.teamHealth('alice', 'org') })
+    );
+    await screen.findByText('Team usage processing: withheld · snapshot');
+    expect(
+      screen.queryByText('Team usage processing: observed · snapshot')
+    ).not.toBeInTheDocument();
+  });
   it('does not show previous account or organization data', async () => {
     mocks.health.mockResolvedValue(health('pending'));
     const { ui } = setup();

@@ -11,6 +11,9 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let config = Config::from_env()?;
     anyhow::ensure!(config.team_enabled, "Team feature flag disabled");
+    if wakaclock_server::services::copilot_daily::enabled() {
+        wakaclock_server::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+    }
     let github = GithubConfig::from_env()?.context("GitHub App configuration required")?;
     wakaclock_server::infrastructure::github::GithubClient::new()?
         .verify_application(&github)

@@ -144,6 +144,7 @@ export default function AnalyticsProjectDetailPage() {
             />
           </div>
         );
+        
       }}
     </AnalyticsFrame>
   );

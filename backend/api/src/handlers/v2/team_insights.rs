@@ -65,6 +65,11 @@ pub async fn receipt(
         .validate_response(actor, org, query.team_id, data.generation)
         .await
         .map_err(error)?;
+    state
+        .team_insights_service
+        .validate_financial_response(org, &data.financial_fence)
+        .await
+        .map_err(error)?;
     let mut cache = HeaderMap::new();
     cache.insert("cache-control", "private, no-store".parse().unwrap());
     Ok((
@@ -141,6 +146,11 @@ async fn final_projection_gate(
             report.team_id,
             report.generation,
         )
+        .await
+        .map_err(error)?;
+    state
+        .team_insights_service
+        .validate_financial_response(report.organization_id, &report.financial_fence)
         .await
         .map_err(error)
 }
@@ -419,6 +429,11 @@ pub async fn own_receipt(
     state
         .team_insights_service
         .validate_own_response(actor, org, data.generation)
+        .await
+        .map_err(error)?;
+    state
+        .team_insights_service
+        .validate_financial_response(org, &data.financial_fence)
         .await
         .map_err(error)?;
     let mut cache = HeaderMap::new();

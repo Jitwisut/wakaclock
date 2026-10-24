@@ -149,3 +149,30 @@ pub mod team_merged_cost;
 pub mod copilot_daily;
 
 pub mod copilot_reports;
+
+pub mod team_actions;
+pub mod team_comparison;
+pub mod team_weekly_summary;
+
+pub mod team_stripe;
+
+pub mod team_stripe_worker;
+
+pub mod team_stripe_invoice;
+
+pub mod team_stripe_catalog;
+
+pub mod team_stripe_checkout;
+
+pub mod team_stripe_payment;
+
+pub mod team_analytics_entitlement;
+
+pub mod team_usage_admission_worker;
+
+pub mod copilot_admission;
+
+pub mod team_financial_guard;
+pub mod team_financial_source;
+pub mod team_financial_inventory;
+pub mod team_financial_ingress;

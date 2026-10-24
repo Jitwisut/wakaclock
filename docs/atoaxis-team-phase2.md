@@ -39,8 +39,16 @@
 | ข้อมูล | การล้าง/ป้องกันการอ่าน |
 | --- | --- |
 | `team_session_links` | เกินอายุ, ถอน aggregate หรือ membership ใช้ batch 100; allocations/history cascade |
+| `team_usage_admissions` | Immutable Team metadata receipt; read cutoff 12 เดือน + current consent/scope, cleanup phase 14 ครั้งละ 100; เขียน absorbing disposition ก่อนลบ ไม่ลบ personal usage |
+| `team_usage_admission_scans` | operational checkpoint หนึ่งแถวต่อองค์กร ไม่เก็บ usage/cost; lease/retry ของ autonomous admission, เก็บเพื่อ resume/restore และ cascade เมื่อองค์กรถูกลบ |
+| `team_copilot_admissions` | Immutable commercial proof ของ UTC day/feature; current privacy + read cutoff เดิม, cleanup phase 15 ครั้งละ 100 พร้อม absorbing disposition; temporary provider suspension ไม่ลบหลักฐาน |
+| `team_copilot_schedule_cursor` | operational cursor หนึ่งแถว ไม่เก็บ usage; หมุนเวียนองค์กรเพื่อไม่อดส่งหลังหน้าแรก ไม่มีสิทธิ์รับข้อมูลจาก cursor เอง |
 | `team_usage_allocations` | เกินอายุหรือถอน individual ใช้ batch 100; ไม่สำเนาต้นทุน canonical |
 | `team_link_history` | เกินอายุ/cascade ตาม link |
+| `team_improvement_actions` / history | metadata ที่ผู้ใช้สร้างเอง; read cutoff จาก created_at/changed_at 12 เดือนปฏิทิน, cleanup phase 13, assignment ไม่เปิด analytics consent |
+| Action revisions / participant dispositions | หลักฐานขั้นต่ำต่อ UUID/actor สำหรับ deletion/restore; edits ไม่เพิ่ม privacy generation, tombstone เป็นสถานะถาวรต่อ UUID |
+| `team_action_account_proof_requirements` | ไม่มี users FK และไม่ใช่ contributor analytics; เก็บ proof requirement แม้ cleanup ลบ action/history ไปแล้ว จน backup ที่อาจคืน metadata หมดอายุและ operator ยืนยัน |
+| `account_deletion_requests` Team checkpoint | เก็บ requirement ตั้งแต่ request แบบ OR; หลัง PostgreSQL purge ยัง running จน independent ledger durable, retry หลัง user row หายได้ |
 | `team_work_items` | cutoff ของ provider_updated_at; อ่านผ่าน scopes/consent projection |
 | `audit_logs` ขององค์กร | 12 เดือน; read cutoff บังคับทันที |
 | `team_consent_history` | ล้างรุ่นเก่าเกินอายุ; คงรุ่นปัจจุบันเป็นหลักฐานสิทธิ์ขั้นต่ำ |

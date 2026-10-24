@@ -79,6 +79,16 @@ impl TeamInsightsService {
         Ok(())
     }
 
+    /// Private source proof retained through rendering; never a client supplied token.
+    pub async fn validate_financial_response(&self, org: Uuid, expected: &str) -> Result<()> {
+        crate::repository::team_financial_guard::validate_fence(
+            &self.repo()?.postgres,
+            org,
+            expected,
+        )
+        .await
+    }
+
     pub async fn copilot_report(
         &self,
         actor: Uuid,
@@ -130,6 +140,228 @@ impl TeamInsightsService {
         Ok(())
     }
 
+    pub async fn weekly_comparison(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        request: super::team_comparison::Request,
+    ) -> Result<super::team_comparison::Report> {
+        use super::team_comparison::{compare, Family};
+        anyhow::ensure!(super::team_comparison::enabled(), TeamError::Disabled);
+        anyhow::ensure!(
+            request.baseline_week + chrono::Duration::days(7) <= request.followup_week,
+            TeamError::Invalid("select distinct ordered closed weeks")
+        );
+        let cost_from = if request.family == Family::TeamCost {
+            Some(
+                u32::try_from(super::team_trust::cutoff(Utc::now()).timestamp())
+                    .map_err(|_| TeamError::Invalid("unsupported cost retention boundary"))?,
+            )
+        } else {
+            None
+        };
+        let cost_proof = if let Some(from) = cost_from {
+            Some(
+                self.comparison_cost_source(actor, org, &request, from)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        // Admit both weeks first. A followup publication changes Copilot's
+        // publication fence, so rebuild both inputs from current proofs afterwards.
+        for week in [request.baseline_week, request.followup_week] {
+            self.comparison_snapshot(actor, org, &request, week).await?;
+        }
+        let (baseline, a) = self
+            .comparison_snapshot(actor, org, &request, request.baseline_week)
+            .await?;
+        let (followup, b) = self
+            .comparison_snapshot(actor, org, &request, request.followup_week)
+            .await?;
+        let mut report =
+            compare(baseline, followup, request).map_err(|_| TeamError::ProjectionChanged)?;
+        if report.request.family == Family::Copilot {
+            report.copilot_proof =
+                Some((a.context("baseline proof")?, b.context("followup proof")?));
+        }
+        report.cost_source_from = cost_from;
+        report.cost_source_proof = cost_proof;
+        self.validate_weekly_comparison(actor, &report).await?;
+        Ok(report)
+    }
+    async fn comparison_snapshot(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        request: &super::team_comparison::Request,
+        week: chrono::NaiveDate,
+    ) -> Result<(
+        super::team_comparison::Snapshot,
+        Option<super::copilot_reports::Report>,
+    )> {
+        use super::team_comparison::{copilot_snapshot, team_snapshot, Family};
+        match request.family {
+            Family::Copilot => {
+                let r = self
+                    .copilot_report(actor, org, request.team_id, week, &request.timezone)
+                    .await?;
+                Ok((copilot_snapshot(&r), Some(r)))
+            }
+            Family::TeamCost => {
+                let range = ResolvedRange::parse(
+                    &week.to_string(),
+                    &(week + chrono::Duration::days(6)).to_string(),
+                    Some(&request.timezone),
+                )
+                .map_err(|_| TeamError::Invalid("invalid comparison week/timezone"))?;
+                let r = self.insights(actor, org, request.team_id, range).await?;
+                Ok((team_snapshot(&r)?, None))
+            }
+        }
+    }
+    /// One shared proof covers both weekly cells, their cumulative to-merge
+    /// usage, and work/link metadata even when either week is withheld. Hashes
+    /// stay private; raw facts never enter action storage or the HTTP response.
+    async fn comparison_cost_source(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        request: &super::team_comparison::Request,
+        from: u32,
+    ) -> Result<String> {
+        use sha2::{Digest, Sha256};
+        let repo = self.readable(actor, org, request.team_id).await?;
+        let financial = crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
+        let revision:i64=repo.postgres.query_one("SELECT COALESCE((SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1),0)",&[&org]).await?.get(0);
+        // Existing shared ledger carries append-only operational heads. A stale
+        // restore may not pass as the latest source merely because scopes match.
+        let ledger: crate::repository::team_trust::Registry = serde_json::from_slice(
+            &std::fs::read(std::env::var("ATOAXIS_TEAM_PRIVACY_LEDGER_PATH")?)?,
+        )?;
+        let prefix = format!("{org}:");
+        let head = ledger
+            .dispositions
+            .iter()
+            .filter(|d| d.provider == "team_cost_source")
+            .filter_map(|d| d.delivery_id.strip_prefix(&prefix)?.parse::<i64>().ok())
+            .max()
+            .unwrap_or(0);
+        anyhow::ensure!(head == revision, TeamError::ProjectionChanged);
+        let scope = repo.scope(org, request.team_id).await?;
+        let mut contributors = scope
+            .contributors
+            .iter()
+            .map(|c| (c.user_id, c.aggregate_from, c.individual_from))
+            .collect::<Vec<_>>();
+        contributors.sort();
+        let users = contributors.iter().map(|c| c.0).collect::<Vec<_>>();
+        let start = ResolvedRange::parse(
+            &request.baseline_week.to_string(),
+            &(request.baseline_week + chrono::Duration::days(6)).to_string(),
+            Some(&request.timezone),
+        )
+        .map_err(|_| TeamError::Invalid("invalid cost comparison week/timezone"))?;
+        let end = ResolvedRange::parse(
+            &request.followup_week.to_string(),
+            &(request.followup_week + chrono::Duration::days(6)).to_string(),
+            Some(&request.timezone),
+        )
+        .map_err(|_| TeamError::Invalid("invalid cost comparison week/timezone"))?;
+        let to = u32::try_from(end.unix_bounds().1 as i64)
+            .map_err(|_| TeamError::Invalid("unsupported comparison boundary"))?;
+
+        let links = repo
+            .merged_links(
+                org,
+                request.team_id,
+                DateTime::from_timestamp(start.unix_bounds().0 as i64, 0)
+                    .context("comparison start")?,
+                DateTime::from_timestamp(to as i64, 0).context("comparison end")?,
+            )
+            .await?;
+        super::team_trust::validate_week(&start, &request.timezone, Utc::now())
+            .map_err(|_| TeamError::Invalid("baseline week is open or expired"))?;
+        super::team_trust::validate_week(&end, &request.timezone, Utc::now())
+            .map_err(|_| TeamError::Invalid("followup week is open or expired"))?;
+        let policy = crate::repository::team_trust::TeamTrustRepository::new(repo.postgres.clone())
+            .policy(org)
+            .await?;
+        anyhow::ensure!(
+            policy == request.timezone,
+            TeamError::Invalid("use the organization report timezone")
+        );
+        // Canonical source is checked jointly, in one query after PG metadata.
+        // In particular a withheld followup cannot skip a corrected baseline.
+        let facts = repo.admitted_facts(org, &users, from, to).await?;
+        let current:i64=repo.postgres.query_one("SELECT COALESCE((SELECT revision FROM team_cost_source_revisions WHERE organization_id=$1),0)",&[&org]).await?.get(0);
+        anyhow::ensure!(revision == current, TeamError::ProjectionChanged);
+        self.validate_response(actor, org, request.team_id, scope.generation)
+            .await?;
+        self.validate_financial_response(org, &financial).await?;
+        Ok(format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(
+                financial,
+                scope.generation,
+                revision,
+                contributors,
+                scope.projects,
+                facts,
+                links,
+                from,
+                to
+            ))?)
+        ))
+    }
+
+    pub async fn validate_weekly_comparison(
+        &self,
+        actor: Uuid,
+        report: &super::team_comparison::Report,
+    ) -> Result<()> {
+        anyhow::ensure!(super::team_comparison::enabled(), TeamError::Disabled);
+        if let Some((a, b)) = &report.copilot_proof {
+            self.validate_copilot_response(actor, a).await?;
+            self.validate_copilot_response(actor, b).await?;
+        } else {
+            // Canonical cost corrections need a reread, not a generation check alone.
+            for snapshot in [&report.baseline, &report.followup] {
+                let (live, _) = self
+                    .comparison_snapshot(
+                        actor,
+                        snapshot.organization_id,
+                        &report.request,
+                        snapshot.week_start,
+                    )
+                    .await?;
+                anyhow::ensure!(live == *snapshot, TeamError::ProjectionChanged);
+                self.validate_response(
+                    actor,
+                    snapshot.organization_id,
+                    snapshot.team_id,
+                    snapshot.generation,
+                )
+                .await?;
+            }
+            let live = self
+                .comparison_cost_source(
+                    actor,
+                    report.baseline.organization_id,
+                    &report.request,
+                    report
+                        .cost_source_from
+                        .context("cost source bounds unavailable")?,
+                )
+                .await?;
+            anyhow::ensure!(
+                report.cost_source_proof.as_deref() == Some(live.as_str()),
+                TeamError::ProjectionChanged
+            );
+        }
+        Ok(())
+    }
+
     pub async fn consent(&self, actor: Uuid, org: Uuid) -> Result<TeamConsent> {
         // Preview/withdrawal must remain accessible even during a feature rollback.
         self.authorization
@@ -138,17 +370,424 @@ impl TeamInsightsService {
         self.repo()?.consent(org, actor).await
     }
 
+    pub async fn weekly_summary(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        request: super::team_weekly_summary::Request,
+    ) -> Result<super::team_weekly_summary::Summary> {
+        use super::{team_comparison::Family, team_weekly_summary as summary};
+        anyhow::ensure!(super::team_comparison::enabled(), TeamError::Disabled);
+        request.validate(Utc::now())?;
+        self.readable(actor, org, request.team_id).await?;
+        let week_end = summary::end_date(request.week_start)?;
+        let range = ResolvedRange::parse(
+            &request.week_start.to_string(),
+            &week_end.to_string(),
+            Some(&request.timezone),
+        )
+        .map_err(|_| TeamError::Invalid("invalid summary week/timezone"))?;
+        let cost_request = super::team_comparison::Request {
+            family: Family::TeamCost,
+            baseline_week: request.week_start,
+            followup_week: request.week_start,
+            timezone: request.timezone.clone(),
+            team_id: request.team_id,
+        };
+        let (
+            window_start,
+            window_end,
+            cells,
+            health,
+            generation,
+            cost_proof,
+            cost_from,
+            copilot_proof,
+        ) = match request.family {
+            Family::TeamCost => {
+                super::team_trust::validate_week(&range, &request.timezone, Utc::now()).map_err(
+                    |_| TeamError::Invalid("request one closed organization week within retention"),
+                )?;
+                let from = u32::try_from(super::team_trust::cutoff(Utc::now()).timestamp())
+                    .map_err(|_| TeamError::Invalid("unsupported cost retention"))?;
+                let proof = self
+                    .comparison_cost_source(actor, org, &cost_request, from)
+                    .await?;
+                let r = self
+                    .insights(actor, org, request.team_id, range.clone())
+                    .await?;
+                let (a, b) = range.unix_bounds();
+                (
+                    DateTime::from_timestamp(a as i64, 0).context("summary window start")?,
+                    DateTime::from_timestamp(b as i64, 0).context("summary window end")?,
+                    summary::cost_cells(&r),
+                    r.measurement_health.into_iter().map(String::from).collect(),
+                    r.generation,
+                    Some(proof),
+                    Some(from),
+                    None,
+                )
+            }
+            Family::Copilot => {
+                super::copilot_reports::week(request.week_start, &request.timezone, Utc::now())
+                    .map_err(|_| {
+                        TeamError::Invalid("request one closed Copilot UTC week within retention")
+                    })?;
+                let r = self
+                    .copilot_report(
+                        actor,
+                        org,
+                        request.team_id,
+                        request.week_start,
+                        &request.timezone,
+                    )
+                    .await?;
+                (
+                    r.window_start,
+                    r.window_end,
+                    summary::copilot_cells(&r),
+                    vec![
+                        format!("capture:{}", r.capture_status),
+                        format!("ingestion:{}", r.ingestion_status),
+                    ],
+                    r.generation,
+                    None,
+                    None,
+                    Some(r),
+                )
+            }
+        };
+        let mut result = summary::Summary {
+            organization_id: org,
+            team_id: request.team_id,
+            family: request.family.clone(),
+            week_start: request.week_start,
+            window_start,
+            window_end,
+            timezone: request.timezone.clone(),
+            checked_at: Utc::now(),
+            data_status: summary::data_status(&cells),
+            cells,
+            measurement_health: health,
+            actions: vec![],
+            actions_next_cursor: None,
+            action_snapshot_at: None,
+            action_basis: "current_metadata_at_read_time_not_historical_status",
+            calculation_version: summary::VERSION,
+            interpretation: "descriptive_admitted_metrics_no_personal_ranking_or_causal_claim",
+            production_ready: false,
+            request,
+            generation,
+            cost_proof,
+            cost_from,
+            copilot_proof,
+            action_proof: None,
+        };
+        if result.request.include_actions {
+            let repo = self.readable(actor, org, result.team_id).await?;
+            let page =
+                crate::repository::team_actions::TeamActionsRepository::new(repo.postgres.clone())
+                    .list_week(
+                        actor,
+                        org,
+                        &super::team_actions::List {
+                            team_id: result.team_id,
+                            after: result.request.actions_after,
+                            limit: Some(25),
+                        },
+                        &result.family,
+                        result.week_start,
+                    )
+                    .await?;
+            result.actions_next_cursor = page.next_cursor;
+            result.action_snapshot_at = Some(Utc::now());
+            result.action_proof = Some(page.proof);
+            result.actions = page.actions;
+        }
+        self.validate_weekly_summary(actor, &result).await?;
+        Ok(result)
+    }
+    /// CSV is a complete export of matching current actions, never a silent first page.
+    /// Bound total work; changing source/access proofs cancels rather than mixing generations.
+    pub async fn weekly_summary_export(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        request: super::team_weekly_summary::Request,
+    ) -> Result<super::team_weekly_summary::Summary> {
+        anyhow::ensure!(
+            request.actions_after.is_none(),
+            TeamError::Invalid("CSV export starts at the first action; omit actions_after")
+        );
+        let mut summary = self.weekly_summary(actor, org, request).await?;
+        while let Some(after) = summary.actions_next_cursor {
+            anyhow::ensure!(
+                summary.actions.len() < 10_000,
+                TeamError::Invalid(
+                    "weekly action export exceeds 10000; select a narrower team scope"
+                )
+            );
+            let repo = self.readable(actor, org, summary.team_id).await?;
+            let page =
+                crate::repository::team_actions::TeamActionsRepository::new(repo.postgres.clone())
+                    .list_week(
+                        actor,
+                        org,
+                        &super::team_actions::List {
+                            team_id: summary.team_id,
+                            after: Some(after),
+                            limit: Some(100),
+                        },
+                        &summary.family,
+                        summary.week_start,
+                    )
+                    .await?;
+            anyhow::ensure!(
+                summary.action_proof.as_deref() == Some(page.proof.as_str()),
+                TeamError::ProjectionChanged
+            );
+            summary.actions.extend(page.actions);
+            summary.actions_next_cursor = page.next_cursor;
+        }
+        anyhow::ensure!(
+            summary.actions.len() <= 10_000,
+            TeamError::Invalid("weekly action export exceeds 10000; select a narrower team scope")
+        );
+        self.validate_weekly_summary(actor, &summary).await?;
+        Ok(summary)
+    }
+    /// Called after JSON or CSV construction. All channels reuse the same
+    /// current source/access checks, including a correction to a withheld week.
+    pub async fn validate_weekly_summary(
+        &self,
+        actor: Uuid,
+        s: &super::team_weekly_summary::Summary,
+    ) -> Result<()> {
+        anyhow::ensure!(super::team_comparison::enabled(), TeamError::Disabled);
+        if let Some(r) = &s.copilot_proof {
+            self.validate_copilot_response(actor, r).await?;
+        } else {
+            let end = super::team_weekly_summary::end_date(s.week_start)?;
+            let range = ResolvedRange::parse(
+                &s.week_start.to_string(),
+                &end.to_string(),
+                Some(&s.timezone),
+            )
+            .map_err(|_| TeamError::Invalid("invalid summary window"))?;
+            let live = self
+                .insights(actor, s.organization_id, s.team_id, range)
+                .await?;
+            anyhow::ensure!(
+                super::team_weekly_summary::cost_cells(&live) == s.cells
+                    && live.generation == s.generation,
+                TeamError::ProjectionChanged
+            );
+            let request = super::team_comparison::Request {
+                family: super::team_comparison::Family::TeamCost,
+                baseline_week: s.week_start,
+                followup_week: s.week_start,
+                timezone: s.timezone.clone(),
+                team_id: s.team_id,
+            };
+            let proof = self
+                .comparison_cost_source(
+                    actor,
+                    s.organization_id,
+                    &request,
+                    s.cost_from.context("summary cost boundary missing")?,
+                )
+                .await?;
+            anyhow::ensure!(
+                s.cost_proof.as_deref() == Some(proof.as_str()),
+                TeamError::ProjectionChanged
+            );
+        }
+        if let Some(proof) = &s.action_proof {
+            self.validate_actions(actor, s.organization_id, s.team_id, proof)
+                .await?;
+        }
+        self.validate_response(actor, s.organization_id, s.team_id, s.generation)
+            .await
+    }
+    pub async fn actions(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        q: &super::team_actions::List,
+    ) -> Result<super::team_actions::Page> {
+        anyhow::ensure!(super::team_comparison::enabled(), TeamError::Disabled);
+        let r = self.readable(actor, org, q.team_id).await?;
+        crate::repository::team_actions::TeamActionsRepository::new(r.postgres.clone())
+            .list(actor, org, q)
+            .await
+    }
+    pub async fn validate_actions(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        team: Option<Uuid>,
+        proof: &str,
+    ) -> Result<()> {
+        let r = self.readable(actor, org, team).await?;
+        anyhow::ensure!(
+            super::team_comparison::enabled()
+                && crate::repository::team_actions::TeamActionsRepository::new(r.postgres.clone())
+                    .guard(org)
+                    .await?
+                    == proof,
+            TeamError::ProjectionChanged
+        );
+        Ok(())
+    }
+    pub async fn action_comparison(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        id: Uuid,
+        team: Option<Uuid>,
+    ) -> Result<super::team_actions::Comparison> {
+        anyhow::ensure!(super::team_comparison::enabled(), TeamError::Disabled);
+        let repo = self.readable(actor, org, team).await?;
+        let r = crate::repository::team_actions::TeamActionsRepository::new(repo.postgres.clone());
+        let proof = r.guard(org).await?;
+        let a = r.get(actor, org, id).await?;
+        anyhow::ensure!(
+            a.team_id == team,
+            crate::services::authorization::AuthorizationDenied("action scope mismatch")
+        );
+        let report = self
+            .weekly_comparison(
+                actor,
+                org,
+                super::team_comparison::Request {
+                    family: a.family,
+                    baseline_week: a.baseline_week,
+                    followup_week: a.followup_week,
+                    timezone: a.timezone,
+                    team_id: team,
+                },
+            )
+            .await?;
+        let result = super::team_actions::Comparison {
+            action_id: id,
+            action_revision: a.revision,
+            report,
+            action_proof: proof,
+            team_id: team,
+        };
+        self.validate_action_comparison(actor, org, &result).await?;
+        Ok(result)
+    }
+    pub async fn validate_action_comparison(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        result: &super::team_actions::Comparison,
+    ) -> Result<()> {
+        self.validate_weekly_comparison(actor, &result.report)
+            .await?;
+        let repo = self.readable(actor, org, result.team_id).await?;
+        let a = crate::repository::team_actions::TeamActionsRepository::new(repo.postgres.clone())
+            .get(actor, org, result.action_id)
+            .await?;
+        anyhow::ensure!(
+            a.revision == result.action_revision && a.team_id == result.team_id,
+            TeamError::ProjectionChanged
+        );
+        self.validate_actions(actor, org, result.team_id, &result.action_proof)
+            .await
+    }
+    pub async fn action_history(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        id: Uuid,
+        before: Option<i64>,
+    ) -> Result<super::team_actions::History> {
+        anyhow::ensure!(
+            super::team_comparison::enabled() && self.enabled,
+            TeamError::Disabled
+        );
+        let r = crate::repository::team_actions::TeamActionsRepository::new(
+            self.repo()?.postgres.clone(),
+        );
+        let a = r.get(actor, org, id).await?;
+        self.readable(actor, org, a.team_id).await?;
+        r.history(actor, org, id, before).await
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn mutate_action(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        id: Uuid,
+        team: Option<Uuid>,
+        edit: Option<&super::team_actions::Edit>,
+        delete: Option<&super::team_actions::Delete>,
+    ) -> Result<serde_json::Value> {
+        anyhow::ensure!(super::team_comparison::enabled(), TeamError::Disabled);
+        let repo = self.readable(actor, org, team).await?;
+        let r = crate::repository::team_actions::TeamActionsRepository::new(repo.postgres.clone());
+        // Retry may follow a committed write whose ledger export/response failed.
+        // The existing registry exporter refuses regressed backup history.
+        let path = std::env::var("ATOAXIS_TEAM_PRIVACY_LEDGER_PATH")?;
+        crate::repository::team_trust::TeamTrustRepository::new(repo.postgres.clone())
+            .export_registry(std::path::Path::new(&path))
+            .await?;
+        r.guard(org).await?;
+        let timezone = if edit.is_some_and(|e| e.family == super::team_comparison::Family::Copilot)
+        {
+            "UTC".into()
+        } else {
+            crate::repository::team_trust::TeamTrustRepository::new(repo.postgres.clone())
+                .policy(org)
+                .await?
+        };
+        let revision = r
+            .write(actor, org, id, team, edit, delete, &timezone)
+            .await?;
+        // Durable DB acceptance survives an export/response failure; replay uses
+        // request_id. Never ACK a stale action after a concurrent deletion.
+        crate::repository::team_trust::TeamTrustRepository::new(repo.postgres.clone())
+            .export_registry(std::path::Path::new(&path))
+            .await?;
+        let proof = r.guard(org).await?;
+        self.readable(actor, org, team).await?;
+        anyhow::ensure!(
+            r.can_manage(actor, org, team).await?,
+            crate::services::authorization::AuthorizationDenied("action access changed")
+        );
+        let row=repo.postgres.query_one("SELECT revision,deleted FROM team_improvement_actions WHERE organization_id=$1 AND id=$2",&[&org,&id]).await?;
+        anyhow::ensure!(
+            row.get::<_, i64>(0) == revision && row.get::<_, bool>(1) == delete.is_some(),
+            TeamError::ProjectionChanged
+        );
+        let result = if delete.is_some() {
+            serde_json::json!({"id":id,"revision":revision,"deleted":true})
+        } else {
+            serde_json::to_value(r.get(actor, org, id).await?)?
+        };
+        self.validate_actions(actor, org, team, &proof).await?;
+        Ok(result)
+    }
+
     pub async fn readiness(&self, actor: Uuid, org: Uuid) -> Result<serde_json::Value> {
         self.authorization
             .require(actor, org, OrganizationAction::ManageSecurity, None)
             .await?;
         let evidence = self.repo()?.release_evidence(org).await?;
+        let financial_deployment = match crate::infrastructure::team_financial_guard::CommercialDeployment::from_environment() {
+            Ok(Some(_)) => "commercial_guard_configured",
+            Ok(None) => "precommercial",
+            Err(_) => "unconfirmed",
+        };
         let local = self.repo()?.postgres.query("SELECT gate,passed,evidence_ref,checked_at,build FROM team_release_evidence WHERE organization_id=$1 AND evidence_scope='local' ORDER BY gate",&[&org]).await?.into_iter().map(|row|serde_json::json!({"gate":row.get::<_,String>(0),"passed":row.get::<_,bool>(1),"evidence_ref":row.get::<_,String>(2),"checked_at":row.get::<_,DateTime<Utc>>(3),"build":row.get::<_,Option<String>>(4)})).collect::<Vec<_>>();
         Ok(serde_json::json!({
             "receiver_enabled": self.enabled,
             "organization_enabled": self.repo()?.enabled(org).await?,
             "production_ready": false,
             "checkout_available": false,
+            "financial_deployment": {"status": financial_deployment, "scope":"enrollment_entitlement_only", "financial_sources":"unconfirmed", "public_activation_enabled":false},
             "implementation_stage": "team_trust_local_verification",
             "evidence_scope": {"local": local, "external": "unconfirmed"},
             "evaluated_at": Utc::now(),
@@ -157,6 +796,9 @@ impl TeamInsightsService {
             "weekly_aggregates": true,
             "copilot_weekly_reports": crate::services::copilot_reports::enabled(),
             "copilot_weekly_csv": crate::services::copilot_reports::enabled(),
+            "weekly_comparison": super::team_comparison::enabled(),
+            "improvement_actions": super::team_comparison::enabled(),
+            "weekly_summary": super::team_comparison::enabled(),
             "report_timezone": crate::repository::team_trust::TeamTrustRepository::new(self.repo()?.postgres.clone()).policy(org).await?,
             "gates": crate::services::team_release::release_gates(&evidence),
             "billing_packages": crate::services::team_billing::PACKAGES,
@@ -174,6 +816,8 @@ impl TeamInsightsService {
         range: ResolvedRange,
     ) -> Result<TeamInsights> {
         let repo = self.readable(actor, org, team).await?;
+        let financial_fence =
+            crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
         anyhow::ensure!(
             range.days_included() <= 90,
             TeamError::Invalid("Team range exceeds 90 days")
@@ -193,11 +837,13 @@ impl TeamInsightsService {
         );
         let scope = repo.scope(org, team).await?;
         let users: Vec<_> = scope.contributors.iter().map(|c| c.user_id).collect();
-        let facts = repo.facts(&users, from as u32, to as u32).await?;
+        let facts = repo
+            .admitted_facts(org, &users, from as u32, to as u32)
+            .await?;
         let mut projection = project_cost(&facts, &scope, &range)?;
         let retention = crate::services::team_trust::cutoff(Utc::now());
         let cumulative = repo
-            .facts(&users, retention.timestamp() as u32, to as u32)
+            .admitted_facts(org, &users, retention.timestamp() as u32, to as u32)
             .await?;
         let mut merged_links = repo
             .merged_links(
@@ -308,7 +954,10 @@ impl TeamInsightsService {
                 .reason
                 .get_or_insert("capture_delivery_coverage_unconfirmed");
         }
+        self.validate_financial_response(org, &financial_fence)
+            .await?;
         Ok(TeamInsights {
+            financial_fence,
             organization_id: org,
             team_id: team,
             start: range.start.to_string(),
@@ -334,6 +983,7 @@ impl TeamInsightsService {
         self.authorization
             .require(actor, org, OrganizationAction::ReadSelf, None)
             .await?;
+        let generation = self.repo()?.generation(org).await?;
         let now = Utc::now();
         let devices = delivery
             .latest(actor)
@@ -380,13 +1030,39 @@ impl TeamInsightsService {
         } else {
             serde_json::json!({"status":"withheld","reason":"administrator_diagnostics","scope":"organization"})
         };
+        // These are organization operations, never group/user counts or scan cursors.
+        let admission = if matches!(
+            role,
+            Some(
+                crate::services::authorization::OrganizationRole::Owner
+                    | crate::services::authorization::OrganizationRole::Admin
+            )
+        ) {
+            let observation =
+                crate::repository::team_usage_scan::observation(&trust.postgres, org, now).await?;
+            serde_json::to_value(super::team_usage_admission_worker::health(
+                &observation,
+                now,
+            ))?
+        } else {
+            serde_json::json!({"status":"withheld","reason":"administrator_diagnostics","scope":"organization_operations"})
+        };
+        let timezone = trust.policy(org).await?;
+        let current = self
+            .authorization
+            .require(actor, org, OrganizationAction::ReadSelf, None)
+            .await?;
+        anyhow::ensure!(
+            current.role == role && self.repo()?.generation(org).await? == generation,
+            TeamError::ProjectionChanged
+        );
         Ok(
-            serde_json::json!({"checked_at":now,"report_timezone":trust.policy(org).await?,"own":{"capture":own_capture,"delivery":own_delivery},
+            serde_json::json!({"checked_at":now,"capabilities":{"weekly_comparison":super::team_comparison::enabled(),"improvement_actions":super::team_comparison::enabled(),"weekly_summary":super::team_comparison::enabled()},"report_timezone":timezone,"own":{"capture":own_capture,"delivery":own_delivery},
             "team":{"capture":{"status":"withheld","reason":"group_health_not_certified","scope":"organization"},
               "delivery":{"status":"withheld","reason":"group_health_not_certified","scope":"organization"},
-              "integration":integration,
+              "integration":integration,"usage_admission":admission,
               "retention":{"status":if at.is_some_and(|t|(0..=7200).contains(&now.signed_duration_since(t).num_seconds())) {"observed"}else{"unconfirmed"},"updated_at":at,"reason":"postgres_and_clickhouse_team_cleanup_checkpoints","scope":"organization"}},
-            "restore":{"status":if registry_ready {"observed"}else{"unavailable"},"reason":"independent_privacy_registry_guard"}}),
+            "restore":{"status":if registry_ready {"observed"}else{"unavailable"},"reason":"independent_privacy_and_enrollment_registry_guards"}}),
         )
     }
 
@@ -473,6 +1149,8 @@ impl TeamInsightsService {
         } else {
             self.readable(actor, org, team).await?
         };
+        let financial_fence =
+            crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
         let mut scope = repo.scope(org, team).await?;
         if owner_only {
             scope.contributors.retain(|c| c.user_id == actor);
@@ -500,7 +1178,7 @@ impl TeamInsightsService {
             .filter(|r| !owner_only || r.user_id == actor)
         {
             let facts = repo
-                .session_facts(record.user_id, &record.link.session_id)
+                .admitted_session_facts(org, record.user_id, &record.link.session_id)
                 .await?
                 .into_iter()
                 .filter(|f| {
@@ -621,7 +1299,10 @@ impl TeamInsightsService {
         } else {
             None
         };
+        self.validate_financial_response(org, &financial_fence)
+            .await?;
         Ok(WorkReceipt {
+            financial_fence,
             next,
             repository_id: repository,
             work_item_id: item,
@@ -659,7 +1340,9 @@ impl TeamInsightsService {
             .aggregate_from
             .ok_or(TeamError::Invalid("aggregate consent required"))?
             .max(crate::services::team_trust::cutoff(Utc::now()));
-        let facts = repo.session_facts(actor, &request.session_id).await?;
+        let facts = repo
+            .admitted_session_facts(org, actor, &request.session_id)
+            .await?;
         anyhow::ensure!(
             !facts.is_empty() && facts.len() <= 10_000,
             TeamError::Invalid("session unavailable")
@@ -737,6 +1420,8 @@ impl TeamInsightsService {
             .await?;
         let repo = self.repo()?;
         let generation = repo.generation(org).await?;
+        self.validate_own_response(actor, org, generation).await?;
+        let financial = crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
         let result = repo.links_page(org, actor, after).await?;
         self.authorization
             .require(actor, org, OrganizationAction::ReadSelf, None)
@@ -745,6 +1430,8 @@ impl TeamInsightsService {
             repo.generation(org).await? == generation,
             TeamError::ProjectionChanged
         );
+        self.validate_own_response(actor, org, generation).await?;
+        self.validate_financial_response(org, &financial).await?;
         Ok(result)
     }
     pub async fn replace(
@@ -793,6 +1480,8 @@ impl TeamInsightsService {
             .await?;
         let repo = self.repo()?;
         let generation = repo.generation(org).await?;
+        self.validate_own_response(actor, org, generation).await?;
+        let financial = crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
         let result = repo.link_history(org, actor, id, after).await?;
         self.authorization
             .require(actor, org, OrganizationAction::ReadSelf, None)
@@ -801,6 +1490,8 @@ impl TeamInsightsService {
             repo.generation(org).await? == generation,
             TeamError::ProjectionChanged
         );
+        self.validate_own_response(actor, org, generation).await?;
+        self.validate_financial_response(org, &financial).await?;
         Ok(result)
     }
 }

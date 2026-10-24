@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "AtoAxis native desktop activity tracker"
 
+# This is a separate workspace; test inherits the smaller development artifacts.
+# See ../../../.context/storage.md.
+[profile.dev]
+debug = 1
+incremental = false
+
 [lib]
 name = "atoaxis_desktop"
 path = "src/lib.rs"
