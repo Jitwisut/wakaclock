@@ -176,3 +176,4 @@ pub mod team_financial_guard;
 pub mod team_financial_source;
 pub mod team_financial_inventory;
 pub mod team_financial_ingress;
+pub mod team_financial_recovery;

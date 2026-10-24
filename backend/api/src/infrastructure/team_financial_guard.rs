@@ -179,6 +179,7 @@ impl FinancialGuard {
         if matches!(
             &event,
             crate::services::team_financial_ingress::Event::Confirm { .. }
+                | crate::services::team_financial_ingress::Event::ConfirmBootstrap { .. }
         ) && self
             .sync_failures
             .fetch_and(!16, std::sync::atomic::Ordering::SeqCst)
@@ -330,6 +331,11 @@ impl FinancialGuard {
         self.prepare_delay_ms
             .store(millis, std::sync::atomic::Ordering::SeqCst);
     }
+    #[cfg(test)]
+    pub(crate) fn take_prepare_delay_ms(&self) -> u64 {
+        self.prepare_delay_ms
+            .swap(0, std::sync::atomic::Ordering::SeqCst)
+    }
     fn sync_file(&self, file: &File, _after_write: bool) -> Result<()> {
         #[cfg(test)]
         {
@@ -345,7 +351,7 @@ impl FinancialGuard {
         file.sync_all()?;
         Ok(())
     }
-    fn options() -> OpenOptions {
+    pub(super) fn options() -> OpenOptions {
         let mut o = OpenOptions::new();
         o.read(true).write(true);
         #[cfg(unix)]
@@ -355,7 +361,7 @@ impl FinancialGuard {
         }
         o
     }
-    fn verify_file(path: &Path, file: &File) -> Result<()> {
+    pub(super) fn verify_file(path: &Path, file: &File) -> Result<()> {
         let disk = std::fs::symlink_metadata(path)?;
         let opened = file.metadata()?;
         ensure!(
@@ -391,7 +397,7 @@ impl FinancialGuard {
         file.try_lock_exclusive().context("financial_guard_busy")?;
         Ok(file)
     }
-    fn sync_directory(&self) -> Result<()> {
+    pub(super) fn sync_directory(&self) -> Result<()> {
         // The server currently runs on Unix. Windows must validate directory
         // durability before certifying this operational storage contract.
         #[cfg(unix)]
@@ -736,6 +742,87 @@ mod tests {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.root).unwrap();
         }
+    }
+    #[test]
+    fn legacy_ingress_confirm_checksum_survives_new_optional_review_field() {
+        use crate::services::team_financial_ingress as ingress;
+        #[derive(Serialize)]
+        #[serde(tag = "action", rename_all = "snake_case")]
+        enum OldIngress {
+            Confirm {
+                scope: ingress::Scope,
+                transition: Uuid,
+                head: ingress::Head,
+            },
+        }
+        #[derive(Serialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum OldOuter {
+            FinancialIngress { event: OldIngress },
+        }
+        #[derive(Serialize)]
+        struct OldBody {
+            version: u8,
+            sequence: u64,
+            previous: String,
+            event: OldOuter,
+        }
+        #[derive(Serialize)]
+        struct OldRecord {
+            body: OldBody,
+            checksum: String,
+        }
+        let f = Fixture::new();
+        let (scope, _, receipt) = ingress::tests::fixture();
+        f.guard
+            .record_ingress(ingress::Event::Seed {
+                scope: scope.clone(),
+                receipts: vec![],
+                review: Uuid::now_v7(),
+                review_hash: "a".repeat(64),
+            })
+            .unwrap();
+        let p = f
+            .guard
+            .read()
+            .unwrap()
+            .snapshot
+            .ingress
+            .entry(&scope)
+            .unwrap()
+            .propose(receipt.clone())
+            .unwrap();
+        f.guard
+            .record_ingress(ingress::Event::Prepare {
+                scope: scope.clone(),
+                proposal: p.clone(),
+            })
+            .unwrap();
+        let prior = f.guard.read().unwrap();
+        let body = OldBody {
+            version: 1,
+            sequence: prior.sequence + 1,
+            previous: prior.chain,
+            event: OldOuter::FinancialIngress {
+                event: OldIngress::Confirm {
+                    scope: scope.clone(),
+                    transition: receipt.transition,
+                    head: p.next,
+                },
+            },
+        };
+        let checksum = fingerprint(&body).unwrap();
+        let mut bytes = serde_json::to_vec(&OldRecord { body, checksum }).unwrap();
+        bytes.push(b'\n');
+        assert!(!String::from_utf8_lossy(&bytes).contains("review"));
+        let mut file = OpenOptions::new().append(true).open(&f.guard.path).unwrap();
+        file.write_all(&bytes).unwrap();
+        file.sync_all().unwrap();
+        let restored = f.guard.read().unwrap();
+        assert_eq!(
+            restored.snapshot.ingress.entry(&scope).unwrap().receipts["evt_ingress"],
+            receipt
+        );
     }
     fn source_seed(
         f: &Fixture,

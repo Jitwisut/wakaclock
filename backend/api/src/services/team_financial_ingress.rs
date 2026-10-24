@@ -187,6 +187,8 @@ pub struct Entry {
     pub conflicts: BTreeMap<String, Notification>,
     pub review: Uuid,
     pub review_hash: String,
+    pub coverage_started_at: Option<DateTime<Utc>>,
+    pub review_evidence_hash: Option<String>,
 }
 impl Entry {
     pub fn ready(&self) -> Result<()> {
@@ -224,6 +226,15 @@ impl Entry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
+    PrepareBootstrap {
+        scope: Scope,
+        bootstrap: Bootstrap,
+    },
+    ConfirmBootstrap {
+        scope: Scope,
+        bootstrap: Uuid,
+        review: OperatorReview,
+    },
     Seed {
         scope: Scope,
         receipts: Vec<Receipt>,
@@ -238,6 +249,8 @@ pub enum Event {
         scope: Scope,
         transition: Uuid,
         head: Head,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        review: Option<OperatorReview>,
     },
     Conflict {
         scope: Scope,
@@ -247,7 +260,9 @@ pub enum Event {
 impl Event {
     pub fn scope(&self) -> &Scope {
         match self {
-            Self::Seed { scope, .. }
+            Self::PrepareBootstrap { scope, .. }
+            | Self::ConfirmBootstrap { scope, .. }
+            | Self::Seed { scope, .. }
             | Self::Prepare { scope, .. }
             | Self::Confirm { scope, .. }
             | Self::Conflict { scope, .. } => scope,
@@ -257,9 +272,67 @@ impl Event {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub accounts: BTreeMap<String, Entry>,
+    pub bootstraps: BTreeMap<String, Bootstrap>,
+    pub operator_reviews: BTreeMap<Uuid, OperatorReview>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bootstrap {
+    pub plan: Uuid,
+    pub digest: String,
+    pub evidence_hash: String,
+    pub coverage_started_at: DateTime<Utc>,
+}
+impl Bootstrap {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.plan.is_nil()
+                && hash(&self.digest)
+                && hash(&self.evidence_hash)
+                && self.coverage_started_at.timestamp_subsec_nanos() % 1000 == 0,
+            "financial_ingress_bootstrap_invalid"
+        );
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewKind {
+    Bootstrap,
+    PendingReceipt,
+    BootstrapRecovery,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatorReview {
+    pub id: Uuid,
+    pub scope: Scope,
+    pub kind: ReviewKind,
+    pub target: Uuid,
+    pub digest: String,
+    pub evidence_hash: String,
+    pub reviewed_at: DateTime<Utc>,
+}
+impl OperatorReview {
+    fn validate(&self, scope: &Scope, target: Uuid) -> Result<()> {
+        ensure!(
+            &self.scope == scope
+                && self.target == target
+                && !target.is_nil()
+                && !self.id.is_nil()
+                && hash(&self.digest)
+                && hash(&self.evidence_hash),
+            "financial_ingress_operator_review_invalid"
+        );
+        Ok(())
+    }
 }
 impl Snapshot {
     pub fn entry(&self, scope: &Scope) -> Result<&Entry> {
+        ensure!(
+            !self.bootstraps.contains_key(&scope.key()?),
+            "financial_ingress_bootstrap_reconciliation_required"
+        );
         self.accounts
             .get(&scope.key()?)
             .context("financial_ingress_uninitialized")
@@ -267,6 +340,79 @@ impl Snapshot {
     pub fn apply(&mut self, event: &Event) -> Result<()> {
         let scope = event.scope();
         let key = scope.key()?;
+        if let Event::PrepareBootstrap { bootstrap, .. } = event {
+            bootstrap.validate()?;
+            ensure!(
+                !self.accounts.contains_key(&key),
+                "financial_ingress_account_already_initialized"
+            );
+            if let Some(prior) = self.bootstraps.get(&key) {
+                ensure!(prior == bootstrap, "financial_ingress_bootstrap_conflict");
+                return Ok(());
+            }
+            ensure!(
+                !self.operator_reviews.contains_key(&bootstrap.plan)
+                    && !self.bootstraps.values().any(|b| b.plan == bootstrap.plan),
+                "financial_ingress_review_identity_conflict"
+            );
+            self.bootstraps.insert(key, bootstrap.clone());
+            return Ok(());
+        }
+        if let Event::ConfirmBootstrap {
+            bootstrap, review, ..
+        } = event
+        {
+            review.validate(scope, *bootstrap)?;
+            ensure!(
+                matches!(
+                    review.kind,
+                    ReviewKind::Bootstrap | ReviewKind::BootstrapRecovery
+                ),
+                "financial_ingress_review_kind_invalid"
+            );
+            self.check_review(review)?;
+            if let Some(entry) = self.accounts.get(&key) {
+                ensure!(
+                    entry.review == *bootstrap
+                        && self.operator_reviews.get(&review.id) == Some(review),
+                    "financial_ingress_bootstrap_confirmation_changed"
+                );
+                return Ok(());
+            }
+            let pending = self
+                .bootstraps
+                .get(&key)
+                .context("financial_ingress_bootstrap_missing")?;
+            ensure!(
+                pending.plan == *bootstrap,
+                "financial_ingress_bootstrap_confirmation_changed"
+            );
+            if review.kind == ReviewKind::Bootstrap {
+                ensure!(
+                    review.id == pending.plan
+                        && review.digest == pending.digest
+                        && review.evidence_hash == pending.evidence_hash,
+                    "financial_ingress_operator_review_invalid"
+                );
+            }
+            let entry = Entry {
+                scope: scope.clone(),
+                head: Head::inventory(scope, 1, &BTreeMap::new())?,
+                receipts: BTreeMap::new(),
+                pending: None,
+                committed_transition: Some(*bootstrap),
+                used_transitions: BTreeMap::from([(*bootstrap, pending.digest.clone())]),
+                conflicts: BTreeMap::new(),
+                review: *bootstrap,
+                review_hash: pending.digest.clone(),
+                coverage_started_at: Some(pending.coverage_started_at),
+                review_evidence_hash: Some(pending.evidence_hash.clone()),
+            };
+            self.accounts.insert(key.clone(), entry);
+            self.bootstraps.remove(&key);
+            self.operator_reviews.insert(review.id, review.clone());
+            return Ok(());
+        }
         if let Event::Seed {
             receipts,
             review,
@@ -275,7 +421,10 @@ impl Snapshot {
         } = event
         {
             ensure!(
-                !self.accounts.contains_key(&key) && !review.is_nil() && hash(review_hash),
+                !self.accounts.contains_key(&key)
+                    && !self.bootstraps.contains_key(&key)
+                    && !review.is_nil()
+                    && hash(review_hash),
                 "financial_ingress_seed_not_reviewed"
             );
             let mut map = BTreeMap::new();
@@ -304,9 +453,24 @@ impl Snapshot {
                     conflicts: BTreeMap::new(),
                     review: *review,
                     review_hash: review_hash.clone(),
+                    coverage_started_at: None,
+                    review_evidence_hash: None,
                 },
             );
             return Ok(());
+        }
+        if let Event::Confirm {
+            transition,
+            review: Some(review),
+            ..
+        } = event
+        {
+            review.validate(scope, *transition)?;
+            ensure!(
+                review.kind == ReviewKind::PendingReceipt,
+                "financial_ingress_review_kind_invalid"
+            );
+            self.check_review(review)?;
         }
         let entry = self
             .accounts
@@ -328,13 +492,19 @@ impl Snapshot {
                 entry.pending = Some(proposal.clone());
             }
             Event::Confirm {
-                transition, head, ..
+                transition,
+                head,
+                review,
+                ..
             } => {
                 ensure!(entry.conflicts.is_empty(), "financial_ingress_conflict");
                 if entry.committed_transition == Some(*transition)
                     && &entry.head == head
                     && entry.pending.is_none()
                 {
+                    if let Some(review) = review {
+                        self.operator_reviews.insert(review.id, review.clone());
+                    }
                     return Ok(());
                 }
                 let p = entry
@@ -351,6 +521,9 @@ impl Snapshot {
                 entry.head = p.next.clone();
                 entry.committed_transition = Some(*transition);
                 entry.pending = None;
+                if let Some(review) = review {
+                    self.operator_reviews.insert(review.id, review.clone());
+                }
             }
             Event::Conflict { notification, .. } => {
                 notification.validate()?;
@@ -373,8 +546,19 @@ impl Snapshot {
                     .conflicts
                     .insert(fingerprint(notification)?, notification.clone());
             }
-            Event::Seed { .. } => unreachable!(),
+            Event::Seed { .. }
+            | Event::PrepareBootstrap { .. }
+            | Event::ConfirmBootstrap { .. } => unreachable!(),
         }
+        Ok(())
+    }
+    fn check_review(&self, review: &OperatorReview) -> Result<()> {
+        ensure!(
+            self.operator_reviews
+                .get(&review.id)
+                .is_none_or(|known| known == review),
+            "financial_ingress_review_identity_conflict"
+        );
         Ok(())
     }
 }
@@ -435,13 +619,15 @@ pub(crate) mod tests {
             .apply(&Event::Confirm {
                 scope: scope.clone(),
                 transition: receipt.transition,
-                head: wrong
+                head: wrong,
+                review: None
             })
             .is_err());
         let confirm = Event::Confirm {
             scope: scope.clone(),
             transition: receipt.transition,
             head: p.next,
+            review: None,
         };
         state.apply(&confirm).unwrap();
         state.apply(&confirm).unwrap();
@@ -464,6 +650,84 @@ pub(crate) mod tests {
                 review_hash: "a".repeat(64)
             })
             .is_err());
+    }
+    #[test]
+    fn bootstrap_is_pending_until_confirmation_and_cannot_reseed_or_rewind() {
+        let (scope, _, receipt) = fixture();
+        let mut state = Snapshot::default();
+        let b = Bootstrap {
+            plan: Uuid::now_v7(),
+            digest: "d".repeat(64),
+            evidence_hash: "e".repeat(64),
+            coverage_started_at: micros(Utc::now()).unwrap(),
+        };
+        let prepare = Event::PrepareBootstrap {
+            scope: scope.clone(),
+            bootstrap: b.clone(),
+        };
+        state.apply(&prepare).unwrap();
+        state.apply(&prepare).unwrap();
+        assert!(state.entry(&scope).is_err());
+        let review = OperatorReview {
+            id: b.plan,
+            scope: scope.clone(),
+            kind: ReviewKind::Bootstrap,
+            target: b.plan,
+            digest: b.digest.clone(),
+            evidence_hash: b.evidence_hash.clone(),
+            reviewed_at: Utc::now(),
+        };
+        let mut wrong = review.clone();
+        wrong.evidence_hash = "f".repeat(64);
+        assert!(state
+            .apply(&Event::ConfirmBootstrap {
+                scope: scope.clone(),
+                bootstrap: b.plan,
+                review: wrong
+            })
+            .is_err());
+        let confirm = Event::ConfirmBootstrap {
+            scope: scope.clone(),
+            bootstrap: b.plan,
+            review,
+        };
+        state.apply(&confirm).unwrap();
+        assert!(state.apply(&prepare).is_err());
+        let p = state
+            .entry(&scope)
+            .unwrap()
+            .propose(receipt.clone())
+            .unwrap();
+        state
+            .apply(&Event::Prepare {
+                scope: scope.clone(),
+                proposal: p.clone(),
+            })
+            .unwrap();
+        state
+            .apply(&Event::Confirm {
+                scope: scope.clone(),
+                transition: receipt.transition,
+                head: p.next,
+                review: None,
+            })
+            .unwrap();
+        state.apply(&confirm).unwrap();
+        assert_eq!(state.entry(&scope).unwrap().receipts.len(), 1);
+        assert_eq!(
+            state.entry(&scope).unwrap().coverage_started_at,
+            Some(b.coverage_started_at)
+        );
+        let legacy = serde_json::to_value(Event::Confirm {
+            scope,
+            transition: receipt.transition,
+            head: state.accounts.values().next().unwrap().head.clone(),
+            review: None,
+        })
+        .unwrap();
+        let mut legacy = legacy;
+        legacy.as_object_mut().unwrap().remove("review");
+        assert!(serde_json::from_value::<Event>(legacy).is_ok());
     }
     #[test]
     fn ingress_receipts_distinguish_scope_job_predecessor_and_ignored_events() {

@@ -73,8 +73,10 @@ statuses include uninitialized, reconciliation_required, conflict, unconfirmed
 and ingress_verified_only. The last status does not grant analytics or prove all
 financial sources were restored. `financial_sources` stays `unconfirmed`.
 
-The only baseline helper is `cfg(test)` for an explicitly empty synthetic inbox.
-There is no production seed/apply CLI, automatic seed or real account activation.
+The initial slice had only a `cfg(test)` empty-inbox seed. The follow-up
+[explicit operator workflow](atoaxis-team-financial-recovery-2026-10-24.md) adds
+reviewed prospective bootstrap and exact pending recovery; it does not admit
+legacy/historical baselines automatically. No real account activation was run.
 Legacy never-commercial deployments without a configured guard retain the
 previous inbox path and cannot claim independent coverage. Required deployment
 configuration/versioned storage must survive restore; deleting all configuration

@@ -153,6 +153,85 @@ async fn advance(
     Ok(())
 }
 
+/// Replays only the existing independent proposal. Never creates a new event.
+pub(super) async fn reconcile_pending(
+    tx: &Transaction<'_>,
+    scope: &Scope,
+    entry: &Entry,
+) -> Result<()> {
+    entry
+        .conflicts
+        .is_empty()
+        .then_some(())
+        .context("financial_ingress_conflict")?;
+    let p = entry
+        .pending
+        .as_ref()
+        .context("financial_ingress_pending_missing")?;
+    let sql = sql_head(tx, scope).await?;
+    let mut next = entry.receipts.clone();
+    next.insert(p.receipt.notification.event_id.clone(), p.receipt.clone());
+    if sql.head == p.next && sql.transition == Some(p.receipt.transition) {
+        matches(tx, scope, &p.next, Some(p.receipt.transition), &next).await?;
+    } else {
+        matches(
+            tx,
+            scope,
+            &p.expected,
+            entry.committed_transition,
+            &entry.receipts,
+        )
+        .await?;
+        write_receipt(tx, scope, &p.receipt).await?;
+        advance(tx, scope, &p.expected, &p.next, p.receipt.transition).await?;
+    }
+    Ok(())
+}
+/// Read-only classification of the exact pending predecessor or committed next.
+pub(super) async fn pending_matches(
+    tx: &Transaction<'_>,
+    scope: &Scope,
+    entry: &Entry,
+) -> Result<()> {
+    ensure!(entry.conflicts.is_empty(), "financial_ingress_conflict");
+    let p = entry
+        .pending
+        .as_ref()
+        .context("financial_ingress_pending_missing")?;
+    let sql = sql_head(tx, scope).await?;
+    if sql.head == p.next && sql.transition == Some(p.receipt.transition) {
+        let mut next = entry.receipts.clone();
+        next.insert(p.receipt.notification.event_id.clone(), p.receipt.clone());
+        matches(tx, scope, &p.next, Some(p.receipt.transition), &next).await
+    } else {
+        matches(
+            tx,
+            scope,
+            &p.expected,
+            entry.committed_transition,
+            &entry.receipts,
+        )
+        .await?;
+        if p.receipt.notification.supported {
+            ensure!(
+                job(
+                    tx,
+                    scope,
+                    p.receipt
+                        .notification
+                        .subscription
+                        .as_ref()
+                        .context("financial_ingress_subscription_missing")?
+                )
+                .await?
+                    == p.receipt.job_before,
+                "financial_ingress_job_predecessor_changed"
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Signed metadata only. ACK after SQL and independent durable confirmation.
 pub async fn accept(
     pg: &PostgresClient,
@@ -187,26 +266,7 @@ pub async fn accept(
             p.receipt.notification == notification,
             "financial_ingress_reconciliation_required"
         );
-        let sql = sql_head(&tx, scope).await?;
-        let mut next = entry.receipts.clone();
-        next.insert(notification.event_id.clone(), p.receipt.clone());
-        if sql.head == p.next && sql.transition == Some(p.receipt.transition) {
-            // Lost file confirmation: no second job mutation, even after progress.
-            matches(&tx, scope, &p.next, Some(p.receipt.transition), &next).await?;
-        } else {
-            // Replay only the independently stored original signed receipt from
-            // its exact predecessor. No new ID/time/revision or provider create.
-            matches(
-                &tx,
-                scope,
-                &p.expected,
-                entry.committed_transition,
-                &entry.receipts,
-            )
-            .await?;
-            write_receipt(&tx, scope, &p.receipt).await?;
-            advance(&tx, scope, &p.expected, &p.next, p.receipt.transition).await?;
-        }
+        reconcile_pending(&tx, scope, &entry).await?;
         ensure!(
             independent(guard, scope)? == entry,
             "financial_ingress_changed_before_commit"
@@ -216,6 +276,7 @@ pub async fn accept(
             scope: scope.clone(),
             transition: p.receipt.transition,
             head: p.next.clone(),
+            review: None,
         })?;
         return Ok(Acceptance::Duplicate);
     }
@@ -284,6 +345,7 @@ pub async fn accept(
         scope: scope.clone(),
         transition: proposal.receipt.transition,
         head: proposal.next,
+        review: None,
     })?;
     Ok(Acceptance::Accepted)
 }
@@ -303,6 +365,14 @@ pub async fn diagnostic(
     let state = guard.read()?;
     let entry = state.snapshot.ingress.accounts.get(&scope.key()?);
     let mut status = "uninitialized";
+    if state
+        .snapshot
+        .ingress
+        .bootstraps
+        .contains_key(&scope.key()?)
+    {
+        status = "bootstrap_reconciliation_required";
+    }
     if let Some(entry) = entry {
         status = if !entry.conflicts.is_empty() {
             "conflict"

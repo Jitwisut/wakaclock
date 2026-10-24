@@ -19,6 +19,36 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Save an immutable private review plan. No baseline/provider mutation.
+    PrepareIngressRecovery {
+        path: PathBuf,
+        #[arg(long)]
+        namespace: Uuid,
+        #[arg(long)]
+        account: String,
+        #[arg(long)]
+        live: bool,
+        #[arg(long)]
+        evidence_hash: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Explicit approval of one unchanged plan. Never grants payment/analytics.
+    ApplyIngressRecovery {
+        path: PathBuf,
+        #[arg(long)]
+        namespace: Uuid,
+        #[arg(long)]
+        account: String,
+        #[arg(long)]
+        live: bool,
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        approve_plan: String,
+        #[arg(long)]
+        acknowledge_prospective_only: bool,
+    },
     /// Read-only account ingress status, never a payment grant or baseline seed.
     InspectIngress {
         path: PathBuf,
@@ -72,6 +102,67 @@ async fn main() {
 }
 async fn execute(args: Args) -> Result<()> {
     match args.command {
+        Command::PrepareIngressRecovery {
+            path,
+            namespace,
+            account,
+            live,
+            evidence_hash,
+            output,
+        } => {
+            let guard = FinancialGuard::new(path)?.pin_namespace(namespace)?;
+            guard.namespace()?;
+            let scope = wakaclock_server::services::team_financial_ingress::Scope { account, live };
+            scope.key()?;
+            let pg = PostgresClient::connect(&PostgresConfig {
+                url: Some(std::env::var("POSTGRES_URL")?),
+                max_connections: 2,
+            })
+            .await?;
+            let p = wakaclock_server::repository::team_financial_recovery::prepare(
+                &pg,
+                &guard,
+                &scope,
+                &evidence_hash,
+            )
+            .await?;
+            wakaclock_server::infrastructure::team_financial_plan::write(&output, &p)?;
+            println!("{}", p.summary());
+        }
+        Command::ApplyIngressRecovery {
+            path,
+            namespace,
+            account,
+            live,
+            plan,
+            approve_plan,
+            acknowledge_prospective_only,
+        } => {
+            let guard = FinancialGuard::new(path)?.pin_namespace(namespace)?;
+            guard.namespace()?;
+            let scope = wakaclock_server::services::team_financial_ingress::Scope { account, live };
+            scope.key()?;
+            let p = wakaclock_server::infrastructure::team_financial_plan::read(&plan)?;
+            let approval = wakaclock_server::services::team_financial_recovery::Approval::reviewed(
+                &p,
+                namespace,
+                &scope,
+                &approve_plan,
+                acknowledge_prospective_only,
+            )?;
+            let pg = PostgresClient::connect(&PostgresConfig {
+                url: Some(std::env::var("POSTGRES_URL")?),
+                max_connections: 2,
+            })
+            .await?;
+            println!(
+                "{}",
+                wakaclock_server::repository::team_financial_recovery::apply(
+                    &pg, &guard, &p, &approval
+                )
+                .await?
+            );
+        }
         Command::InspectIngress {
             path,
             namespace,
