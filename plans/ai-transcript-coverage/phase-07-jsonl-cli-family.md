@@ -1,7 +1,25 @@
 # Phase 07 — JSONL CLI family
 
-สถานะ: **ขั้น 8 ใน README — รอขั้น 7 (Phase 03) + approval; สำรวจ storage ก่อนตาม ROADMAP P3** (ต้องได้คำตอบ Q1, Q5 ก่อน)
-Tier: 2 · ขึ้นกับ: Phase 01, 02 · ทำขนานกับ Phase 06/08 ได้
+สถานะ: **ขั้น 8b ทำแล้ว (2026-10-26)** ภายใต้การอนุมัติแบบรวมขั้น 7–9
+
+## ผลการทำ (2026-10-26)
+
+| Tool | ผล |
+|---|---|
+| Qwen Code, Pi, Kiro, Factory Droid, Kimi (CLI + Code) | ✅ engine เดียว `jsonl_family.rs` + profile ต่อ tool; manifest ใหม่แบบ transcript-only สำหรับ qwen-code, pi, kiro, factory-droid (Kimi ใช้ runtime `KimiCodeCli` ของ hook เดิม) |
+| Grok CLI, Amp, Continue | ⏸ Unsupported ชั่วคราว — ต้อง join หลายไฟล์/ยืนยันด้วย event ถัดไป ซึ่งยังไม่มีข้อเท็จจริงพอจะไม่เดา |
+
+กฎ edit (เพื่อไม่นับเกิน): ชื่อ tool แบบแก้ไฟล์ + path + หลักฐานว่าแก้แล้ว (diff หรือจำนวนบรรทัด) ใน object หรือ
+ชั้นผลลัพธ์ไม่เกิน 2 ชั้น; tool request ที่มีแค่เนื้อหาที่จะเขียน และผลที่ล้มเหลว ไม่นับ
+ตาม Q1: Kimi CLI และ Kimi Code ใช้ ID เดียว `kimi-code-cli`
+
+แก้ test เดิมหนึ่งจุด: `activity_capability.rs` ล็อกจำนวน manifest ไว้ 14 → เป็น 19 (เพิ่ม 5 รวม ibm-bob)
+แก้ข้อเข้าใจผิดใน 8a: การเพิ่ม manifest **ไม่** กระทบ certification inventory verifier (ใช้รายชื่อตายตัว 5 ตัว,
+`verify_inventory.py` ผ่าน) จึงลงทะเบียน IBM Bob แล้วในขั้นนี้
+
+หลักฐาน: core 471 + 12 + 1 ผ่าน (jsonl_family 6, fields 2); cli 108 + 7 + 8 + 44 ผ่าน; clippy, rustfmt ผ่าน;
+integration ผ่าน 7 scenario (Cursor hook scaffold 2 ตัวเดิมล้ม); `verify_inventory.py` ผ่าน
+ไม่มีข้อมูลจริงในเครื่องสำหรับ tool ใดในกลุ่มนี้ — ยืนยันในขั้นทดสอบรวม
 
 ## เป้าหมาย
 

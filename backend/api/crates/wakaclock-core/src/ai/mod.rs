@@ -54,6 +54,7 @@ pub mod follow_up;
 pub mod gemini;
 pub mod identity;
 mod jsonl;
+pub mod jsonl_family;
 pub mod native_activity;
 pub mod parser;
 pub mod parser_registry;

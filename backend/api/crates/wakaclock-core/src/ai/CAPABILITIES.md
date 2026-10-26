@@ -120,7 +120,7 @@ workspace-relative paths to a workspace root.
 
 | | |
 | --- | --- |
-| Tools | Cline (`saoudrizwan.claude-dev`), Roo Code (`rooveterinaryinc.roo-cline`, `…roo-code-nightly`), Kilo Code (`kilocode.kilo-code`); profile for IBM Bob (`ibm.bob-code`) exists but is not registered — there is no catalog manifest for it yet |
+| Tools | Cline (`saoudrizwan.claude-dev`), Roo Code (`rooveterinaryinc.roo-cline`, `…roo-code-nightly`), Kilo Code (`kilocode.kilo-code`); IBM Bob (`ibm.bob-code`, transcript-only manifest added with the JSONL family) |
 | Source | `<editor>/User/globalStorage/<extension>/tasks/<task>/ui_messages.json` for Code, Code - Insiders, Cursor, Windsurf, VSCodium, plus remote `~/.{vscode,cursor,windsurf}-server/data/User/globalStorage` |
 | Verified locally | nothing — none of these extensions is installed on the development machine |
 | Edits | `tool` messages (`ask` or `say`) for `editedExistingFile`, `appliedDiff`, `searchAndReplace`, `insertContent`, `newFileCreated`, `writeToFile`, `fileDeleted`; lines from SEARCH/REPLACE or unified diff, or new content; paths stay workspace-relative |
@@ -129,3 +129,23 @@ workspace-relative paths to a workspace root.
 | Sending | usage only; edits kept as local dry-run evidence (whether an approval-gated edit was rejected is not yet verified) |
 
 Cody is not parsed: its chat history (`state.vscdb` `ItemTable` key `sourcegraph.cody-ai`) has no per-edit record, so edits could only be inferred from context-file diffs, which the accuracy-first rule does not allow.
+
+## JSONL CLI family (`jsonl_family.rs`, added 2026-10-26)
+
+| Agent ID | Logs (under the home directory) |
+| --- | --- |
+| `qwen-code` | `.qwen/projects/*/chats/*.jsonl` |
+| `pi` | `.pi/agent/sessions/**/*.jsonl` |
+| `kiro` | `.kiro/sessions/**/messages.jsonl`, `.kiro/sessions/cli/*.jsonl` |
+| `factory-droid` | `.factory/sessions/**/*.jsonl` |
+| `kimi-code-cli` | `.kimi/sessions/**/wire.jsonl`, `.kimi-code/**/wire.jsonl` |
+
+Each record is searched (depth ≤ 6) for a completed edit: an editing tool name, a file path,
+and change evidence (a diff, or added/removed counts) in the object or its result layers. A
+request that only carries intended content, or a failed result, is not an edit, so edits whose
+result reports neither diff nor counts are not counted. Usage is the first token block in a
+record. No local sample of any of these logs exists; edits stay dry-run (usage only).
+
+Not parsed yet (need tool-specific joins and were recorded as unsupported for now): Grok CLI
+(edits only in `hunk_records.jsonl`), Amp (tool leases confirmed by later results in `.log`
+files), Continue (edit outcomes and tokens in separate `dev_data` files).

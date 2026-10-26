@@ -5,6 +5,7 @@
 //! parser means adding its [`AdapterRuntime`] arm here.
 
 use crate::ai::adapter::{AdapterRegistry, AdapterRuntime};
+use crate::ai::jsonl_family::{self, JsonlFamilyParser};
 use crate::ai::parser::AiActivityParser;
 use crate::ai::ui_messages::{self, UiMessagesParser};
 use crate::ai::{
@@ -41,6 +42,23 @@ fn parser_for(runtime: AdapterRuntime, id: &str) -> Option<Box<dyn AiActivityPar
         // Only Claude Code, Codex and Gemini CLI send edits, so this stays usage-only.
         (AdapterRuntime::KiloCode, "kilo-code") => {
             Some(Box::new(UiMessagesParser::new(&ui_messages::KILO_CODE)))
+        }
+        (AdapterRuntime::None, "ibm-bob") => {
+            Some(Box::new(UiMessagesParser::new(&ui_messages::IBM_BOB)))
+        }
+        (AdapterRuntime::None, "qwen-code") => {
+            Some(Box::new(JsonlFamilyParser::new(&jsonl_family::QWEN_CODE)))
+        }
+        (AdapterRuntime::None, "pi") => Some(Box::new(JsonlFamilyParser::new(&jsonl_family::PI))),
+        (AdapterRuntime::None, "kiro") => {
+            Some(Box::new(JsonlFamilyParser::new(&jsonl_family::KIRO)))
+        }
+        (AdapterRuntime::None, "factory-droid") => Some(Box::new(JsonlFamilyParser::new(
+            &jsonl_family::FACTORY_DROID,
+        ))),
+        // Kimi keeps its hook installer runtime; its session logs are read as well.
+        (AdapterRuntime::KimiCodeCli, "kimi-code-cli") => {
+            Some(Box::new(JsonlFamilyParser::new(&jsonl_family::KIMI)))
         }
         _ => None,
     }
@@ -81,7 +99,7 @@ mod tests {
     #[test]
     fn builtin_parsers_cover_every_transcript_adapter() {
         let ids: Vec<&str> = builtin_parsers().iter().map(|entry| entry.id).collect();
-        assert_eq!(ids.len(), 10);
+        assert_eq!(ids.len(), 16);
         for id in [
             "antigravity",
             "claude-code",
@@ -93,6 +111,12 @@ mod tests {
             "cline",
             "roo-code",
             "kilo-code",
+            "qwen-code",
+            "pi",
+            "kiro",
+            "factory-droid",
+            "kimi-code-cli",
+            "ibm-bob",
         ] {
             assert!(ids.contains(&id), "{id} missing from {ids:?}");
         }
@@ -106,7 +130,16 @@ mod tests {
         assert!(!emits_edit_heartbeats("cursor"));
         assert!(!emits_edit_heartbeats("windsurf"));
         assert!(!emits_edit_heartbeats("antigravity"));
-        for id in ["cline", "roo-code", "kilo-code"] {
+        for id in [
+            "cline",
+            "roo-code",
+            "kilo-code",
+            "qwen-code",
+            "pi",
+            "kiro",
+            "factory-droid",
+            "kimi-code-cli",
+        ] {
             assert!(!emits_edit_heartbeats(id), "{id}");
         }
         // Copilot is parsed, but its edits stay dry-run until certified.

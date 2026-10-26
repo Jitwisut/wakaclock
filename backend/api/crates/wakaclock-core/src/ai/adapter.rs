@@ -943,6 +943,89 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
             health_probe: HealthProbe::None,
         },
         AdapterManifest {
+            id: "qwen-code".to_string(),
+            provider: "alibaba".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["qwen".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            // Transcript-only: read by JsonlFamilyParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![".qwen/projects".to_string()],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "pi".to_string(),
+            provider: "pi".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["pi".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            // Transcript-only: read by JsonlFamilyParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![".pi/agent/sessions".to_string()],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "kiro".to_string(),
+            provider: "aws".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["kiro-cli".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            // Transcript-only: read by JsonlFamilyParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![".kiro/sessions".to_string()],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "factory-droid".to_string(),
+            provider: "factory".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["droid".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            // Transcript-only: read by JsonlFamilyParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![".factory/sessions".to_string()],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "ibm-bob".to_string(),
+            provider: "ibm".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec![],
+                version_arg: None,
+            },
+            // Transcript-only: task logs read by UiMessagesParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![
+                "Library/Application Support/IBM Bob/User/globalStorage/ibm.bob-code/tasks".to_string(),
+                "Library/Application Support/Bob-IDE/User/globalStorage/ibm.bob-code/tasks".to_string(),
+            ],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
             id: "generic-mcp".to_string(),
             provider: "generic".to_string(),
             executable: ExecutableDetection {

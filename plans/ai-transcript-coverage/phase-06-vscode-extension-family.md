@@ -7,7 +7,7 @@
 | Tool | ผล |
 |---|---|
 | Cline, Roo Code, Kilo Code | ✅ parser ร่วม `ui_messages.rs` ลงทะเบียนแล้ว (Kilo ยังใช้ runtime `KiloCode` ของ plugin; usage only) |
-| IBM Bob | ⏸ มี profile ใน parser แต่ **ยังไม่ลงทะเบียน** — ไม่มี manifest ใน catalog และการเพิ่มจะกระทบ certification catalog verifier |
+| IBM Bob | ✅ ลงทะเบียนในขั้น 8b (manifest transcript-only) — ข้อสันนิษฐานเดิมว่าจะกระทบ verifier ผิด |
 | Cody | ✘ Unsupported — ไม่มี record การแก้ไฟล์ราย edit (ต้องเดาจาก diff ของ context file ซึ่งขัดหลัก accuracy-first) |
 
 ที่ทำ: `fields.rs` (helper อ่าน JSON แบบยืดหยุ่น), `ui_messages.rs`, `SourceCheckpoint::JsonSnapshot.seen_through_ms`

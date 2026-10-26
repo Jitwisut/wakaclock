@@ -4,6 +4,7 @@
 //! parsers ask for the first of several keys. Missing or mistyped values are `None`,
 //! never a default that could pass for a measurement.
 
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 /// First non-empty string under one of `keys`.
@@ -34,6 +35,23 @@ pub(crate) fn embedded_object(value: Option<&Value>) -> Value {
     }
 }
 
+/// A timestamp under one of `keys`: RFC 3339 text, or a number of milliseconds (or
+/// seconds, when the value is too small to be milliseconds since 2001).
+pub(crate) fn timestamp_at(value: &Value, keys: &[&str]) -> Option<DateTime<Utc>> {
+    let raw = keys.iter().find_map(|key| value.get(*key))?;
+    if let Some(text) = raw.as_str() {
+        return DateTime::parse_from_rfc3339(text)
+            .ok()
+            .map(|time| time.with_timezone(&Utc));
+    }
+    let number = raw.as_i64()?;
+    if number > 10_000_000_000 {
+        DateTime::<Utc>::from_timestamp_millis(number)
+    } else {
+        DateTime::<Utc>::from_timestamp(number, 0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,5 +64,18 @@ mod tests {
         assert_eq!(count_at(&value, &["n", "m"]), Some(7));
         assert_eq!(embedded_object(value.get("s"))["k"], 1);
         assert_eq!(embedded_object(None), Value::Null);
+    }
+
+    #[test]
+    fn timestamps_accept_text_milliseconds_and_seconds() {
+        let expected = DateTime::parse_from_rfc3339("2026-10-26T10:00:00Z").unwrap();
+        for raw in [
+            json!("2026-10-26T10:00:00Z"),
+            json!(1_793_008_800_000_i64),
+            json!(1_793_008_800_i64),
+        ] {
+            assert_eq!(timestamp_at(&json!({"t": raw}), &["t"]).unwrap(), expected);
+        }
+        assert_eq!(timestamp_at(&json!({}), &["t"]), None);
     }
 }
