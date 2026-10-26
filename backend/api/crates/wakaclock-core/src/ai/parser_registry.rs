@@ -6,7 +6,7 @@
 
 use crate::ai::adapter::{AdapterRegistry, AdapterRuntime};
 use crate::ai::parser::AiActivityParser;
-use crate::ai::{ClaudeCodeParser, CodexParser, GeminiCliParser};
+use crate::ai::{ClaudeCodeParser, CodexParser, CopilotParser, GeminiCliParser};
 
 /// One runnable parser and the runtime that owns its policy.
 pub struct RegisteredParser {
@@ -15,11 +15,15 @@ pub struct RegisteredParser {
     pub parser: Box<dyn AiActivityParser>,
 }
 
-fn parser_for(runtime: AdapterRuntime) -> Option<Box<dyn AiActivityParser>> {
-    match runtime {
-        AdapterRuntime::ClaudeCode => Some(Box::new(ClaudeCodeParser::new())),
-        AdapterRuntime::Codex => Some(Box::new(CodexParser::new())),
-        AdapterRuntime::GeminiCli => Some(Box::new(GeminiCliParser::new())),
+fn parser_for(runtime: AdapterRuntime, id: &str) -> Option<Box<dyn AiActivityParser>> {
+    match (runtime, id) {
+        (AdapterRuntime::ClaudeCode, _) => Some(Box::new(ClaudeCodeParser::new())),
+        (AdapterRuntime::Codex, _) => Some(Box::new(CodexParser::new())),
+        (AdapterRuntime::GeminiCli, _) => Some(Box::new(GeminiCliParser::new())),
+        // Transcript-only adapters have no installer runtime, so their catalog runtime
+        // stays `None` (setup and install are unaffected) and the parser is chosen by
+        // id. `None` never sends edits, which keeps them usage-only.
+        (AdapterRuntime::None, "copilot") => Some(Box::new(CopilotParser::new())),
         _ => None,
     }
 }
@@ -32,7 +36,7 @@ pub fn builtin_parsers() -> Vec<RegisteredParser> {
         .adapters
         .into_iter()
         .filter_map(|entry| {
-            let parser = parser_for(entry.runtime)?;
+            let parser = parser_for(entry.runtime, &entry.manifest.id)?;
             let id = parser.id();
             (entry.manifest.id == id).then_some(RegisteredParser {
                 id,
@@ -57,10 +61,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_parsers_are_the_three_transcript_adapters() {
+    fn builtin_parsers_cover_every_transcript_adapter() {
         let ids: Vec<&str> = builtin_parsers().iter().map(|entry| entry.id).collect();
-        assert_eq!(ids.len(), 3);
-        for id in ["claude-code", "codex", "gemini-cli"] {
+        assert_eq!(ids.len(), 4);
+        for id in ["claude-code", "codex", "gemini-cli", "copilot"] {
             assert!(ids.contains(&id), "{id} missing from {ids:?}");
         }
     }
@@ -71,6 +75,8 @@ mod tests {
             assert!(emits_edit_heartbeats(id), "{id}");
         }
         assert!(!emits_edit_heartbeats("cursor"));
+        // Copilot is parsed, but its edits stay dry-run until certified.
+        assert!(!emits_edit_heartbeats("copilot"));
         assert!(!AdapterRuntime::KiloCode.emits_edit_heartbeats());
         assert!(!AdapterRuntime::None.emits_edit_heartbeats());
     }

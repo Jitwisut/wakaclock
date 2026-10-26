@@ -23,7 +23,7 @@ campaign, การล็อกอิน Claude/Codex, SQL ฝั่ง server �
 | 2 | **แก้ Claude นับบรรทัดซ้ำ** | [phase-02](phase-02-cross-source-dedupe-and-agent-ids.md) | ✅ แก้ใน worktree แล้ว (ยังไม่ commit): จับคู่ด้วย ID เท่านั้น + hook 1.0.3 ส่ง tool-call ID จริง | duplicate ของข้อมูลใหม่ = 0 (รอยืนยันฝั่ง server) |
 | 3 | ~~ต่ออายุใบรับรอง Claude Code + Codex~~ → **ย้ายไปขั้นทดสอบรวม** | [phase-11](phase-11-certification-and-rollout.md) | lab ใน worktree build ไว้แล้ว (manifest จะเก่าเมื่อโค้ดเปลี่ยน ต้อง build ใหม่ตอนทดสอบ) | — |
 | 4 | โครงพื้นฐาน parser | [phase-01](phase-01-source-cursors-and-engine.md) | ✅ แก้ใน worktree แล้ว (ยังไม่ commit) — ดูผลใน phase-01 | parser เดิมผลเท่าเดิมทุก byte |
-| 5 | GitHub Copilot (VS Code ก่อน, CLI ทีหลัง) | [phase-05](phase-05-github-copilot.md) | เครื่องเจ้าของมีข้อมูลจริงแล้ว → certify ได้ทันที | Copilot ได้ token/model + dry-run edit |
+| 5 | GitHub Copilot (VS Code ก่อน, CLI ทีหลัง) | [phase-05](phase-05-github-copilot.md) | ✅ แก้ใน worktree แล้ว (ยังไม่ commit) — agent ID `copilot` + `producer_surface`; ดูผลใน phase-05 | Copilot ได้ token/model + dry-run edit |
 | 6 | Cursor + Windsurf + cursor-agent | [phase-04](phase-04-cursor-windsurf-statevscdb.md) | เจ้าของติดตั้ง Cursor/Windsurf | certify macOS แล้วตาม OS อื่น |
 | 7 | Gemini CLI + Antigravity | [phase-03](phase-03-claude-codex-gemini-antigravity.md) | เจ้าของเปิด session Gemini จริง | fixture จริง + certify |
 | 8 | Tier 2 แบบ "สำรวจ storage ก่อน" | [phase-06](phase-06-vscode-extension-family.md), [phase-07](phase-07-jsonl-cli-family.md), [phase-08](phase-08-sqlite-app-family.md) | ทำเฉพาะ tool ที่ log มีหลักฐาน edit ชัด (ตาม ROADMAP P3 ข้อ 4–5); ที่เหลือบันทึก Unsupported | ทุก tool มีสถานะ |

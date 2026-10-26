@@ -74,3 +74,18 @@ Both agents report token usage per *turn*, not per *file edit*. A turn can touch
 one, or several files. This confirms Phase 9's decision to keep per-file token
 allocation as an explicit, documented estimate (or an `unattributed_project` bucket)
 rather than something recoverable exactly from either transcript format.
+
+## GitHub Copilot (`copilot.rs`, added 2026-10-26)
+
+| | VS Code chat/agent | Copilot CLI |
+| --- | --- | --- |
+| Source | `<editor>/User/workspaceStorage/<hash>/GitHub.copilot-chat/transcripts/*.jsonl` | `~/.copilot/session-state/<id>/events.jsonl` |
+| Envelope | JSONL `{type, id, parentId, timestamp, data}` | same event family |
+| Verified locally | `session.start`, `user.message`, `assistant.message` (`toolRequests`), `assistant.turn_start`/`turn_end` — one real session, keys only | no local sample |
+| Assumed (synthetic fixture) | `tool.execution_complete`, `assistant.usage`, `session.model_change` and their fields | same |
+| Agent ID | `copilot`, with `producer_surface` = `vscode` or `cli` | |
+| Edits | a file-naming tool request plus its successful completion; lines only when telemetry reports them | |
+| Sending | usage only; edits kept as local dry-run evidence until certified (catalog runtime `None`) | |
+
+Not read yet: `chatSessions/*.jsonl` (patch log with `modelId` and request token counts) and
+`chatEditingSessions/*/state.json`; inline completions are out of scope.

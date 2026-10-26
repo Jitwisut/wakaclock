@@ -42,6 +42,7 @@ pub mod canonical;
 pub mod certification;
 pub mod claude;
 pub mod codex;
+pub mod copilot;
 pub mod correlation;
 pub mod diagnostics;
 pub mod editor_capability;
@@ -78,6 +79,7 @@ pub use certification::{
 };
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
+pub use copilot::CopilotParser;
 pub use correlation::{
     correlate, expire_unmatched, AiAttribution, CorrelationOutcome, EditorObservation,
 };

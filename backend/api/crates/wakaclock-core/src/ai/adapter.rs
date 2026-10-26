@@ -846,7 +846,13 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 instruction: "Copilot CLI/IDE hook surface not yet inspected".to_string(),
             },
             native_hooks: no_hooks(),
-            transcript_roots: vec![],
+            // Read by CopilotParser; edits stay dry-run until certified.
+            transcript_roots: vec![
+                "Library/Application Support/Code/User/workspaceStorage/*/GitHub.copilot-chat/transcripts".to_string(),
+                ".config/Code/User/workspaceStorage/*/GitHub.copilot-chat/transcripts".to_string(),
+                "AppData/Roaming/Code/User/workspaceStorage/*/GitHub.copilot-chat/transcripts".to_string(),
+                ".copilot/session-state".to_string(),
+            ],
             payload_schema_versions: vec![],
             supported_change_kinds: file_kinds.clone(),
             verification: Verification::unverified(),
