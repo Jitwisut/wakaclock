@@ -56,6 +56,14 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ## Approval gate — ต้องถามก่อนแก้
 
+การอนุมัติ 2026-10-26 (AI transcript coverage ขั้น 7–9): ผู้ใช้อนุมัติแบบรวมตาม
+`plans/ai-transcript-coverage/` (ขั้น 7 Gemini CLI + Antigravity, ขั้น 8 Tier 2 + cursor-agent, ขั้น 9 doctor/consent/
+dashboard) บน `claude/ai-transcript-coverage`: parser ใหม่ส่งได้แค่ usage และเก็บ edit เป็น dry-run
+(`AdapterRuntime::emits_edit_heartbeats`); ห้ามแตะ locked baseline, heartbeat wire format, server, timeline หรือ `main`;
+commit/push ขึ้น branch นี้ได้หลังแต่ละขั้นผ่าน test; ต้องหยุดถามเมื่อต้องแตะไฟล์หรือพฤติกรรมนอกเงื่อนไข.
+คำตอบประกอบ: Q4 Antigravity อ่านแค่ JSONL, Q5 tool ที่มีแค่ token แสดงในหน้า usage/cost, Q6 อ่าน log อัตโนมัติ
+และปิดรายเครื่องมือได้. ไม่ครอบคลุมขั้น 10–11 (ทดสอบรวม, เปิดส่ง edit) และไม่ใช่การรับรอง release.
+
 การอนุมัติ 2026-10-10 (Heartbeat → Capture AI → Client Release): ผู้ใช้สั่ง
 “PLEASE IMPLEMENT THIS PLAN” ให้ทำ H1–H5, C1–C4 และ R1–R3 บน
 `codex/heartbeat-capture-release` จาก `90774c9`: editor metadata journal,
