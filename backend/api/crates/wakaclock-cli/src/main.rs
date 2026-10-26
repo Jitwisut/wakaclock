@@ -6162,31 +6162,55 @@ async fn run_ai_sync(
             // sync for the others (the `AiActivityParser` contract says callers treat
             // `Err` as "skip this agent this cycle"). Record it and move to the next
             // agent instead of `?`-ing out of the whole run.
-            let batch = match catch_parser_panic(|| {
-                parser.parse_since(&ParseContext::default(), Some(&cursor))
-            }) {
-                Ok(batch) => batch,
-                Err(error) => {
-                    eprintln!(
+            // The bounded automatic pass gives each parser only what is left of its
+            // slot; a database parser stops reading when that runs out.
+            let remaining =
+                || deadline.map(|limit| limit.saturating_duration_since(Instant::now()));
+            let parse_context = ParseContext {
+                time_budget: remaining().map_or(ParseContext::default().time_budget, |left| {
+                    left.min(ParseContext::default().time_budget)
+                }),
+                ..ParseContext::default()
+            };
+            let batch =
+                match catch_parser_panic(|| parser.parse_since(&parse_context, Some(&cursor))) {
+                    Ok(batch) => batch,
+                    Err(error) => {
+                        eprintln!(
                         "  {id}: transcript parse failed — skipping this agent this cycle ({error})"
                     );
-                    agent_service::record_scan(false, None, Some(&format!("{id}: {error}")));
-                    break;
-                }
-            };
+                        agent_service::record_scan(false, None, Some(&format!("{id}: {error}")));
+                        break;
+                    }
+                };
             check_deadline()?;
             // Usage is parsed independently from file-edit events: one model response may edit
             // several files, and copying its token count to each file would inflate totals. A
             // usage-parse failure is non-fatal — keep the file-edit events, drop token counts.
-            let usage_records = if usage_scan_needed(cursor_reused, cursor.byte_offset, file_len) {
-                catch_parser_panic(|| parser.parse_usage(&transcript_path, Some(&cursor)))
-            } else {
-                Ok(Vec::new())
-            }
-            .unwrap_or_else(|error| {
-                eprintln!("  {id}: usage parse failed, continuing without token counts ({error})");
-                Vec::new()
-            });
+            let usage_budget = remaining();
+            let usage_records =
+                if !usage_scan_needed(cursor_reused, cursor.byte_offset, file_len) {
+                    Ok(Vec::new())
+                } else if parser.source_kind() == wakaclock_core::ai::SourceKind::Sqlite
+                    && usage_budget.is_some_and(|left| left < AUTO_SYNC_MIN_SLICE)
+                {
+                    // Database usage is re-read from a recent window every pass, so a pass
+                    // with no time left can skip it without losing records.
+                    Ok(Vec::new())
+                } else {
+                    catch_parser_panic(|| match usage_budget {
+                        Some(budget) => {
+                            parser.parse_usage_within(&transcript_path, Some(&cursor), budget)
+                        }
+                        None => parser.parse_usage(&transcript_path, Some(&cursor)),
+                    })
+                }
+                .unwrap_or_else(|error| {
+                    eprintln!(
+                        "  {id}: usage parse failed, continuing without token counts ({error})"
+                    );
+                    Vec::new()
+                });
             if verbose {
                 for warning in &batch.warnings {
                     eprintln!("  warning: {}", warning.message);
@@ -7780,45 +7804,108 @@ fn prepare_handoff(
     })
 }
 
-/// Ordinary editor heartbeats opportunistically drain transcript events, so AI edits
-/// do not depend on a user remembering to run `wakaclock sync`. Each agent gets its
-/// own bounded pass: a large or malformed Claude history must not consume the whole
-/// budget before Codex gets a chance to scan its current session. A timeout/error leaves
-/// the ordinary heartbeat path untouched and the transcript cursor replayable on the
-/// next event-triggered call.
-pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
-    const AUTO_SYNC_AGENT_BUDGET: Duration = Duration::from_secs(2);
+/// Parsers whose edits are counted keep a fixed slot each, in this order, with the
+/// low-latency active-session parser first.
+const AUTO_SYNC_COUNTED: [&str; 3] = ["codex", "claude-code", "gemini-cli"];
+const AUTO_SYNC_AGENT_BUDGET: Duration = Duration::from_secs(2);
+/// Shared by every other parser in one automatic pass.
+const AUTO_SYNC_ROTATION_BUDGET: Duration = Duration::from_secs(2);
+/// A parser read this recently waits for a later pass.
+const AUTO_SYNC_MIN_INTERVAL_SECONDS: i64 = 60;
+/// Less time than this is not worth starting a parser (or a database usage read) for.
+const AUTO_SYNC_MIN_SLICE: Duration = Duration::from_millis(300);
 
-    // Keep this order stable and put the low-latency active-session parser first. The
-    // calls remain sequential because AiSyncLock protects the shared attribution state;
-    // the independent timeout is what prevents one parser from starving the others.
-    for agent in ["codex", "claude-code", "gemini-cli"] {
-        match tokio::time::timeout(
-            AUTO_SYNC_AGENT_BUDGET,
-            run_ai_sync(
-                config,
-                api_client,
-                Some(agent),
-                None,
-                AiSyncOptions {
-                    dry_run: false,
-                    verbose: false,
-                    from_start: false,
-                    lease_already_held: false,
-                    deadline: Some(Instant::now() + AUTO_SYNC_AGENT_BUDGET),
-                },
-            ),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                eprintln!("Warning: automatic {agent} sync skipped: {error}")
-            }
-            Err(_) => {
-                eprintln!("Warning: automatic {agent} sync exceeded 2 seconds; will retry later")
-            }
+/// The other parsers to try in this pass: turned on, not tried within the minimum
+/// interval, longest-waiting first (never tried counts as longest), ties by id.
+fn auto_sync_rotation(
+    candidates: &[(&'static str, bool)],
+    attempts: &std::collections::HashMap<String, i64>,
+    now: i64,
+) -> Vec<&'static str> {
+    let mut due: Vec<(Option<i64>, &'static str)> = candidates
+        .iter()
+        .filter(|(id, enabled)| *enabled && !AUTO_SYNC_COUNTED.contains(id))
+        .map(|(id, _)| (attempts.get(*id).copied(), *id))
+        .filter(|(last, _)| last.is_none_or(|at| now - at >= AUTO_SYNC_MIN_INTERVAL_SECONDS))
+        .collect();
+    due.sort();
+    due.into_iter().map(|(_, id)| id).collect()
+}
+
+/// Ordinary editor heartbeats opportunistically drain transcript events, so AI edits
+/// do not depend on a user remembering to run `wakaclock sync`. The counted parsers
+/// each get their own bounded slot as before; every other turned-on parser shares one
+/// more slot, taken in rotation so each is read at least once a minute while heartbeats
+/// arrive. A timeout/error leaves the ordinary heartbeat path untouched and the
+/// transcript cursor replayable on the next event-triggered call.
+pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
+    // One lock for the whole pass: if another sync holds it, this pass has nothing to do.
+    let _lock = match AiSyncLock::acquire() {
+        Ok(Some(lock)) => lock,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("Warning: automatic AI sync skipped: {error}");
+            return;
         }
+    };
+    let state = AiAttributionState::open().ok();
+    for agent in AUTO_SYNC_COUNTED {
+        if source_turned_on(state.as_ref(), agent) {
+            bounded_ai_sync_pass(config, api_client, agent, AUTO_SYNC_AGENT_BUDGET).await;
+        }
+    }
+    let Some(state) = state else {
+        return;
+    };
+    let candidates: Vec<(&'static str, bool)> = supported_ai_parsers()
+        .iter()
+        .map(|(id, _)| (*id, source_turned_on(Some(&state), id)))
+        .collect();
+    let attempts = state.auto_sync_attempts().unwrap_or_default();
+    let rotation_deadline = Instant::now() + AUTO_SYNC_ROTATION_BUDGET;
+    for agent in auto_sync_rotation(&candidates, &attempts, Utc::now().timestamp()) {
+        let remaining = rotation_deadline.saturating_duration_since(Instant::now());
+        if remaining < AUTO_SYNC_MIN_SLICE {
+            break;
+        }
+        // Recorded before reading, so a parser that times out still moves to the back.
+        let _ = state.record_auto_sync_attempt(agent, Utc::now().timestamp());
+        bounded_ai_sync_pass(config, api_client, agent, remaining).await;
+    }
+}
+
+async fn bounded_ai_sync_pass(
+    config: &Config,
+    api_client: &ApiClient,
+    agent: &str,
+    budget: Duration,
+) {
+    match tokio::time::timeout(
+        budget,
+        run_ai_sync(
+            config,
+            api_client,
+            Some(agent),
+            None,
+            AiSyncOptions {
+                dry_run: false,
+                verbose: false,
+                from_start: false,
+                lease_already_held: true,
+                deadline: Some(Instant::now() + budget),
+            },
+        ),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            eprintln!("Warning: automatic {agent} sync skipped: {error}")
+        }
+        Err(_) => eprintln!(
+            "Warning: automatic {agent} sync exceeded {:.1} seconds; will retry later",
+            budget.as_secs_f32()
+        ),
     }
 }
 
@@ -9055,6 +9142,40 @@ mod generic_ai_ingress_tests {
         keep_edits_as_dry_run(&state, "cursor", &[&first]).unwrap();
         assert_eq!(state.dry_run_edit_count("cursor").unwrap(), 2);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn auto_sync_rotation_takes_the_longest_waiting_turned_on_parsers() {
+        let candidates = [
+            ("codex", true),
+            ("claude-code", true),
+            ("cursor", true),
+            ("qoder", false),
+            ("pi", true),
+            ("kiro", true),
+            ("opencode", true),
+        ];
+        let now = 10_000;
+        let attempts: std::collections::HashMap<String, i64> = [
+            ("cursor".to_string(), now - 30), // read within the minute: waits
+            ("pi".to_string(), now - 600),    // waited longest of those tried
+            ("kiro".to_string(), now - 120),
+            ("codex".to_string(), now - 5_000), // counted: never in the rotation
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            auto_sync_rotation(&candidates, &attempts, now),
+            vec!["opencode", "pi", "kiro"]
+        );
+        // Once tried (even if it timed out), a parser moves behind the others.
+        let mut attempts = attempts;
+        attempts.insert("opencode".to_string(), now);
+        attempts.insert("cursor".to_string(), now - 61);
+        assert_eq!(
+            auto_sync_rotation(&candidates, &attempts, now + 1),
+            vec!["pi", "kiro", "cursor"]
+        );
     }
 
     #[test]

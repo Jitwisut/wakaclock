@@ -216,6 +216,13 @@ impl AiAttributionState {
                 enabled    INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
+
+            -- When the bounded automatic pass last tried each parser, so the next pass
+            -- starts with whichever waited longest.
+            CREATE TABLE IF NOT EXISTS auto_sync_schedule (
+                parser_id       TEXT PRIMARY KEY,
+                last_attempt_at INTEGER NOT NULL
+            );
             ",
         )?;
         // `CREATE TABLE IF NOT EXISTS` does not add columns to an installation
@@ -1221,7 +1228,29 @@ impl AiAttributionState {
              VALUES (?1, ?2, ?3)
              ON CONFLICT(parser_id) DO UPDATE SET enabled = excluded.enabled,
                                                   updated_at = excluded.updated_at",
-            params![parser_id, i64::from(enabled), chrono::Utc::now().timestamp()],
+            params![
+                parser_id,
+                i64::from(enabled),
+                chrono::Utc::now().timestamp()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Last automatic-pass attempt (Unix seconds) for each parser that has had one.
+    pub fn auto_sync_attempts(&self) -> Result<std::collections::HashMap<String, i64>, AppError> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT parser_id, last_attempt_at FROM auto_sync_schedule")?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    pub fn record_auto_sync_attempt(&self, parser_id: &str, at: i64) -> Result<(), AppError> {
+        self.conn.execute(
+            "INSERT INTO auto_sync_schedule (parser_id, last_attempt_at) VALUES (?1, ?2)
+             ON CONFLICT(parser_id) DO UPDATE SET last_attempt_at = excluded.last_attempt_at",
+            params![parser_id, at],
         )?;
         Ok(())
     }
@@ -2090,6 +2119,10 @@ mod tests {
         assert!(state.source_enabled("pi").unwrap());
         state.set_source_enabled("qoder", true).unwrap();
         assert!(state.source_enabled("qoder").unwrap());
+        assert!(state.auto_sync_attempts().unwrap().is_empty());
+        state.record_auto_sync_attempt("qoder", 10).unwrap();
+        state.record_auto_sync_attempt("qoder", 20).unwrap();
+        assert_eq!(state.auto_sync_attempts().unwrap().get("qoder"), Some(&20));
     }
 
     #[test]

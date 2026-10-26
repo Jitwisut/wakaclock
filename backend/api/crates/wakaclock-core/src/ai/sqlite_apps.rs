@@ -519,10 +519,23 @@ impl AiActivityParser for SqliteAppParser {
         source: &Path,
         cursor: Option<&ParserCursor>,
     ) -> std::io::Result<Vec<AiUsageRecord>> {
+        self.parse_usage_within(source, cursor, SqliteReadOptions::default().time_budget)
+    }
+
+    fn parse_usage_within(
+        &self,
+        source: &Path,
+        cursor: Option<&ParserCursor>,
+        budget: std::time::Duration,
+    ) -> std::io::Result<Vec<AiUsageRecord>> {
         // The edit pass may already have stored this fingerprint, and a row skipped by
         // the settle rule must be read again even when the database has not changed, so
         // usage re-reads a recent window; the history floor keeps old rows out.
-        let options = SqliteReadOptions::default();
+        let defaults = SqliteReadOptions::default();
+        let options = SqliteReadOptions {
+            time_budget: budget.min(defaults.time_budget),
+            ..defaults
+        };
         let head = open_read_only(source, options.busy_timeout)
             .and_then(|connection| {
                 connection.query_row(self.usage_max_rowid_query(), [], |row| row.get::<_, i64>(0))
@@ -822,6 +835,31 @@ mod tests {
         let batch = parser.parse_since(&context, Some(&cursor)).unwrap();
         assert_eq!(batch.events.len(), 1);
         assert_eq!(checkpoint_of(Some(&batch.next_cursor)).0, 31);
+    }
+
+    #[test]
+    fn usage_reads_stop_within_their_budget() {
+        let dir = temp_dir("budget");
+        let (db, connection) = opencode_db(&dir);
+        let transaction = connection.unchecked_transaction().unwrap();
+        for index in 0..20_000 {
+            let data = json!({"id": format!("m{index}"), "role": "assistant", "sessionID": "s",
+                              "time": {"created": hour_ago()}, "tokens": {"input": 1, "output": 1}});
+            transaction
+                .execute(
+                    "INSERT INTO message (id, session_id, data) VALUES (?1, 's', ?2)",
+                    params![format!("m{index}"), data.to_string()],
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+        let parser = SqliteAppParser::opencode();
+        let started = std::time::Instant::now();
+        let _ = parser
+            .parse_usage_within(&db, None, std::time::Duration::from_millis(1))
+            .unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(parser.parse_usage(&db, None).unwrap().len(), 2_000);
     }
 
     #[test]

@@ -145,3 +145,25 @@
 - Onboarding ใน VS Code extension (10.3): ยังไม่ทำ ต้องขออนุมัติแยกเพราะเป็นไฟล์ client ที่ protected
 - ตัวนับ budget/lock skip/panic ต่อ 24 ชม. และ lag เป็นแถว: ยังไม่ทำ (ต้องมีที่เก็บตัวนับถาวร)
 - tests: core 481 passed, cli 109+7+8+44, clippy สะอาด; smoke test ใน HOME ชั่วคราวผ่าน
+
+## ผลการทำ: auto sync ทุกเครื่องมือ (2026-10-26, อนุมัติแยก, consent แบบ A)
+
+- `run_bounded_ai_sync` (`cli/src/main.rs`): Codex → Claude Code → Gemini CLI ลำดับและงบ 2 วินาทีเดิม;
+  parser อื่นที่เปิดอยู่ใช้งบรวม 2 วินาที เรียงตามตัวที่ไม่ได้อ่านนานสุด (`auto_sync_rotation`)
+  ข้ามตัวที่อ่านภายใน 60 วินาที ไม่เริ่มตัวใหม่ถ้างบเหลือ < 300 ms; บันทึกเวลาก่อนอ่านทุกตัว
+  (ตาราง `auto_sync_schedule`) ตัวที่หมดเวลาจึงไปต่อท้าย; ถือ `AiSyncLock` ครั้งเดียวทั้งรอบ
+  (ถ้ามีคนถืออยู่ = ข้ามทั้งรอบ); ตัวที่ผู้ใช้ปิดถูกกรองออกก่อนเรียก (รวม 3 ตัวเดิม)
+- งบเวลาส่งเข้า parser จริง: `ParseContext.time_budget` = เวลาที่เหลือ และ `parse_usage_within`
+  (ค่าเริ่มเรียก `parse_usage` เดิม; Cursor/Windsurf/OpenCode/Qoder ใช้งบนี้) — parser JSONL ไม่ใช้
+  `time_budget` จึงไม่เปลี่ยน; การข้าม usage เมื่องบ < 300 ms ใช้เฉพาะ source แบบ SQLite
+  (อ่านซ้ำทุกรอบอยู่แล้ว) เพื่อไม่ให้ usage ของ JSONL หาย — แคบกว่าคำขอเดิมเพื่อความปลอดภัย
+- consent ไม่เปลี่ยน: ต้องมี observer + hook consent อย่างน้อย 1 ตัวเหมือนเดิม
+- หลักฐาน: test `auto_sync_rotation_takes_the_longest_waiting_turned_on_parsers`,
+  `usage_reads_stop_within_their_budget` (20,000 แถว, งบ 1 ms หยุดภายใน 1 วินาที), state test ของตาราง;
+  core 483, cli 110+7+8+44 ผ่าน, clippy สะอาด, integration 7 ok + 2 Cursor scaffold เดิม
+- วัดเวลา `wakaclock heartbeat` ใน HOME ชั่วคราว (Cursor 20,000 bubble + OpenCode 20,000 message
+  สังเคราะห์, server ปิด): ปิด rotation (= ขอบเขตเดิม) 0.02–0.03 วินาที; เปิด rotation ครั้งแรก
+  0.47 วินาที (queue usage 7,000 แถว), ครั้งต่อมา 0.03 วินาที (ยังไม่ครบ 60 วินาที); heartbeat ของ
+  editor เข้า queue ทุกครั้ง (ห่างจากเส้นตาย 45 วินาทีของ extension มาก)
+- ข้อสังเกต: ตอน offline แต่ละ tool ที่ถึงคิวพิมพ์ warning "sync skipped: HTTP error" หนึ่งครั้ง
+  (เหมือนพฤติกรรม 3 ตัวเดิม) usage ยังอยู่ใน queue; รอบถัดไปเงียบเพราะ backoff ของ pending usage

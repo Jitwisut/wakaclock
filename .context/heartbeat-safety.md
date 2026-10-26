@@ -56,6 +56,8 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ## Approval gate — ต้องถามก่อนแก้
 
+การอนุมัติ 2026-10-26 (AI transcript coverage, auto sync ทุกเครื่องมือ): ผู้ใช้อนุมัติคำขอ 5 ส่วนให้แก้ `run_bounded_ai_sync` (`cli/src/main.rs`) ให้อ่านทุก parser ที่เปิดอยู่: Codex/Claude Code/Gemini CLI ลำดับและงบ 2 วินาทีเดิม, ตัวอื่นงบรวม ≤ 2 วินาทีต่อ heartbeat เรียงตามตัวที่ไม่ได้อ่านนานสุด ข้ามตัวที่อ่านภายใน 60 วินาทีและตัวที่ปิด, ส่งงบเวลาที่เหลือเข้า parser (`ParseContext.time_budget`, `parse_usage_within` ใน `core/src/ai/parser.rs`, `cursor.rs`, `sqlite_apps.rs`), ตาราง `auto_sync_schedule` ใน `core/src/ai/state.rs`, เช็ก lock ครั้งเดียว; consent แบบ A (คงเงื่อนไขเดิม); ไม่แตะ server/wire/timeline/locked baseline/extension; ไม่รวม commit/push
+
 การอนุมัติ 2026-10-26 (AI transcript coverage, agent ID): ผู้ใช้อนุมัติแยกให้เพิ่ม `qwen-code`, `pi`, `kiro`, `factory-droid`, `ibm-bob`, `qoder` ใน `KNOWN_AGENT_IDS` (`core/src/ai/event.rs`, server-first) และ commit/push ขึ้น `claude/ai-transcript-coverage`; ไม่แตะ `main`, ไม่เพิ่ม alias
 
 การอนุมัติ 2026-10-26 (AI transcript coverage ขั้น 7–9): ผู้ใช้อนุมัติแบบรวมตาม

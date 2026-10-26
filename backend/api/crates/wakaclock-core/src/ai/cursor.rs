@@ -315,12 +315,22 @@ impl AiActivityParser for CursorFamilyParser {
         source: &Path,
         cursor: Option<&ParserCursor>,
     ) -> std::io::Result<Vec<AiUsageRecord>> {
-        let read = read_bubbles(
-            source,
-            checkpoint_of(cursor).as_ref(),
-            &SqliteReadOptions::default(),
-        )
-        .map_err(std::io::Error::other)?;
+        self.parse_usage_within(source, cursor, SqliteReadOptions::default().time_budget)
+    }
+
+    fn parse_usage_within(
+        &self,
+        source: &Path,
+        cursor: Option<&ParserCursor>,
+        budget: std::time::Duration,
+    ) -> std::io::Result<Vec<AiUsageRecord>> {
+        let defaults = SqliteReadOptions::default();
+        let options = SqliteReadOptions {
+            time_budget: budget.min(defaults.time_budget),
+            ..defaults
+        };
+        let read = read_bubbles(source, checkpoint_of(cursor).as_ref(), &options)
+            .map_err(std::io::Error::other)?;
         let now = Utc::now();
         let floor = history_floor(cursor, now);
         Ok(read

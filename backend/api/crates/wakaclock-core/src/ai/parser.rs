@@ -322,6 +322,17 @@ pub trait AiActivityParser: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// [`Self::parse_usage`] limited to `budget`, for the bounded automatic pass. Parsers
+    /// that read a large shared database override it; the default ignores the budget.
+    fn parse_usage_within(
+        &self,
+        source: &Path,
+        cursor: Option<&ParserCursor>,
+        _budget: Duration,
+    ) -> std::io::Result<Vec<AiUsageRecord>> {
+        self.parse_usage(source, cursor)
+    }
+
     /// Whether a saved cursor can resume against a source whose current length is
     /// `source_len`. For JSONL a cursor past the end means the file was replaced.
     fn cursor_is_reusable(&self, cursor: &ParserCursor, source_len: u64) -> bool {
