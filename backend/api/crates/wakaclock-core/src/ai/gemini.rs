@@ -76,6 +76,14 @@ impl AiActivityParser for GeminiCliParser {
         "gemini-cli"
     }
 
+    fn parse_usage(
+        &self,
+        source: &std::path::Path,
+        _cursor: Option<&ParserCursor>,
+    ) -> std::io::Result<Vec<crate::ai::usage::AiUsageRecord>> {
+        crate::ai::usage::parse_gemini_usage(source)
+    }
+
     fn discover(&self, context: &DiscoveryContext) -> DiscoveryResult {
         let root = Self::root(context);
         if !root.exists() {

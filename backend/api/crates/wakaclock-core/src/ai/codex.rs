@@ -79,6 +79,14 @@ impl AiActivityParser for CodexParser {
         "codex"
     }
 
+    fn parse_usage(
+        &self,
+        source: &std::path::Path,
+        _cursor: Option<&ParserCursor>,
+    ) -> std::io::Result<Vec<crate::ai::usage::AiUsageRecord>> {
+        crate::ai::usage::parse_codex_usage(source)
+    }
+
     fn discover(&self, context: &DiscoveryContext) -> DiscoveryResult {
         let root = Self::sessions_root(context);
         if !root.exists() {
@@ -1032,6 +1040,7 @@ impl AiActivityParser for CodexParser {
                     current_turn_id,
                     turns: serialized_turns,
                     pending_calls: serialized_pending,
+                    source: None,
                 }),
             },
             warnings,

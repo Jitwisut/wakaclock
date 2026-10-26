@@ -182,6 +182,32 @@ impl AiAttributionState {
                 created_at         INTEGER NOT NULL,
                 last_seen_at       INTEGER NOT NULL
             );
+
+            -- SQLite and whole-document sources can update a record in place. A hash
+            -- per record lets a parser emit only new or changed records. The source
+            -- path is stored hashed; record keys are opaque store identifiers.
+            CREATE TABLE IF NOT EXISTS source_record_hashes (
+                parser_id   TEXT NOT NULL,
+                source_hash TEXT NOT NULL,
+                record_key  TEXT NOT NULL,
+                record_hash TEXT NOT NULL,
+                seen_at     INTEGER NOT NULL,
+                PRIMARY KEY (parser_id, source_hash, record_key)
+            );
+
+            -- Edits a parser found but is not yet allowed to send as heartbeats
+            -- (see AdapterRuntime::emits_edit_heartbeats). Counts and hashes only, kept
+            -- locally as evidence for the later approval to send them.
+            CREATE TABLE IF NOT EXISTS dry_run_edits (
+                event_id      TEXT PRIMARY KEY,
+                parser_id     TEXT NOT NULL,
+                occurred_at   INTEGER NOT NULL,
+                path_hash     TEXT NOT NULL,
+                lines_added   INTEGER,
+                lines_deleted INTEGER,
+                model         TEXT,
+                recorded_at   INTEGER NOT NULL
+            );
             ",
         )?;
         // `CREATE TABLE IF NOT EXISTS` does not add columns to an installation
@@ -1072,6 +1098,97 @@ impl AiAttributionState {
         Ok(removed)
     }
 
+    /// Record `record_hash` for one record of a SQLite or whole-document source and
+    /// report whether it is new or changed since the last pass. An unchanged record
+    /// only refreshes its `seen_at`, so a rewritten document emits nothing.
+    pub fn record_hash_is_new(
+        &self,
+        parser_id: &str,
+        source: &str,
+        record_key: &str,
+        record_hash: &str,
+    ) -> Result<bool, AppError> {
+        let source_hash = sha256_hex(source);
+        let now = chrono::Utc::now().timestamp();
+        let previous: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT record_hash FROM source_record_hashes
+                 WHERE parser_id = ?1 AND source_hash = ?2 AND record_key = ?3",
+                params![parser_id, source_hash, record_key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        self.conn.execute(
+            "INSERT INTO source_record_hashes
+             (parser_id, source_hash, record_key, record_hash, seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (parser_id, source_hash, record_key)
+             DO UPDATE SET record_hash = excluded.record_hash, seen_at = excluded.seen_at",
+            params![parser_id, source_hash, record_key, record_hash, now],
+        )?;
+        Ok(previous.as_deref() != Some(record_hash))
+    }
+
+    /// Keep one edit a parser found but may not send yet. Idempotent by event ID, so a
+    /// replayed source does not count an edit twice.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_dry_run_edit(
+        &self,
+        event_id: &str,
+        parser_id: &str,
+        occurred_at: i64,
+        entity: &str,
+        lines_added: Option<u32>,
+        lines_deleted: Option<u32>,
+        model: Option<&str>,
+    ) -> Result<(), AppError> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO dry_run_edits
+             (event_id, parser_id, occurred_at, path_hash, lines_added, lines_deleted, model,
+              recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                event_id,
+                parser_id,
+                occurred_at,
+                sha256_hex(entity),
+                lines_added,
+                lines_deleted,
+                model,
+                chrono::Utc::now().timestamp()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn dry_run_edit_count(&self, parser_id: &str) -> Result<usize, AppError> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM dry_run_edits WHERE parser_id = ?1",
+            params![parser_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Bounded retention for source record hashes and dry-run edits.
+    pub fn prune_source_state(
+        &self,
+        record_hash_days: i64,
+        dry_run_days: i64,
+    ) -> Result<(), AppError> {
+        let now = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            "DELETE FROM source_record_hashes WHERE seen_at < ?1",
+            params![now - record_hash_days * 24 * 60 * 60],
+        )?;
+        self.conn.execute(
+            "DELETE FROM dry_run_edits WHERE recorded_at < ?1",
+            params![now - dry_run_days * 24 * 60 * 60],
+        )?;
+        Ok(())
+    }
+
     fn db_path() -> PathBuf {
         let home = dirs::home_dir().expect("could not resolve home directory");
         home.join(".wakaclock").join("ai-attribution.sqlite3")
@@ -1095,6 +1212,11 @@ fn sanitize_usage_error_code(code: &str) -> String {
     } else {
         normalized
     }
+}
+
+/// Stored instead of a path or source location so local state never keeps one.
+fn sha256_hex(value: &str) -> String {
+    format!("{:x}", Sha256::digest(value.as_bytes()))
 }
 
 #[cfg(test)]
@@ -1829,5 +1951,85 @@ mod tests {
         );
         drop(state);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn record_hash_reports_only_new_or_changed_records() {
+        let path = temp_db_path("record-hash");
+        let _ = std::fs::remove_file(&path);
+        let state = AiAttributionState::open_at(&path).unwrap();
+        assert!(state
+            .record_hash_is_new("cursor", "/db", "bubble-1", "h1")
+            .unwrap());
+        assert!(!state
+            .record_hash_is_new("cursor", "/db", "bubble-1", "h1")
+            .unwrap());
+        assert!(state
+            .record_hash_is_new("cursor", "/db", "bubble-1", "h2")
+            .unwrap());
+        // The same record key in another source or parser is independent.
+        assert!(state
+            .record_hash_is_new("cursor", "/other", "bubble-1", "h2")
+            .unwrap());
+        assert!(state
+            .record_hash_is_new("windsurf", "/db", "bubble-1", "h2")
+            .unwrap());
+        let stored: String = state
+            .conn
+            .query_row(
+                "SELECT source_hash FROM source_record_hashes LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!stored.contains('/'), "source path must be stored hashed");
+    }
+
+    #[test]
+    fn dry_run_edits_are_idempotent_and_path_free() {
+        let path = temp_db_path("dry-run");
+        let _ = std::fs::remove_file(&path);
+        let state = AiAttributionState::open_at(&path).unwrap();
+        for _ in 0..2 {
+            state
+                .record_dry_run_edit(
+                    "e1",
+                    "cursor",
+                    100,
+                    "/repo/a.rs",
+                    Some(3),
+                    Some(1),
+                    Some("m"),
+                )
+                .unwrap();
+        }
+        assert_eq!(state.dry_run_edit_count("cursor").unwrap(), 1);
+        assert_eq!(state.dry_run_edit_count("codex").unwrap(), 0);
+        let stored: String = state
+            .conn
+            .query_row("SELECT path_hash FROM dry_run_edits", [], |row| row.get(0))
+            .unwrap();
+        assert!(!stored.contains("repo"));
+        state.prune_source_state(90, 30).unwrap();
+        assert_eq!(state.dry_run_edit_count("cursor").unwrap(), 1);
+    }
+
+    #[test]
+    fn old_parser_state_without_a_source_checkpoint_still_loads() {
+        let path = temp_db_path("old-cursor");
+        let _ = std::fs::remove_file(&path);
+        let state = AiAttributionState::open_at(&path).unwrap();
+        // A cursor as written before ParserContext gained `source`.
+        let legacy = r#"{"source_path":"/t.jsonl","file_identity":"1:2","byte_offset":42,"last_record_id":null,"last_record_time":null,"context":{"session_id":"s","turns":[],"pending_calls":[]}}"#;
+        state
+            .conn
+            .execute(
+                "INSERT INTO parser_state (parser_id, cursor_json, updated_at) VALUES ('codex:/t.jsonl', ?1, 'x')",
+                params![legacy],
+            )
+            .unwrap();
+        let cursor = state.load_cursor("codex:/t.jsonl").unwrap().unwrap();
+        assert_eq!(cursor.byte_offset, 42);
+        assert_eq!(cursor.context.unwrap().source, None);
     }
 }

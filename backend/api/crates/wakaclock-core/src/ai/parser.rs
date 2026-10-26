@@ -1,7 +1,10 @@
 use crate::ai::event::AiEditEvent;
+use crate::ai::source::{SourceCheckpoint, SourceKind};
+use crate::ai::usage::AiUsageRecord;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use thiserror::Error;
 
 /// Where to look for a transcript before falling back to platform-specific default
@@ -44,6 +47,11 @@ pub struct DiscoveryResult {
 pub struct ParseContext {
     pub max_record_bytes: usize,
     pub max_batch_records: usize,
+    /// Wall-clock budget for one parser pass. Readers of SQLite or whole-document
+    /// sources stop at this budget and resume from their checkpoint next pass.
+    pub time_budget: Duration,
+    /// Upper bound on bytes a non-JSONL reader may load in one pass.
+    pub max_read_bytes: u64,
 }
 
 impl Default for ParseContext {
@@ -51,6 +59,8 @@ impl Default for ParseContext {
         Self {
             max_record_bytes: 1024 * 1024,
             max_batch_records: 2_000,
+            time_budget: Duration::from_secs(5),
+            max_read_bytes: 64 * 1024 * 1024,
         }
     }
 }
@@ -111,6 +121,10 @@ pub struct ParserContext {
     pub turns: Vec<ParserTurnContext>,
     #[serde(default)]
     pub pending_calls: Vec<ParserPendingCall>,
+    /// Resume point for a SQLite or whole-document source. JSONL parsers leave it
+    /// `None` and keep using the cursor's byte offset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceCheckpoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -178,6 +192,9 @@ pub struct TranscriptLag {
     pub lag_bytes: u64,
     pub ever_scanned: bool,
     pub last_event_at: Option<DateTime<Utc>>,
+    /// Rows a SQLite source still owes; `None` for byte-addressed sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lag_rows: Option<u64>,
 }
 
 impl TranscriptLag {
@@ -192,6 +209,27 @@ impl TranscriptLag {
             lag_bytes: file_size.saturating_sub(cursor_offset),
             ever_scanned: cursor.is_some(),
             last_event_at: cursor.and_then(|c| c.last_record_time),
+            lag_rows: None,
+        }
+    }
+
+    /// Lag for a SQLite source: `max_rowid` is the store's current highest rowid and
+    /// the cursor's [`SourceCheckpoint::Sqlite`] holds the last row already read.
+    pub fn measure_rows(max_rowid: i64, cursor: Option<&ParserCursor>) -> Self {
+        let last_rowid = cursor
+            .and_then(|c| c.context.as_ref())
+            .and_then(|context| match context.source {
+                Some(SourceCheckpoint::Sqlite { last_rowid, .. }) => Some(last_rowid),
+                _ => None,
+            })
+            .unwrap_or(0);
+        Self {
+            file_size: 0,
+            cursor_offset: 0,
+            lag_bytes: 0,
+            ever_scanned: cursor.is_some(),
+            last_event_at: cursor.and_then(|c| c.last_record_time),
+            lag_rows: Some(max_rowid.saturating_sub(last_rowid).max(0) as u64),
         }
     }
 }
@@ -243,6 +281,36 @@ pub trait AiActivityParser: Send + Sync {
         context: &ParseContext,
         cursor: Option<&ParserCursor>,
     ) -> Result<ParseBatch, AiParseError>;
+
+    /// How this parser's source is addressed. Every existing parser reads JSONL.
+    fn source_kind(&self) -> SourceKind {
+        SourceKind::Jsonl
+    }
+
+    /// Token/prompt usage found in `source`. Usage is kept separate from edit events
+    /// because one model response can edit several files. `cursor` lets a parser
+    /// read incrementally; parsers that rescan the whole source may ignore it.
+    fn parse_usage(
+        &self,
+        _source: &Path,
+        _cursor: Option<&ParserCursor>,
+    ) -> std::io::Result<Vec<AiUsageRecord>> {
+        Ok(Vec::new())
+    }
+
+    /// Whether a saved cursor can resume against a source whose current length is
+    /// `source_len`. For JSONL a cursor past the end means the file was replaced.
+    fn cursor_is_reusable(&self, cursor: &ParserCursor, source_len: u64) -> bool {
+        cursor.byte_offset <= source_len
+    }
+
+    /// The cursor used to skip a source's existing history on first discovery, so
+    /// enabling an adapter does not upload months of past sessions.
+    fn seed_at_head(&self, cursor: &ParserCursor, source_len: u64) -> ParserCursor {
+        let mut seeded = cursor.clone();
+        seeded.byte_offset = source_len;
+        seeded
+    }
 }
 
 #[cfg(test)]
