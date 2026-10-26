@@ -698,61 +698,7 @@ impl UserService {
         username: &str,
         password_hash: &str,
     ) -> Result<()> {
-        let mut client = postgres.transaction_client().await?;
-        let transaction = client.transaction().await?;
-        transaction
-            .execute(
-                "INSERT INTO users (id, username, is_active)
-                 VALUES ($1, $2, TRUE)
-                 ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username, updated_at = now()",
-                &[&user_id, &username],
-            )
-            .await
-            .context("failed to upsert PostgreSQL user")?;
-        transaction
-            .execute(
-                "INSERT INTO password_credentials (user_id, password_hash)
-                 VALUES ($1, $2)
-                 ON CONFLICT (user_id) DO UPDATE SET password_hash = EXCLUDED.password_hash, updated_at = now()",
-                &[&user_id, &password_hash],
-            )
-            .await
-            .context("failed to upsert PostgreSQL password credential")?;
-        let organization_id = Uuid::now_v7();
-        let slug = format!("personal-{}", user_id.simple());
-        transaction
-            .execute(
-                "INSERT INTO organizations (id, slug, name, personal_owner_id)
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (slug) DO UPDATE SET updated_at = now()",
-                &[
-                    &organization_id,
-                    &slug,
-                    &format!("{username}'s AtoAxis"),
-                    &user_id,
-                ],
-            )
-            .await
-            .context("failed to create personal PostgreSQL organization")?;
-        let organization_id = transaction
-            .query_one("SELECT id FROM organizations WHERE slug = $1", &[&slug])
-            .await
-            .context("failed to resolve personal PostgreSQL organization")?
-            .get::<_, Uuid>("id");
-        crate::repository::team_seats::lock(&transaction, organization_id).await?;
-        crate::repository::team_seats::admit(&transaction, organization_id, user_id, "owner", "developer").await?;
-        transaction
-            .execute(
-                "INSERT INTO organization_members (organization_id, user_id, role, seat_type)
-                 VALUES ($1, $2, 'owner', 'developer')
-                 ON CONFLICT (organization_id, user_id)
-                 DO UPDATE SET role = 'owner', seat_type = 'developer', deactivated_at = NULL",
-                &[&organization_id, &user_id],
-            )
-            .await
-            .context("failed to add user to personal PostgreSQL organization")?;
-        transaction.commit().await?;
-        Ok(())
+        crate::repository::user_identity_sync::sync(postgres, user_id, username, password_hash).await
     }
 
     async fn sync_postgres_api_key(

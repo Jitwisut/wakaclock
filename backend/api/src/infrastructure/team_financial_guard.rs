@@ -16,6 +16,9 @@ use std::{
 use uuid::Uuid;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RECORD: usize = 1024 * 1024;
+#[cfg(test)]
+type AfterIngressPrepare =
+    std::sync::Arc<parking_lot::Mutex<Option<Box<dyn FnOnce() -> Result<()> + Send>>>>;
 
 fn environment_setting(name: &str) -> Result<Option<String>> {
     match std::env::var(name) {
@@ -137,11 +140,25 @@ pub struct FinancialGuard {
     sync_failures: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     prepare_delay_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    #[cfg(test)]
+    after_ingress_prepare: AfterIngressPrepare,
 }
 pub struct Read {
     pub snapshot: Snapshot,
     pub sequence: u64,
     pub chain: String,
+}
+/// Journal disposition only. Neither variant proves that SQL committed or that
+/// the current heads are still ready; retained exact retries may be historical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionStatus {
+    Prepared,
+    Confirmed,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransactionRecord {
+    pub status: TransactionStatus,
+    pub appended: bool,
 }
 impl Read {
     /// Distinct from enrollment tokens; no whole-file sequence fence across orgs.
@@ -149,13 +166,26 @@ impl Read {
         &self,
         scope: &crate::services::team_financial_source::Scope,
     ) -> Result<String> {
+        self.snapshot.transactions.require_account_free(
+            &crate::services::team_financial_ingress::Scope {
+                account: scope.account.clone(),
+                live: scope.live,
+            },
+        )?;
+        self.snapshot
+            .transactions
+            .require_organization_free(scope.organization)?;
         let entry = self
             .snapshot
             .sources
             .scopes
             .get(&scope.key()?)
             .context("financial_source_uninitialized")?;
-        fingerprint(&(self.snapshot.namespace, entry))
+        fingerprint(&(
+            self.snapshot.namespace,
+            entry,
+            self.snapshot.transactions.history_for_source(scope),
+        ))
     }
     /// A caller checks this token before/after its DB observation. Other
     /// organizations' appends do not invalidate an unchanged organization proof.
@@ -165,16 +195,82 @@ impl Read {
             .organizations
             .get(&org)
             .context("financial_guard_unknown_organization")?;
-        fingerprint(&(self.snapshot.namespace, org, entry))
+        fingerprint(&(
+            self.snapshot.namespace,
+            org,
+            entry,
+            self.snapshot.transactions.history_for_org(org),
+        ))
     }
 }
 impl FinancialGuard {
+    /// One fsynced record contains the complete intent or confirmation. The SQL
+    /// coordinator, not this file-only primitive, must establish commit/readback.
+    pub fn record_transaction(
+        &self,
+        event: crate::services::team_financial_transaction::Event,
+    ) -> Result<TransactionRecord> {
+        #[cfg(test)]
+        if matches!(
+            &event,
+            crate::services::team_financial_transaction::Event::Confirm { .. }
+        ) && self
+            .sync_failures
+            .fetch_and(!32, std::sync::atomic::Ordering::SeqCst)
+            & 32
+            != 0
+        {
+            anyhow::bail!("fixture_financial_transaction_confirmation_lost");
+        }
+        self.namespace()?;
+        let _lock = self.lock(false)?;
+        let state = self.load()?;
+        let id = match &event {
+            crate::services::team_financial_transaction::Event::Prepare { proposal } => proposal.id,
+            crate::services::team_financial_transaction::Event::Confirm { transaction, .. } => {
+                *transaction
+            }
+        };
+        let event = Event::FinancialTransaction {
+            event: Box::new(event),
+        };
+        let mut next = state.snapshot.clone();
+        next.apply(&event)?;
+        let changed = next.transactions != state.snapshot.transactions;
+        let entry = next
+            .transactions
+            .groups
+            .get(&id)
+            .context("financial_transaction_unknown")?;
+        let result = TransactionRecord {
+            status: if entry.committed {
+                TransactionStatus::Confirmed
+            } else {
+                TransactionStatus::Prepared
+            },
+            appended: changed,
+        };
+        if changed {
+            self.append(&state, event)?;
+        }
+        Ok(result)
+    }
+    #[cfg(test)]
+    pub(crate) fn fail_transaction_confirmation_once(&self) {
+        self.sync_failures
+            .fetch_or(32, std::sync::atomic::Ordering::SeqCst);
+    }
     /// Independent account receipt, including unbound/ignored notifications.
     /// No SQL/provider calls under the file lock. No automatic account seed.
     pub fn record_ingress(
         &self,
         event: crate::services::team_financial_ingress::Event,
     ) -> Result<()> {
+        #[cfg(test)]
+        let was_prepare = matches!(
+            &event,
+            crate::services::team_financial_ingress::Event::Prepare { .. }
+        );
         #[cfg(test)]
         if matches!(
             &event,
@@ -199,12 +295,30 @@ impl FinancialGuard {
         if next.ingress == state.snapshot.ingress {
             return Ok(());
         }
-        self.append(&state, event)
+        self.append(&state, event)?;
+        #[cfg(test)]
+        {
+            drop(_lock);
+            if was_prepare {
+                let hook = self.after_ingress_prepare.lock().take();
+                if let Some(hook) = hook {
+                    hook()?;
+                }
+            }
+        }
+        Ok(())
     }
     #[cfg(test)]
     pub(crate) fn fail_ingress_confirmation_once(&self) {
         self.sync_failures
             .fetch_or(16, std::sync::atomic::Ordering::SeqCst);
+    }
+    #[cfg(test)]
+    pub(crate) fn after_ingress_prepare_once(
+        &self,
+        hook: impl FnOnce() -> Result<()> + Send + 'static,
+    ) {
+        *self.after_ingress_prepare.lock() = Some(Box::new(hook));
     }
     /// Shared append/fsync/lock protocol. No SQL/provider calls, no source seeding
     /// from database contents, and no product authorization from an outcome ACK.
@@ -224,6 +338,95 @@ impl FinancialGuard {
             return Ok(());
         }
         self.append(&state, event)
+    }
+    /// Retain normalized provider evidence under the same file lock as its first
+    /// observed time. Concurrent retries reuse that time instead of conflicting.
+    pub(crate) fn retain_customer_outcome(
+        &self,
+        scope: crate::services::team_financial_source::Scope,
+        request: &crate::services::team_financial_source::AcceptedRequest,
+        customer: Option<&str>,
+        verified: bool,
+        source_claim: bool,
+    ) -> Result<Option<Uuid>> {
+        use crate::services::team_financial_source as source;
+        let namespace = self.namespace()?;
+        // Retain this already received result across brief writer contention.
+        // No SQL transaction or provider request is held while waiting; a real
+        // storage/long-lock failure still returns error without claiming an ACK.
+        let started = std::time::Instant::now();
+        let _lock = loop {
+            match self.lock(false) {
+                Ok(lock) => break lock,
+                Err(e)
+                    if e.to_string() == "financial_guard_busy"
+                        && started.elapsed() < std::time::Duration::from_secs(2) =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(2))
+                }
+                Err(e) => return Err(e),
+            }
+        };
+        let state = self.load()?;
+        // Legacy lookup completion must not manufacture a new source baseline.
+        // Test current footprint under this same file lock, so a migration that
+        // raced the HTTP call still retains the late result as source evidence.
+        if !source_claim
+            && !state
+                .snapshot
+                .sources
+                .scopes
+                .values()
+                .any(|s| s.scope.account == scope.account && s.scope.live == scope.live)
+        {
+            return Ok(None);
+        }
+        let identity = customer.map(|customer| source::ProviderIdentity::Customer {
+            customer: customer.into(),
+        });
+        let evidence_hash = crate::services::team_stripe_customer_request::result_hash(
+            &scope,
+            request.operation,
+            &identity,
+            verified,
+        )?;
+        let id = Uuid::new_v5(
+            &namespace,
+            fingerprint(&(
+                &scope,
+                request.operation,
+                &request.request_hash,
+                &evidence_hash,
+            ))?
+            .as_bytes(),
+        );
+        let prior = state
+            .snapshot
+            .sources
+            .scopes
+            .get(&scope.key()?)
+            .and_then(|s| s.outcomes.get(&id));
+        let outcome = source::Outcome {
+            id,
+            operation: request.operation,
+            request_hash: request.request_hash.clone(),
+            evidence_hash,
+            observed_at: prior.map_or_else(Utc::now, |o| o.observed_at),
+            identity,
+        };
+        let event = Event::FinancialSource {
+            event: Box::new(if verified {
+                source::Event::Outcome { scope, outcome }
+            } else {
+                source::Event::RejectedOutcome { scope, outcome }
+            }),
+        };
+        let mut proposed = state.snapshot.clone();
+        proposed.apply(&event)?;
+        if proposed.sources != state.snapshot.sources {
+            self.append(&state, event)?;
+        }
+        Ok(Some(id))
     }
     pub fn from_environment() -> Result<Option<Self>> {
         Self::from_settings(
@@ -288,6 +491,8 @@ impl FinancialGuard {
             sync_failures: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
             prepare_delay_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(test)]
+            after_ingress_prepare: Default::default(),
         })
     }
     pub fn pin_namespace(mut self, namespace: Uuid) -> Result<Self> {
@@ -550,6 +755,11 @@ impl FinancialGuard {
         );
         let _lock = self.lock(false)?;
         let state = self.load()?;
+        state.snapshot.transactions.fence(&Event::Prepare {
+            organization,
+            expected: expected.clone(),
+            transition: transition.clone(),
+        })?;
         if let Some(entry) = state.snapshot.organizations.get(&organization) {
             if entry.head == expected && entry.pending.as_ref() == Some(&transition) {
                 return Ok(());
@@ -578,6 +788,10 @@ impl FinancialGuard {
         );
         let _lock = self.lock(false)?;
         let state = self.load()?;
+        state.snapshot.transactions.fence(&Event::Commit {
+            organization,
+            transition_id,
+        })?;
         let entry = state
             .snapshot
             .organizations
@@ -642,8 +856,15 @@ pub(crate) struct TestLedger {
     pub guard: FinancialGuard,
     root: PathBuf,
 }
+
+#[cfg(test)]
+#[path = "team_financial_transaction_tests.rs"]
+mod transaction_tests;
 #[cfg(test)]
 impl TestLedger {
+    pub(crate) fn path(&self) -> &Path {
+        &self.guard.path
+    }
     pub fn deployment(&self) -> CommercialDeployment {
         CommercialDeployment::for_test(self.guard.clone()).unwrap()
     }

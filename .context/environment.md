@@ -136,3 +136,25 @@ The same independent journal can read/append scoped source-root proposals, accep
 ## Account financial ingress (guarded runtime; real baseline not initialized)
 
 Migration056 and the new journal event family retain immutable signed-notification receipts, including ignored/unbound events. Configured guard receivers require reviewed account+SQL heads, flush Prepare before SQL commit and Confirm before ACK; same-event pending retry uses original metadata/revision and exact predecessor, while committed SQL loss fails closed. Stripe account/job paths and Checkout receipt take account lock before organization/job/binding locks. Checkout inherits its parent's pinned authority rather than rereading a different environment. `inspect-ingress <ledger> --namespace <pin> --account <id> [--live]` is metadata-only and read-only. No automatic seed. Explicit private `prepare-ingress-recovery`/`apply-ingress-recovery` commands support prospective empty-account bootstrap and original pending recovery only; exact digest/scope/ack approval and 15-minute evidence fences are required. Legacy/historical or committed SQL loss stays blocked. See `docs/atoaxis-team-financial-recovery-2026-10-24.md`; no real baseline applied. Legacy unguarded inboxes cannot claim coverage. Organization financial-source readers/writers, approved baseline/recovery, retention/versioned storage and production activation remain gated. See `docs/atoaxis-team-financial-ingress-2026-10-24.md`.
+
+
+## Financial writer serialization and personal identity (2026-10-24)
+
+Task-branch work after `19f703c0` normalizes account → org billing → owner/scope → semantic-row locking for Customer/Quote/Checkout/reconciliation. Fresh clocks apply after waits; expired completions rollback and wrong-scope failure updates cannot mutate an operation. The owner approved only `UserService::sync_postgres_identity` delegation to `repository/user_identity_sync.rs` plus tests/module registration: immutable user-ID serialization then personal-org billing are acquired before user/credential/org writes; conflicting candidate IDs use DO NOTHING/plain SELECT and rollback/retry without locking a second org. No heartbeat/API-key/counting/schema changes. This is a prerequisite, not complete financial-source/restore authorization. New protected source is uncommitted until scoped delivery authorization; see `docs/atoaxis-team-financial-locks-2026-10-24.md` and private `financial-locks-local.json` for final evidence. Public trial/Checkout/production remain closed.
+
+2026-10-25 follow-up: the canonical financial inventory now has a caller-transaction reader shared with the read-only diagnostic. Native regressions cover staged writes/checkpoints, rollback/commit root equivalence and staged unknown schema/JSON rejection. This is not source writer/coordinator integration. The approved identity diff remains method-only; see `docs/atoaxis-team-transaction-inventory-2026-10-25.md` and private `identity-transaction-local.json` for current uncommitted-source evidence.
+
+2026-10-25 financial intent component: `team_financial_transaction` records one atomic Prepare/Confirm for account ingress + multiple org sources/enrollments in the existing private journal. Pending groups reserve accounts/orgs across accounts, block standalone member/recovery bypass, retain late evidence and change relevant proof tokens; metadata-only Inspect/ingress/inventory expose pending state. Normal versus explicit outcome-resolution modes do not grant financial authority. Production SQL coordinator/writers/recovery and real baseline remain incomplete; do not emit real groups or enable checkout from local fixtures. See `docs/atoaxis-team-financial-transaction-2026-10-25.md` and private `financial-transaction-local.json`; source is uncommitted.
+
+
+Financial coordinator delivery follow-up: typed account ingress, scheduler/provider observation,
+quote, customer create/dispatch/retained-outcome projection and Owner-confirmed lookup
+**authorization** are implemented on the task branch with local synthetic evidence.
+The original create actor/hash/key/time remains independent from later recovery authority.
+Source-backed lookup itself, Checkout/binding writers, complete all-writer fences and
+independent restore freshness remain incomplete; their explicit gates are not provider
+certification. The owner authorized commit/push of this tested financial/identity set to
+`codex/team-closure-wip`, including only `user.rs::sync_postgres_identity` within that
+protected file. See `docs/atoaxis-team-customer-recovery-authorization.md`; historical
+uncommitted/component-only notes above describe earlier checkpoints. No real source
+baseline or production activation is authorized by these tests.

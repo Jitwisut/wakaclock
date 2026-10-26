@@ -2,7 +2,7 @@
 use crate::{
     infrastructure::{postgres::PostgresClient, team_financial_guard::FinancialGuard},
     services::team_financial_ingress::{
-        Entry, Event, Head, JobBefore, Notification, Receipt, Scope, MAX_RECEIPTS,
+        Entry, Event, Head, JobBefore, Notification, Proposal, Receipt, Scope, MAX_RECEIPTS,
     },
 };
 use anyhow::{ensure, Context, Result};
@@ -21,6 +21,21 @@ pub(crate) async fn lock(tx: &Transaction<'_>, scope: &Scope) -> Result<()> {
     .await?;
     Ok(())
 }
+/// A missing configured authority is not permission to downgrade restored or
+/// already guarded SQL to legacy writes/reads. Caller holds the account lock.
+pub(crate) async fn require_authority(
+    tx: &Transaction<'_>,
+    scope: &Scope,
+    guard: Option<&FinancialGuard>,
+) -> Result<()> {
+    scope.key()?;
+    if guard.is_none() {
+        let known:bool=tx.query_one("SELECT EXISTS(SELECT 1 FROM team_stripe_ingress_heads WHERE account_id=$1 AND livemode=$2) OR EXISTS(SELECT 1 FROM team_financial_source_heads WHERE account_id=$1 AND livemode=$2)",&[&scope.account,&scope.live]).await?.get(0);
+        ensure!(!known, "financial_guard_configuration_unconfirmed");
+    }
+    Ok(())
+}
+
 #[derive(Debug, PartialEq)]
 struct SqlHead {
     head: Head,
@@ -71,9 +86,11 @@ async fn sql_receipts(tx: &Transaction<'_>, scope: &Scope) -> Result<BTreeMap<St
 }
 fn independent(guard: &FinancialGuard, scope: &Scope) -> Result<Entry> {
     guard.namespace()?;
-    Ok(guard.read()?.snapshot.ingress.entry(scope)?.clone())
+    let state = guard.read()?;
+    state.snapshot.transactions.require_account_free(scope)?;
+    Ok(state.snapshot.ingress.entry(scope)?.clone())
 }
-async fn matches(
+pub(super) async fn matches(
     tx: &Transaction<'_>,
     scope: &Scope,
     head: &Head,
@@ -243,6 +260,22 @@ pub async fn accept(
     let mut db = pg.transaction_client().await?;
     let tx = db.transaction().await?;
     lock(&tx, scope).await?;
+    if guard
+        .read()?
+        .snapshot
+        .transactions
+        .groups
+        .values()
+        .any(|g| !g.committed && g.proposal.account == *scope)
+    {
+        ensure!(
+            super::team_financial_transaction::reconcile_ingress(tx, guard, scope, &notification)
+                .await?,
+            "financial_transaction_reconciliation_required"
+        );
+        return Ok(Acceptance::Duplicate);
+    }
+    let source_fence = super::team_financial_inventory::account_source_token(guard, scope)?;
     let entry = independent(guard, scope)?;
     let known = entry.receipts.get(&notification.event_id).or_else(|| {
         entry
@@ -266,10 +299,18 @@ pub async fn accept(
             p.receipt.notification == notification,
             "financial_ingress_reconciliation_required"
         );
+        ensure!(
+            !super::team_financial_transaction::source_mode(&tx, guard, scope).await?,
+            "financial_source_legacy_pending_requires_review"
+        );
         reconcile_pending(&tx, scope, &entry).await?;
         ensure!(
             independent(guard, scope)? == entry,
             "financial_ingress_changed_before_commit"
+        );
+        ensure!(
+            super::team_financial_inventory::account_source_token(guard, scope)? == source_fence,
+            "financial_source_changed_before_commit"
         );
         tx.commit().await?;
         guard.record_ingress(Event::Confirm {
@@ -285,9 +326,107 @@ pub async fn accept(
         tx.commit().await?;
         return Ok(Acceptance::Duplicate);
     }
+    let association = if super::team_financial_transaction::source_mode(&tx, guard, scope).await? {
+        Some(
+            super::team_financial_inventory::associations(
+                &tx,
+                guard,
+                scope,
+                notification.customer.as_deref(),
+                notification.subscription.as_deref(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    if let Some(association) = association.as_ref().filter(|a| !a.organizations.is_empty()) {
+        let writer = super::team_financial_transaction::NormalWrite::begin(
+            tx,
+            guard,
+            scope,
+            &notification,
+            association.clone(),
+        )
+        .await?;
+        let proposal = new_proposal(writer.sql(), scope, &entry, notification).await?;
+        write_receipt(writer.sql(), scope, &proposal.receipt).await?;
+        advance(
+            writer.sql(),
+            scope,
+            &proposal.expected,
+            &proposal.next,
+            proposal.receipt.transition,
+        )
+        .await?;
+        writer.commit(proposal).await?;
+        return Ok(Acceptance::Accepted);
+    }
+    let proposal = new_proposal(&tx, scope, &entry, notification).await?;
+    write_receipt(&tx, scope, &proposal.receipt).await?;
+    advance(
+        &tx,
+        scope,
+        &proposal.expected,
+        &proposal.next,
+        proposal.receipt.transition,
+    )
+    .await?;
+    if let Some(association) = association {
+        ensure!(
+            super::team_financial_inventory::associations(
+                &tx,
+                guard,
+                scope,
+                proposal.receipt.notification.customer.as_deref(),
+                proposal.receipt.notification.subscription.as_deref()
+            )
+            .await?
+                == association,
+            "financial_source_association_changed"
+        );
+    }
+    // SQL rows remain uncommitted while the independent intent is flushed.
+    ensure!(
+        super::team_financial_inventory::account_source_token(guard, scope)? == source_fence,
+        "financial_source_changed_before_prepare"
+    );
+    guard.record_ingress(Event::Prepare {
+        scope: scope.clone(),
+        proposal: proposal.clone(),
+    })?;
+    let mut expected = entry;
+    expected.used_transitions.insert(
+        proposal.receipt.transition,
+        crate::services::team_financial_guard::fingerprint(&proposal.receipt)?,
+    );
+    expected.pending = Some(proposal.clone());
+    ensure!(
+        independent(guard, scope)? == expected,
+        "financial_ingress_changed_before_commit"
+    );
+    ensure!(
+        super::team_financial_inventory::account_source_token(guard, scope)? == source_fence,
+        "financial_source_changed_before_commit"
+    );
+    tx.commit().await?;
+    guard.record_ingress(Event::Confirm {
+        scope: scope.clone(),
+        transition: proposal.receipt.transition,
+        head: proposal.next,
+        review: None,
+    })?;
+    Ok(Acceptance::Accepted)
+}
+async fn new_proposal(
+    tx: &Transaction<'_>,
+    scope: &Scope,
+    entry: &Entry,
+    notification: Notification,
+) -> Result<Proposal> {
     let job_before = if notification.supported {
         job(
-            &tx,
+            tx,
             scope,
             notification
                 .subscription
@@ -315,39 +454,7 @@ pub async fn accept(
         job_before,
         transition: Uuid::now_v7(),
     };
-    let proposal = entry.propose(receipt)?;
-    write_receipt(&tx, scope, &proposal.receipt).await?;
-    advance(
-        &tx,
-        scope,
-        &proposal.expected,
-        &proposal.next,
-        proposal.receipt.transition,
-    )
-    .await?;
-    // SQL rows remain uncommitted while the independent intent is flushed.
-    guard.record_ingress(Event::Prepare {
-        scope: scope.clone(),
-        proposal: proposal.clone(),
-    })?;
-    let mut expected = entry;
-    expected.used_transitions.insert(
-        proposal.receipt.transition,
-        crate::services::team_financial_guard::fingerprint(&proposal.receipt)?,
-    );
-    expected.pending = Some(proposal.clone());
-    ensure!(
-        independent(guard, scope)? == expected,
-        "financial_ingress_changed_before_commit"
-    );
-    tx.commit().await?;
-    guard.record_ingress(Event::Confirm {
-        scope: scope.clone(),
-        transition: proposal.receipt.transition,
-        head: proposal.next,
-        review: None,
-    })?;
-    Ok(Acceptance::Accepted)
+    entry.propose(receipt)
 }
 
 /// Read-only operator projection. Even a verified ingress is not payment/source
@@ -388,9 +495,17 @@ pub async fn diagnostic(
             }
         };
     }
+    let transaction_pending = state
+        .snapshot
+        .transactions
+        .require_account_free(scope)
+        .is_err();
+    if transaction_pending && entry.is_none_or(|e| e.conflicts.is_empty()) {
+        status = "financial_transaction_reconciliation_required";
+    }
     tx.commit().await?;
     Ok(
-        serde_json::json!({"status":status,"receipts":entry.map_or(0,|e|e.receipts.len()),"financial_sources":"unconfirmed","product_authorization_enabled":false,"production_ready":false}),
+        serde_json::json!({"status":status,"receipts":entry.map_or(0,|e|e.receipts.len()),"financial_transaction_pending":transaction_pending,"financial_sources":"unconfirmed","product_authorization_enabled":false,"production_ready":false}),
     )
 }
 

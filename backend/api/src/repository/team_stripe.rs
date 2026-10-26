@@ -3,7 +3,7 @@ use crate::{
     infrastructure::postgres::PostgresClient,
     services::team_stripe::{Event, Snapshot},
 };
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -58,6 +58,25 @@ pub struct TeamStripeRepository {
     guard_configuration_error: bool,
 }
 impl TeamStripeRepository {
+    fn source_token(
+        &self,
+        scope: &crate::services::team_financial_ingress::Scope,
+    ) -> Result<Option<String>> {
+        self.ingress_guard()?
+            .map(|g| super::team_financial_inventory::account_source_token(g, scope))
+            .transpose()
+    }
+    fn source_unchanged(
+        &self,
+        scope: &crate::services::team_financial_ingress::Scope,
+        token: &Option<String>,
+    ) -> Result<()> {
+        ensure!(
+            self.source_token(scope)? == *token,
+            "financial_source_changed_before_commit"
+        );
+        Ok(())
+    }
     fn ingress_guard(
         &self,
     ) -> Result<Option<&crate::infrastructure::team_financial_guard::FinancialGuard>> {
@@ -75,7 +94,11 @@ impl TeamStripeRepository {
         )
     }
     pub(crate) fn customers(&self) -> super::team_stripe_customer::CustomerRepository {
-        super::team_stripe_customer::CustomerRepository::new(self.pg.clone())
+        super::team_stripe_customer::CustomerRepository::with_financial_authority(
+            self.pg.clone(),
+            self.guard.as_ref().and_then(|g| g.guard()).cloned(),
+            self.guard_configuration_error,
+        )
     }
     pub fn new(pg: Arc<PostgresClient>) -> Self {
         match crate::infrastructure::team_financial_guard::FinancialObservation::from_environment()
@@ -121,6 +144,9 @@ impl TeamStripeRepository {
         let mut db = self.pg.transaction_client().await?;
         let tx = db.transaction().await?;
         super::team_financial_ingress::lock(&tx, &scope).await?;
+        super::team_financial_ingress::require_authority(&tx, &scope, self.ingress_guard()?)
+            .await?;
+
         let inserted=tx.execute("INSERT INTO team_stripe_inbox(account_id,livemode,event_id,payload_hash,event_kind,event_created,customer_id,subscription_id,invoice_id,disposition) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING",
             &[&event.account_id,&event.livemode,&event.event_id,&hash,&event.kind,&event.created,&event.customer_id,&event.subscription_id,&event.invoice_id,&if event.supported {"pending"} else {"ignored"}]).await?;
         if inserted == 0 {
@@ -150,14 +176,59 @@ impl TeamStripeRepository {
         let mut db = self.pg.transaction_client().await?;
         let tx = db.transaction().await?;
         super::team_financial_ingress::lock(&tx, &scope).await?;
-        if let Some(guard) = self.ingress_guard()? {
+        let guard = self.ingress_guard()?;
+        super::team_financial_ingress::require_authority(&tx, &scope, guard).await?;
+        let source_fence = guard
+            .map(|g| super::team_financial_inventory::account_source_token(g, &scope))
+            .transpose()?;
+        if let Some(guard) = guard {
+            if guard.read()?.snapshot.transactions.groups.values().any(|g|!g.committed && g.proposal.account==scope && matches!(g.proposal.writer,Some(crate::services::team_financial_transaction::Writer::Scheduler {..}))) {
+                return super::team_financial_transaction::reconcile_schedule(tx,guard,&scope).await;
+            }
             super::team_financial_ingress::ready(&tx, guard, &scope).await?;
+            if super::team_financial_transaction::source_mode(&tx, guard, &scope).await? {
+                // Explicit bounded batch, no silent participant truncation and no
+                // bulk UPDATE outside the exact set observed under account lock.
+                let retired = super::team_financial_transaction::retired(guard, &scope)?;
+                let rows=tx.query("SELECT b.organization_id,b.customer_id,b.subscription_id FROM team_stripe_bindings b LEFT JOIN team_stripe_reconcile_jobs j ON j.account_id=b.account_id AND j.livemode=b.livemode AND j.subscription_id=b.subscription_id WHERE b.enabled AND b.account_id=$1 AND b.livemode=$2 AND NOT(b.organization_id=ANY($3::uuid[])) AND (j.subscription_id IS NULL OR (j.requested_revision=j.applied_revision AND (j.last_success_at IS NULL OR j.last_success_at<clock_timestamp()-interval '5 minutes'))) ORDER BY b.subscription_id LIMIT 100",&[&account,&live,&retired]).await?;
+                let targets = rows
+                    .into_iter()
+                    .map(
+                        |r| crate::services::team_financial_transaction::ScheduleTarget {
+                            organization: r.get(0),
+                            customer: r.get(1),
+                            subscription: r.get(2),
+                        },
+                    )
+                    .collect::<Vec<_>>();
+                if targets.is_empty() {
+                    tx.commit().await?;
+                    return Ok(0);
+                }
+                let writer = super::team_financial_transaction::NormalWrite::begin_targets(
+                    tx, guard, &scope, &targets,
+                )
+                .await?;
+                for target in &targets {
+                    ensure!(writer.sql().execute("INSERT INTO team_stripe_reconcile_jobs(account_id,livemode,subscription_id) SELECT account_id,livemode,subscription_id FROM team_stripe_bindings WHERE enabled AND account_id=$1 AND livemode=$2 AND organization_id=$3 AND customer_id=$4 AND subscription_id=$5 ON CONFLICT(account_id,livemode,subscription_id) DO UPDATE SET requested_revision=team_stripe_reconcile_jobs.requested_revision+1 WHERE team_stripe_reconcile_jobs.requested_revision=team_stripe_reconcile_jobs.applied_revision AND (team_stripe_reconcile_jobs.last_success_at IS NULL OR team_stripe_reconcile_jobs.last_success_at<clock_timestamp()-interval '5 minutes')",&[&account,&live,&target.organization,&target.customer,&target.subscription]).await?==1,"financial_schedule_candidate_changed");
+                }
+                let count = targets.len() as u64;
+                writer.commit_schedule().await?;
+                return Ok(count);
+            }
         }
         let count=tx.execute("INSERT INTO team_stripe_reconcile_jobs(account_id,livemode,subscription_id)
             SELECT account_id,livemode,subscription_id FROM team_stripe_bindings WHERE enabled AND account_id=$1 AND livemode=$2
             ON CONFLICT(account_id,livemode,subscription_id) DO UPDATE SET requested_revision=team_stripe_reconcile_jobs.requested_revision+1
-            WHERE team_stripe_reconcile_jobs.requested_revision=team_stripe_reconcile_jobs.applied_revision AND (team_stripe_reconcile_jobs.last_success_at IS NULL OR team_stripe_reconcile_jobs.last_success_at < now()-interval '5 minutes')",
+            WHERE team_stripe_reconcile_jobs.requested_revision=team_stripe_reconcile_jobs.applied_revision AND (team_stripe_reconcile_jobs.last_success_at IS NULL OR team_stripe_reconcile_jobs.last_success_at < clock_timestamp()-interval '5 minutes')",
             &[&account,&live]).await?;
+        if let Some(guard) = guard {
+            ensure!(
+                super::team_financial_inventory::account_source_token(guard, &scope)?
+                    == source_fence.context("financial_source_fence_missing")?,
+                "financial_source_changed_before_commit"
+            );
+        }
         tx.commit().await?;
         Ok(count)
     }
@@ -170,23 +241,66 @@ impl TeamStripeRepository {
             live,
         };
         super::team_financial_ingress::lock(&tx, &scope).await?;
+        let source_fence = self.source_token(&scope)?;
+        super::team_financial_ingress::require_authority(&tx, &scope, self.ingress_guard()?)
+            .await?;
         if let Some(guard) = self.ingress_guard()? {
             super::team_financial_ingress::ready(&tx, guard, &scope).await?;
         }
-        let row=tx.query_opt("SELECT j.subscription_id,j.requested_revision FROM team_stripe_reconcile_jobs j
-            WHERE j.account_id=$1 AND j.livemode=$2 AND j.requested_revision>j.applied_revision AND j.retry_at<=clock_timestamp()
-              AND (j.lease_until IS NULL OR j.lease_until<=clock_timestamp())
-              AND EXISTS(SELECT 1 FROM team_stripe_bindings b WHERE b.account_id=j.account_id AND b.livemode=j.livemode AND b.subscription_id=j.subscription_id AND b.enabled)
-            ORDER BY j.retry_at,j.subscription_id FOR UPDATE OF j SKIP LOCKED LIMIT 1",&[&account,&live]).await?;
-        let Some(row) = row else {
+        let retired = self
+            .ingress_guard()?
+            .map(|g| super::team_financial_transaction::retired(g, &scope))
+            .transpose()?
+            .unwrap_or_default();
+        let candidate=tx.query_opt("SELECT j.subscription_id,b.organization_id FROM team_stripe_reconcile_jobs j JOIN team_stripe_bindings b ON b.account_id=j.account_id AND b.livemode=j.livemode AND b.subscription_id=j.subscription_id AND b.enabled WHERE j.account_id=$1 AND j.livemode=$2 AND NOT(b.organization_id=ANY($3::uuid[])) AND j.requested_revision>j.applied_revision AND j.retry_at<=clock_timestamp() AND (j.lease_until IS NULL OR j.lease_until<=clock_timestamp()) ORDER BY j.retry_at,j.subscription_id LIMIT 1",&[&account,&live,&retired]).await?;
+        let Some(candidate) = candidate else {
             tx.commit().await?;
             return Ok(None);
         };
-        let sub: String = row.get(0);
-        let revision: i64 = row.get(1);
-        let binding=tx.query_opt("SELECT organization_id,revision,customer_id FROM team_stripe_bindings WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3 AND enabled FOR SHARE",&[&account,&live,&sub]).await?;
+        let sub: String = candidate.get(0);
+        let org: Uuid = candidate.get(1);
+        super::team_financial_ingress::require_authority(&tx, &scope, self.ingress_guard()?)
+            .await?;
+        if let Some(guard) = self.ingress_guard()? {
+            if super::team_financial_transaction::source_mode(&tx, guard, &scope).await? {
+                let customer:String=tx.query_one("SELECT customer_id FROM team_stripe_bindings WHERE organization_id=$1 AND account_id=$2 AND livemode=$3 AND subscription_id=$4 AND enabled",&[&org,&account,&live,&sub]).await?.get(0);
+                let target = crate::services::team_financial_transaction::ScheduleTarget {
+                    organization: org,
+                    customer,
+                    subscription: sub.clone(),
+                };
+                let writer = super::team_financial_transaction::NormalWrite::begin_targets(
+                    tx,
+                    guard,
+                    &scope,
+                    &[target],
+                )
+                .await?;
+                let claim = Self::claim_locked(writer.sql(), account, live, sub, org).await?;
+                let alive = writer.commit_operational(claim.as_ref()).await?;
+                return Ok(if alive { claim } else { None });
+            }
+        }
+        let result = Self::claim_locked(&tx, account, live, sub, org).await?;
+        self.source_unchanged(&scope, &source_fence)?;
+        tx.commit().await?;
+        Ok(result)
+    }
+    async fn claim_locked(
+        tx: &tokio_postgres::Transaction<'_>,
+        account: &str,
+        live: bool,
+        sub: String,
+        org: Uuid,
+    ) -> Result<Option<Claim>> {
+        super::team_financial_locks::organization(tx, account, live, org).await?;
+        let row=tx.query_opt("SELECT requested_revision FROM team_stripe_reconcile_jobs j WHERE j.account_id=$1 AND j.livemode=$2 AND j.subscription_id=$3 AND j.requested_revision>j.applied_revision AND j.retry_at<=clock_timestamp() AND (j.lease_until IS NULL OR j.lease_until<=clock_timestamp()) AND EXISTS(SELECT 1 FROM team_stripe_bindings b WHERE b.account_id=j.account_id AND b.livemode=j.livemode AND b.subscription_id=j.subscription_id AND b.organization_id=$4 AND b.enabled) FOR UPDATE",&[&account,&live,&sub,&org]).await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let revision: i64 = row.get(0);
+        let binding=tx.query_opt("SELECT organization_id,revision,customer_id FROM team_stripe_bindings WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3 AND organization_id=$4 AND enabled FOR SHARE",&[&account,&live,&sub,&org]).await?;
         let Some(binding) = binding else {
-            tx.commit().await?;
             return Ok(None);
         };
         let lease_id = Uuid::now_v7();
@@ -201,7 +315,6 @@ impl TeamStripeRepository {
             binding_revision: binding.get(1),
             customer_id: binding.get(2),
         };
-        tx.commit().await?;
         Ok(Some(claim))
     }
     /// CAS rejects a response fetched under an old lease, binding or event revision.
@@ -239,14 +352,124 @@ impl TeamStripeRepository {
             live: claim.livemode,
         };
         super::team_financial_ingress::lock(&tx, &scope).await?;
+        let source_fence = self.source_token(&scope)?;
+        super::team_financial_ingress::require_authority(&tx, &scope, self.ingress_guard()?)
+            .await?;
         if let Some(guard) = self.ingress_guard()? {
+            let writer =
+                super::team_financial_transaction::observation_writer(claim, snapshot, invoice)?;
+            if guard
+                .read()?
+                .snapshot
+                .transactions
+                .groups
+                .values()
+                .any(|g| !g.committed && g.proposal.account == scope)
+            {
+                super::team_financial_transaction::reconcile_observation(
+                    tx, guard, &scope, &writer,
+                )
+                .await?;
+                return Ok(true);
+            }
             super::team_financial_ingress::ready(&tx, guard, &scope).await?;
+            if super::team_financial_transaction::source_mode(&tx, guard, &scope).await? {
+                let target = crate::services::team_financial_transaction::ScheduleTarget {
+                    organization: claim.organization_id,
+                    customer: claim.customer_id.clone(),
+                    subscription: claim.subscription_id.clone(),
+                };
+                let write = super::team_financial_transaction::NormalWrite::begin_targets(
+                    tx,
+                    guard,
+                    &scope,
+                    &[target],
+                )
+                .await?;
+                let Some((change, deadline)) = self
+                    .stage_observation(write.sql(), claim, snapshot, invoice)
+                    .await?
+                else {
+                    write.commit_operational(None).await?;
+                    return Ok(false);
+                };
+                let now: DateTime<Utc> = write
+                    .sql()
+                    .query_one("SELECT clock_timestamp()", &[])
+                    .await?
+                    .get(0);
+                if now >= deadline {
+                    write.rollback().await?;
+                    return Ok(false);
+                }
+                write.commit_observation(writer, &change, deadline).await?;
+                return Ok(true);
+            }
         }
         super::team_seats::lock(&tx, claim.organization_id).await?;
-        let row=tx.query_opt("SELECT requested_revision,lease_until FROM team_stripe_reconcile_jobs WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3 AND lease_id=$4 AND lease_until>clock_timestamp() FOR UPDATE",&[&claim.account_id,&claim.livemode,&claim.subscription_id,&claim.lease_id]).await?;
-        let Some(row) = row else {
+        let Some((change, deadline)) = self
+            .stage_observation(&tx, claim, snapshot, invoice)
+            .await?
+        else {
+            self.source_unchanged(&scope, &source_fence)?;
             tx.commit().await?;
             return Ok(false);
+        };
+        let now: DateTime<Utc> = tx.query_one("SELECT clock_timestamp()", &[]).await?.get(0);
+        if now >= deadline {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        let pending = super::team_analytics_entitlement::prepare_change(
+            self.guard.as_ref().and_then(|authority| authority.guard()),
+            claim.organization_id,
+            &change,
+        )?;
+        let after_prepare: DateTime<Utc> = tx
+            .query_one("SELECT clock_timestamp()", &[])
+            .await
+            .map_err(|error| {
+                if pending.is_some() {
+                    anyhow::anyhow!("financial_guard_commit_reconciliation_required")
+                } else {
+                    error.into()
+                }
+            })?
+            .get(0);
+        if after_prepare >= deadline {
+            let rollback = tx.rollback().await;
+            if pending.is_some() {
+                anyhow::bail!("financial_guard_commit_reconciliation_required");
+            }
+            rollback?;
+            return Ok(false);
+        }
+        self.source_unchanged(&scope, &source_fence)?;
+        tx.commit().await.map_err(|error| {
+            if pending.is_some() {
+                anyhow::anyhow!("financial_guard_commit_reconciliation_required")
+            } else {
+                error.into()
+            }
+        })?;
+        super::team_analytics_entitlement::confirm_change(
+            self.guard.as_ref().and_then(|authority| authority.guard()),
+            claim.organization_id,
+            &change,
+            pending.as_ref(),
+        )?;
+        Ok(true)
+    }
+    async fn stage_observation(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        claim: &Claim,
+        snapshot: &Snapshot,
+        invoice: Option<&crate::services::team_stripe_invoice::Invoice>,
+    ) -> Result<Option<(super::team_analytics_entitlement::Change, DateTime<Utc>)>> {
+        let row=tx.query_opt("SELECT requested_revision,lease_until FROM team_stripe_reconcile_jobs WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3 AND lease_id=$4 AND lease_until>clock_timestamp() FOR UPDATE",&[&claim.account_id,&claim.livemode,&claim.subscription_id,&claim.lease_id]).await?;
+        let Some(row) = row else {
+            return Ok(None);
         };
         let binding=tx.query_opt("SELECT revision FROM team_stripe_bindings WHERE organization_id=$1 AND account_id=$2 AND livemode=$3 AND subscription_id=$4 AND customer_id=$5 AND enabled FOR SHARE",&[&claim.organization_id,&claim.account_id,&claim.livemode,&claim.subscription_id,&claim.customer_id]).await?;
         let checked_at: DateTime<Utc> = tx.query_one("SELECT clock_timestamp()", &[]).await?.get(0);
@@ -255,8 +478,7 @@ impl TeamStripeRepository {
             && binding.is_some_and(|b| b.get::<_, i64>(0) == claim.binding_revision);
         if !valid {
             tx.execute("UPDATE team_stripe_reconcile_jobs SET lease_id=NULL,lease_until=NULL WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3 AND lease_id=$4",&[&claim.account_id,&claim.livemode,&claim.subscription_id,&claim.lease_id]).await?;
-            tx.commit().await?;
-            return Ok(false);
+            return Ok(None);
         }
         // Preserve provider evidence; no entitlement is inferred from a checkout redirect or this snapshot.
         let failure:Option<DateTime<Utc>>=tx.query_one("SELECT min(event_created) FROM team_stripe_inbox WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3 AND invoice_id=$4 AND event_kind='invoice.payment_failed'",&[&claim.account_id,&claim.livemode,&claim.subscription_id,&snapshot.latest_invoice_id]).await?.get(0);
@@ -276,7 +498,7 @@ impl TeamStripeRepository {
         )
         .await?;
         let change = super::team_analytics_entitlement::observe(
-            &tx,
+            tx,
             claim,
             snapshot,
             invoice,
@@ -289,53 +511,9 @@ impl TeamStripeRepository {
         .await?;
         let invoice_value = invoice.map(serde_json::to_value).transpose()?;
         tx.execute("UPDATE team_stripe_snapshots SET invoice_observation=$2,subscription_item_id=$3 WHERE organization_id=$1",&[&claim.organization_id,&invoice_value,&snapshot.subscription_item_id]).await?;
-        // Package/history locks can wait after the initial lease check. Do not ACK
-        // or retain any observation made by a worker whose lease expired meanwhile.
-        let lease_valid: bool = tx.query_one("SELECT lease_until>clock_timestamp() FROM team_stripe_reconcile_jobs WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3 AND lease_id=$4", &[&claim.account_id,&claim.livemode,&claim.subscription_id,&claim.lease_id]).await?.get(0);
-        if !lease_valid {
-            tx.rollback().await?;
-            return Ok(false);
-        }
-        tx.execute("UPDATE team_stripe_inbox SET disposition='processed',processed_at=now() WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3 AND requested_revision<=$4 AND disposition='pending'",&[&claim.account_id,&claim.livemode,&claim.subscription_id,&claim.revision]).await?;
-        tx.execute("UPDATE team_stripe_reconcile_jobs SET applied_revision=$4,lease_id=NULL,lease_until=NULL,attempts=0,last_error_code=NULL,last_http_status=NULL,last_success_at=now() WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3",&[&claim.account_id,&claim.livemode,&claim.subscription_id,&claim.revision]).await?;
-        let pending = super::team_analytics_entitlement::prepare_change(
-            self.guard.as_ref().and_then(|authority| authority.guard()),
-            claim.organization_id,
-            &change,
-        )?;
-        let after_prepare: DateTime<Utc> = tx
-            .query_one("SELECT clock_timestamp()", &[])
-            .await
-            .map_err(|error| {
-                if pending.is_some() {
-                    anyhow::anyhow!("financial_guard_commit_reconciliation_required")
-                } else {
-                    error.into()
-                }
-            })?
-            .get(0);
-        if after_prepare >= row.get::<_, DateTime<Utc>>(1) {
-            let rollback = tx.rollback().await;
-            if pending.is_some() {
-                anyhow::bail!("financial_guard_commit_reconciliation_required");
-            }
-            rollback?;
-            return Ok(false);
-        }
-        tx.commit().await.map_err(|error| {
-            if pending.is_some() {
-                anyhow::anyhow!("financial_guard_commit_reconciliation_required")
-            } else {
-                error.into()
-            }
-        })?;
-        super::team_analytics_entitlement::confirm_change(
-            self.guard.as_ref().and_then(|authority| authority.guard()),
-            claim.organization_id,
-            &change,
-            pending.as_ref(),
-        )?;
-        Ok(true)
+        tx.execute("UPDATE team_stripe_inbox SET disposition='processed',processed_at=clock_timestamp() WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3 AND requested_revision<=$4 AND disposition='pending'",&[&claim.account_id,&claim.livemode,&claim.subscription_id,&claim.revision]).await?;
+        tx.execute("UPDATE team_stripe_reconcile_jobs SET applied_revision=$4,lease_id=NULL,lease_until=NULL,attempts=0,last_error_code=NULL,last_http_status=NULL,last_success_at=clock_timestamp() WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3",&[&claim.account_id,&claim.livemode,&claim.subscription_id,&claim.revision]).await?;
+        Ok(Some((change, row.get(1))))
     }
     pub async fn fail(
         &self,
@@ -349,10 +527,54 @@ impl TeamStripeRepository {
             "invalid HTTP status"
         );
         // Only enumerated metadata is persisted, never provider response bodies/tokens.
-        let count=self.pg.execute("UPDATE team_stripe_reconcile_jobs SET attempts=LEAST(attempts+1,30),last_error_code=$5,last_http_status=$6,
-            retry_at=GREATEST(now()+make_interval(secs => LEAST(3600.0,15.0*power(2.0,LEAST(attempts,8)))),COALESCE($7,now()),
-                CASE WHEN $5 IN ('auth_required','permission_required','subscription_unconfirmed','unsupported_contract','provider_scope_mismatch') THEN now()+interval '1 hour' ELSE now() END),
-            lease_id=NULL,lease_until=NULL WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3 AND lease_id=$4 AND lease_until>now()",
+        let mut db = self.pg.transaction_client().await?;
+        let tx = db.transaction().await?;
+        let scope = crate::services::team_financial_ingress::Scope {
+            account: claim.account_id.clone(),
+            live: claim.livemode,
+        };
+        super::team_financial_ingress::lock(&tx, &scope).await?;
+        let source_fence = self.source_token(&scope)?;
+        super::team_financial_ingress::require_authority(&tx, &scope, self.ingress_guard()?)
+            .await?;
+        if let Some(guard) = self.ingress_guard()? {
+            super::team_financial_ingress::ready(&tx, guard, &scope).await?;
+            if super::team_financial_transaction::source_mode(&tx, guard, &scope).await? {
+                let target = crate::services::team_financial_transaction::ScheduleTarget {
+                    organization: claim.organization_id,
+                    customer: claim.customer_id.clone(),
+                    subscription: claim.subscription_id.clone(),
+                };
+                let writer = super::team_financial_transaction::NormalWrite::begin_targets(
+                    tx,
+                    guard,
+                    &scope,
+                    &[target],
+                )
+                .await?;
+                let applied =
+                    Self::fail_locked(writer.sql(), claim, error, status, retry_after).await?;
+                writer.commit_operational(None).await?;
+                return Ok(applied);
+            }
+        }
+        super::team_seats::lock(&tx, claim.organization_id).await?;
+        let applied = Self::fail_locked(&tx, claim, error, status, retry_after).await?;
+        self.source_unchanged(&scope, &source_fence)?;
+        tx.commit().await?;
+        Ok(applied)
+    }
+    async fn fail_locked(
+        tx: &tokio_postgres::Transaction<'_>,
+        claim: &Claim,
+        error: Failure,
+        status: Option<i32>,
+        retry_after: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        let count=tx.execute("UPDATE team_stripe_reconcile_jobs SET attempts=LEAST(attempts+1,30),last_error_code=$5,last_http_status=$6,
+            retry_at=GREATEST(clock_timestamp()+make_interval(secs => LEAST(3600.0,15.0*power(2.0,LEAST(attempts,8)))),COALESCE($7,clock_timestamp()),
+                CASE WHEN $5 IN ('auth_required','permission_required','subscription_unconfirmed','unsupported_contract','provider_scope_mismatch') THEN clock_timestamp()+interval '1 hour' ELSE clock_timestamp() END),
+            lease_id=NULL,lease_until=NULL WHERE account_id=$1 AND livemode=$2 AND subscription_id=$3 AND lease_id=$4 AND lease_until>clock_timestamp()",
             &[&claim.account_id,&claim.livemode,&claim.subscription_id,&claim.lease_id,&error.code(),&status,&retry_after]).await?;
         Ok(count == 1)
     }

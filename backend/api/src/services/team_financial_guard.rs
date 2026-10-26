@@ -5,7 +5,7 @@ use anyhow::{ensure, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -32,6 +32,9 @@ pub struct Entry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
+    FinancialTransaction {
+        event: Box<super::team_financial_transaction::Event>,
+    },
     FinancialIngress {
         event: Box<super::team_financial_ingress::Event>,
     },
@@ -62,15 +65,35 @@ pub enum Event {
         organization: Uuid,
     },
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Snapshot {
     pub namespace: Option<Uuid>,
     pub organizations: BTreeMap<Uuid, Entry>,
     pub sources: super::team_financial_source::Snapshot,
     pub ingress: super::team_financial_ingress::Snapshot,
+    pub transactions: super::team_financial_transaction::Snapshot,
+    pub(super) used_enrollment_transitions: BTreeSet<Uuid>,
 }
 impl Snapshot {
     pub fn apply(&mut self, event: &Event) -> Result<()> {
+        if let Event::FinancialTransaction { event } = event {
+            let Some(change) = self.transactions.plan(self, event)? else {
+                return Ok(());
+            };
+            // Validate every member on a full clone. Any failure retains the
+            // complete old group/heads; there is no partially prepared intent.
+            let mut next = self.clone();
+            for member in &change.members {
+                next.apply_member(member, true)?;
+            }
+            next.transactions.groups.insert(change.id, change.entry);
+            *self = next;
+            return Ok(());
+        }
+        self.transactions.fence(event)?;
+        self.apply_member(event, false)
+    }
+    fn apply_member(&mut self, event: &Event, grouped: bool) -> Result<()> {
         if let Event::Initialize {
             namespace,
             legacy_organizations,
@@ -116,7 +139,9 @@ impl Snapshot {
             let roster = self.organizations.get(&scope.organization);
             let evidence_only = matches!(
                 event.as_ref(),
-                SourceEvent::Outcome { .. } | SourceEvent::Freeze { .. }
+                SourceEvent::Outcome { .. }
+                    | SourceEvent::RejectedOutcome { .. }
+                    | SourceEvent::Freeze { .. }
             );
             if !evidence_only {
                 let roster = roster.context("financial_guard_unknown_organization")?;
@@ -172,6 +197,7 @@ impl Snapshot {
             | Event::Quarantine { organization }
             | Event::Delete { organization } => organization,
             Event::Initialize { .. }
+            | Event::FinancialTransaction { .. }
             | Event::RegisterLegacy { .. }
             | Event::FinancialSource { .. }
             | Event::FinancialIngress { .. } => unreachable!(),
@@ -186,6 +212,13 @@ impl Snapshot {
                 transition,
                 ..
             } => {
+                ensure!(
+                    grouped
+                        || !self
+                            .used_enrollment_transitions
+                            .contains(&transition.transition_id),
+                    "financial_guard_transition_id_reused"
+                );
                 ensure!(
                     entry.head == *expected && entry.pending.is_none(),
                     "financial_guard_predecessor_or_pending_conflict"
@@ -214,6 +247,8 @@ impl Snapshot {
                     _ => anyhow::bail!("financial_guard_organization_closed"),
                 }
                 entry.pending = Some(transition.clone());
+                self.used_enrollment_transitions
+                    .insert(transition.transition_id);
             }
             Event::Commit { transition_id, .. } => {
                 ensure!(
@@ -244,6 +279,7 @@ impl Snapshot {
             }
             Event::Delete { .. } => entry.head = Head::Deleted,
             Event::Initialize { .. }
+            | Event::FinancialTransaction { .. }
             | Event::RegisterLegacy { .. }
             | Event::FinancialSource { .. }
             | Event::FinancialIngress { .. } => unreachable!(),
@@ -256,6 +292,7 @@ impl Snapshot {
     /// Exact committed agreement only. Caller must fence a DB observation between
     /// two equal independent ledger tokens. A proposal never permits analytics.
     pub fn verify(&self, org: Uuid, database: Option<&State>) -> Result<Head> {
+        self.transactions.require_organization_free(org)?;
         let entry = self
             .organizations
             .get(&org)
