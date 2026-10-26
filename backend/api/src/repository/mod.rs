@@ -50,6 +50,8 @@ pub mod team_stripe;
 mod team_stripe_tests;
 
 pub mod team_stripe_customer;
+mod team_stripe_customer_recovery;
+mod team_stripe_customer_resolution;
 
 pub mod team_stripe_quote;
 
@@ -66,7 +68,15 @@ pub mod team_usage_scan;
 pub mod copilot_admission;
 
 pub mod team_financial_guard;
-pub mod team_financial_inventory;
 pub mod team_financial_ingress;
+pub mod team_financial_inventory;
 
 pub mod team_financial_recovery;
+
+mod team_financial_locks;
+
+pub(crate) mod user_identity_sync;
+
+mod team_financial_transaction;
+#[cfg(test)]
+mod team_financial_transaction_tests;

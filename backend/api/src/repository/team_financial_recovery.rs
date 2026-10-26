@@ -79,6 +79,7 @@ fn snapshot_fence(
     s: &crate::services::team_financial_guard::Snapshot,
     scope: &Scope,
 ) -> Result<(String, u64)> {
+    s.transactions.require_account_free(scope)?;
     let key = scope.key()?;
     let sources: Vec<_> = s
         .sources
@@ -86,6 +87,10 @@ fn snapshot_fence(
         .values()
         .filter(|e| e.scope.account == scope.account && e.scope.live == scope.live)
         .collect();
+    for source in &sources {
+        s.transactions
+            .require_organization_free(source.scope.organization)?;
+    }
     Ok((
         fingerprint(&(
             s.namespace,

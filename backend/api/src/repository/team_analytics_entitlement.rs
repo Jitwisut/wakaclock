@@ -82,6 +82,35 @@ pub(crate) struct Change {
     proof: Option<Proof>,
 }
 impl Change {
+    /// Bridge an already staged provider observation into its outer source group.
+    /// Does not append standalone Prepare/Confirm or authorize a different SQL tx.
+    pub(super) fn source_group(
+        &self,
+        guard: &FinancialGuard,
+        org: Uuid,
+        id: Uuid,
+    ) -> Result<Option<crate::services::team_financial_transaction::EnrollmentChange>> {
+        let proof = self
+            .proof
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("financial_guard_required"))?;
+        let current = guard.read()?;
+        ensure!(
+            current.organization_token(org)? == proof.token,
+            "financial_guard_changed_before_commit"
+        );
+        current.snapshot.verify(org, self.previous.as_ref())?;
+        Ok(self.next.as_ref().map(|state| {
+            crate::services::team_financial_transaction::EnrollmentChange {
+                organization: org,
+                expected: proof.head.clone(),
+                transition: Pending {
+                    transition_id: id,
+                    state: state.clone().into(),
+                },
+            }
+        }))
+    }
     #[cfg(test)]
     pub(crate) fn changed(&self) -> bool {
         self.next.is_some()

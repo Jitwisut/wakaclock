@@ -155,6 +155,7 @@ pub mod team_comparison;
 pub mod team_weekly_summary;
 
 pub mod team_stripe;
+pub(crate) mod team_stripe_customer_request;
 
 pub mod team_stripe_worker;
 
@@ -173,7 +174,8 @@ pub mod team_usage_admission_worker;
 pub mod copilot_admission;
 
 pub mod team_financial_guard;
-pub mod team_financial_source;
-pub mod team_financial_inventory;
 pub mod team_financial_ingress;
+pub mod team_financial_inventory;
 pub mod team_financial_recovery;
+pub mod team_financial_source;
+pub mod team_financial_transaction;

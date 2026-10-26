@@ -106,8 +106,31 @@ impl CheckoutRepository {
             financial_configuration_error,
         }
     }
-    async fn serialize(tx: &tokio_postgres::Transaction<'_>, org: Uuid) -> Result<()> {
-        super::team_seats::lock(tx, org).await
+    async fn serialize(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        org: Uuid,
+        account: &str,
+        live: bool,
+    ) -> Result<()> {
+        super::team_financial_locks::organization(tx, account, live, org).await?;
+        ensure!(
+            !self.financial_configuration_error,
+            "financial_guard_configuration_unconfirmed"
+        );
+        let scope = crate::services::team_financial_ingress::Scope {
+            account: account.into(),
+            live,
+        };
+        super::team_financial_ingress::require_authority(tx, &scope, self.financial_guard.as_ref())
+            .await?;
+        if let Some(guard) = &self.financial_guard {
+            ensure!(
+                !super::team_financial_transaction::source_mode(tx, guard, &scope).await?,
+                "financial_checkout_source_integration_required"
+            );
+        }
+        Ok(())
     }
     pub async fn request(
         &self,
@@ -123,7 +146,8 @@ impl CheckoutRepository {
         );
         let mut db = self.pg.transaction_client().await?;
         let tx = db.transaction().await?;
-        Self::serialize(&tx, proof.org).await?;
+        self.serialize(&tx, proof.org, &proof.account, proof.live)
+            .await?;
         let current =
             QuoteRepository::guard(&tx, proof.actor, proof.org, &proof.account, proof.live).await?;
         let q=tx.query_opt("SELECT * FROM team_stripe_quotes WHERE id=$1 AND organization_id=$2 AND actor_id=$3 FOR SHARE",&[&quote,&proof.org,&proof.actor]).await?.ok_or(TeamError::NotFound)?;
@@ -184,6 +208,7 @@ impl CheckoutRepository {
     ) -> Result<CheckoutStatus> {
         let mut db = self.pg.transaction_client().await?;
         let tx = db.transaction().await?;
+        self.serialize(&tx, org, account, live).await?;
         AuthorizationService::require_locked_billing_owner(&tx, actor, org).await?;
         let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4",&[&operation,&org,&account,&live]).await?.ok_or(TeamError::NotFound)?;
         let mut result = Self::view(&row);
@@ -265,6 +290,7 @@ impl CheckoutRepository {
     ) -> Result<Option<CheckoutStatus>> {
         let mut db = self.pg.transaction_client().await?;
         let tx = db.transaction().await?;
+        self.serialize(&tx, org, account, live).await?;
         AuthorizationService::require_locked_billing_owner(&tx, actor, org).await?;
         let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE organization_id=$1 AND account_id=$2 AND livemode=$3 ORDER BY confirmed_at DESC,operation_id DESC LIMIT 1", &[&org,&account,&live]).await?;
         let mut result = row.as_ref().map(Self::view);
@@ -286,9 +312,10 @@ impl CheckoutRepository {
         let (operation, revision) = expected;
         let mut db = self.pg.transaction_client().await?;
         let tx = db.transaction().await?;
-        Self::serialize(&tx, org).await?;
+        self.serialize(&tx, org, account, live).await?;
         let proof = QuoteRepository::guard(&tx, actor, org, account, live).await?;
-        let row=tx.query_opt("SELECT *,clock_timestamp() AS checked_at FROM team_stripe_checkout_intents WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4 FOR UPDATE", &[&operation,&org,&account,&live]).await?.ok_or(TeamError::NotFound)?;
+        let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4 FOR UPDATE", &[&operation,&org,&account,&live]).await?.ok_or(TeamError::NotFound)?;
+        let checked_at: DateTime<Utc> = tx.query_one("SELECT clock_timestamp()", &[]).await?.get(0);
         ensure!(
             row.get::<_, i64>("revision") == revision
                 && ["recovery_required", "owner_changed"]
@@ -297,7 +324,7 @@ impl CheckoutRepository {
         );
         ensure!(
             row.get::<_, Option<DateTime<Utc>>>("lease_until")
-                .is_none_or(|t| t <= row.get::<_, DateTime<Utc>>("checked_at")),
+                .is_none_or(|t| t <= checked_at),
             TeamError::ProjectionChanged
         );
         let quote: Uuid = row.get("quote_id");
@@ -328,21 +355,23 @@ impl CheckoutRepository {
     ) -> Result<Option<CheckoutClaim>> {
         let mut db = self.pg.transaction_client().await?;
         let tx = db.transaction().await?;
-        let candidate=tx.query_opt("SELECT operation_id,organization_id FROM team_stripe_checkout_intents WHERE account_id=$1 AND livemode=$2 AND (disposition IN ('pending','session_open','awaiting_verification') OR (disposition='recovery_required' AND last_error_code='idempotency_window_unconfirmed')) AND retry_at<=now() AND (lease_until IS NULL OR lease_until<=now()) ORDER BY retry_at,confirmed_at LIMIT 1",&[&account,&live]).await?;
+        super::team_financial_locks::account(&tx, account, live).await?;
+        let candidate=tx.query_opt("SELECT operation_id,organization_id,COALESCE(recovery_actor,actor_id) AS billing_actor FROM team_stripe_checkout_intents WHERE account_id=$1 AND livemode=$2 AND (disposition IN ('pending','session_open','awaiting_verification') OR (disposition='recovery_required' AND last_error_code='idempotency_window_unconfirmed')) AND retry_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<=clock_timestamp()) ORDER BY retry_at,confirmed_at,operation_id LIMIT 1",&[&account,&live]).await?;
         let Some(candidate) = candidate else {
             tx.commit().await?;
             return Ok(None);
         };
         let operation: Uuid = candidate.get(0);
         let org: Uuid = candidate.get(1);
-        Self::serialize(&tx, org).await?;
-        let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND (disposition IN ('pending','session_open','awaiting_verification') OR (disposition='recovery_required' AND last_error_code='idempotency_window_unconfirmed')) AND retry_at<=now() AND (lease_until IS NULL OR lease_until<=now()) FOR UPDATE",&[&operation]).await?;
+        self.serialize(&tx, org, account, live).await?;
+        let candidate_actor: Uuid = candidate.get("billing_actor");
+        let proof = QuoteRepository::guard(&tx, candidate_actor, org, account, live).await;
+        let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4 AND COALESCE(recovery_actor,actor_id)=$5 AND (disposition IN ('pending','session_open','awaiting_verification') OR (disposition='recovery_required' AND last_error_code='idempotency_window_unconfirmed')) AND retry_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<=clock_timestamp()) FOR UPDATE",&[&operation,&org,&account,&live,&candidate_actor]).await?;
         let Some(row) = row else {
             tx.commit().await?;
             return Ok(None);
         };
         let recovery_actor: Option<Uuid> = row.get("recovery_actor");
-        let actor: Uuid = recovery_actor.unwrap_or_else(|| row.get("actor_id"));
         let quote: Uuid = row.get("quote_id");
         let q = tx
             .query_one(
@@ -363,7 +392,6 @@ impl CheckoutRepository {
         } else {
             digest.to_owned()
         };
-        let proof = QuoteRepository::guard(&tx, actor, org, account, live).await;
         let mut stop = match &proof {
             Ok(p) => {
                 let checked = if recovery_actor.is_some() && row.get::<_, bool>("lookup_only") {
@@ -430,7 +458,7 @@ impl CheckoutRepository {
         let proof = proof?;
         let lease = Uuid::now_v7();
         let revision = row.get("revision");
-        tx.execute("UPDATE team_stripe_checkout_intents SET disposition=CASE WHEN disposition='recovery_required' THEN 'pending' ELSE disposition END,first_attempt_at=COALESCE(first_attempt_at,clock_timestamp()),attempts=attempts+1,lease_id=$2,lease_until=now()+interval '180 seconds' WHERE operation_id=$1",&[&operation,&lease]).await?;
+        tx.execute("UPDATE team_stripe_checkout_intents SET disposition=CASE WHEN disposition='recovery_required' THEN 'pending' ELSE disposition END,first_attempt_at=COALESCE(first_attempt_at,clock_timestamp()),attempts=attempts+1,lease_id=$2,lease_until=clock_timestamp()+interval '180 seconds' WHERE operation_id=$1",&[&operation,&lease]).await?;
         let result = CheckoutClaim {
             operation,
             revision,
@@ -459,7 +487,12 @@ impl CheckoutRepository {
                 .contains(&reason),
             "invalid checkout recovery disposition"
         );
-        self.pg.execute("UPDATE team_stripe_checkout_intents SET disposition='recovery_required',revision=revision+1,last_error_code=$4,observed_at=clock_timestamp(),lease_id=NULL,lease_until=NULL WHERE operation_id=$1 AND revision=$2 AND lease_id=$3 AND lease_until>now() AND disposition='pending'", &[&claim.operation,&claim.revision,&claim.lease,&reason]).await?;
+        let mut db = self.pg.transaction_client().await?;
+        let tx = db.transaction().await?;
+        self.serialize(&tx, claim.proof.org, &claim.proof.account, claim.proof.live)
+            .await?;
+        tx.execute("UPDATE team_stripe_checkout_intents SET disposition='recovery_required',revision=revision+1,last_error_code=$4,observed_at=clock_timestamp(),lease_id=NULL,lease_until=NULL WHERE operation_id=$1 AND revision=$2 AND lease_id=$3 AND lease_until>clock_timestamp() AND disposition='pending' AND organization_id=$5 AND account_id=$6 AND livemode=$7", &[&claim.operation,&claim.revision,&claim.lease,&reason,&claim.proof.org,&claim.proof.account,&claim.proof.live]).await?;
+        tx.commit().await?;
         Ok(())
     }
     pub async fn receive(&self, claim: &CheckoutClaim, e: &SessionEvidence) -> Result<bool> {
@@ -512,27 +545,8 @@ impl CheckoutRepository {
                 super::team_financial_ingress::ready(&tx, guard, &scope).await?;
             }
         }
-        Self::serialize(&tx, claim.proof.org).await?;
-        let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND revision=$2 AND lease_id=$3 AND lease_until>clock_timestamp() AND disposition IN ('pending','session_open','awaiting_verification') FOR UPDATE",&[&claim.operation,&claim.revision,&claim.lease]).await?;
-        let Some(row) = row else {
-            tx.commit().await?;
-            return Ok(false);
-        };
-        ensure!(
-            row.get::<_, Option<String>>("session_id")
-                .is_none_or(|id| id == e.id),
-            TeamError::ProjectionChanged
-        );
-        let previous: String = row.get("disposition");
-        ensure!(
-            previous != "awaiting_verification" || e.status == "complete",
-            TeamError::ProjectionChanged
-        );
-        ensure!(
-            row.get::<_, Option<String>>("subscription_id")
-                .is_none_or(|id| Some(id) == e.subscription),
-            TeamError::ProjectionChanged
-        );
+        self.serialize(&tx, claim.proof.org, &claim.proof.account, claim.proof.live)
+            .await?;
         let allowed = match QuoteRepository::guard(
             &tx,
             claim.proof.actor,
@@ -555,6 +569,27 @@ impl CheckoutRepository {
             }
             Err(e) => return Err(e),
         };
+        let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND revision=$2 AND lease_id=$3 AND lease_until>clock_timestamp() AND disposition IN ('pending','session_open','awaiting_verification') AND organization_id=$4 AND account_id=$5 AND livemode=$6 FOR UPDATE",&[&claim.operation,&claim.revision,&claim.lease,&claim.proof.org,&claim.proof.account,&claim.proof.live]).await?;
+        let Some(row) = row else {
+            tx.commit().await?;
+            return Ok(false);
+        };
+        ensure!(
+            row.get::<_, Option<String>>("session_id")
+                .is_none_or(|id| id == e.id),
+            TeamError::ProjectionChanged
+        );
+        let deadline: DateTime<Utc> = row.get("lease_until");
+        let previous: String = row.get("disposition");
+        ensure!(
+            previous != "awaiting_verification" || e.status == "complete",
+            TeamError::ProjectionChanged
+        );
+        ensure!(
+            row.get::<_, Option<String>>("subscription_id")
+                .is_none_or(|id| Some(id) == e.subscription),
+            TeamError::ProjectionChanged
+        );
         if allowed {
             if let Some(b) = binding {
                 tx.execute("INSERT INTO team_stripe_bindings(organization_id,account_id,livemode,customer_id,subscription_id) VALUES($1,$2,$3,$4,$5)",&[&claim.proof.org,&claim.proof.account,&claim.proof.live,&claim.proof.customer,&b.snapshot.subscription_id]).await?;
@@ -574,7 +609,12 @@ impl CheckoutRepository {
             }
         };
         // Store provider identity even when the initiator lost access. Never auto-release ambiguity.
-        tx.execute("UPDATE team_stripe_checkout_intents SET session_id=$2,session_expires_at=$3,subscription_id=$4,observed_at=$5,disposition=$6,revision=revision+1,last_error_code=$7,last_http_status=NULL,attempts=0,retry_at=now()+interval '60 seconds',lease_id=NULL,lease_until=NULL WHERE operation_id=$1",&[&claim.operation,&e.id,&e.expires_at,&e.subscription,&e.observed_at,&state,&if allowed{None}else{Some("owner_authorization_changed")}]).await?;
+        tx.execute("UPDATE team_stripe_checkout_intents SET session_id=$2,session_expires_at=$3,subscription_id=$4,observed_at=$5,disposition=$6,revision=revision+1,last_error_code=$7,last_http_status=NULL,attempts=0,retry_at=clock_timestamp()+interval '60 seconds',lease_id=NULL,lease_until=NULL WHERE operation_id=$1",&[&claim.operation,&e.id,&e.expires_at,&e.subscription,&e.observed_at,&state,&if allowed{None}else{Some("owner_authorization_changed")}]).await?;
+        let checked_at: DateTime<Utc> = tx.query_one("SELECT clock_timestamp()", &[]).await?.get(0);
+        if checked_at >= deadline {
+            tx.rollback().await?;
+            return Ok(false);
+        }
         tx.commit().await?;
         Ok(allowed)
     }
@@ -588,7 +628,12 @@ impl CheckoutRepository {
         } else {
             "retry"
         };
-        self.pg.execute("UPDATE team_stripe_checkout_intents SET disposition=CASE WHEN $4='retry' THEN disposition ELSE $4 END,retry_at=GREATEST(now()+make_interval(secs=>LEAST(3600,15*power(2,LEAST(attempts,8)))::double precision),COALESCE($5,now())),last_error_code=$6,last_http_status=$7,lease_id=NULL,lease_until=NULL WHERE operation_id=$1 AND revision=$2 AND lease_id=$3 AND lease_until>now() AND disposition IN ('pending','session_open','awaiting_verification')",&[&claim.operation,&claim.revision,&claim.lease,&state,&e.retry_after,&e.kind.code(),&e.status]).await?;
+        let mut db = self.pg.transaction_client().await?;
+        let tx = db.transaction().await?;
+        self.serialize(&tx, claim.proof.org, &claim.proof.account, claim.proof.live)
+            .await?;
+        tx.execute("UPDATE team_stripe_checkout_intents SET disposition=CASE WHEN $4='retry' THEN disposition ELSE $4 END,retry_at=GREATEST(clock_timestamp()+make_interval(secs=>LEAST(3600,15*power(2,LEAST(attempts,8)))::double precision),COALESCE($5,clock_timestamp())),last_error_code=$6,last_http_status=$7,lease_id=NULL,lease_until=NULL WHERE operation_id=$1 AND revision=$2 AND lease_id=$3 AND lease_until>clock_timestamp() AND disposition IN ('pending','session_open','awaiting_verification') AND organization_id=$8 AND account_id=$9 AND livemode=$10",&[&claim.operation,&claim.revision,&claim.lease,&state,&e.retry_after,&e.kind.code(),&e.status,&claim.proof.org,&claim.proof.account,&claim.proof.live]).await?;
+        tx.commit().await?;
         Ok(())
     }
     fn view(r: &tokio_postgres::Row) -> CheckoutStatus {

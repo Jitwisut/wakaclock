@@ -52,7 +52,16 @@ def main():
             output=run(['cargo','test','-p','wakaclock-server','--lib',name,'--','--ignored','--nocapture','--test-threads=1'],name,env,ROOT/'backend/api')
             assert b'1 passed' in output, 'test did not execute'
             results[name]='passed'
-        files=['backend/api/src/repository/copilot_daily.rs','backend/api/src/repository/copilot_reports.rs',
+        files=['backend/api/src/repository/team_stripe_customer_resolution.rs',
+               'backend/api/src/repository/team_stripe_customer_recovery.rs',
+               'backend/api/src/repository/team_stripe_customer_dispatch.rs',
+               'backend/api/src/services/team_stripe_customer_request.rs',
+               'backend/api/src/repository/copilot_daily.rs','backend/api/src/repository/copilot_reports.rs',
+               'backend/api/src/services/team_financial_transaction.rs',
+               'backend/api/src/services/team_financial_transaction_tests.rs',
+               'backend/api/src/infrastructure/team_financial_transaction_tests.rs',
+               'backend/api/src/repository/team_financial_transaction_tests.rs',
+               'backend/api/src/repository/team_financial_transaction.rs',
                'backend/api/src/repository/copilot_admission.rs','backend/api/src/services/copilot_admission.rs',
                'backend/api/src/services/copilot_daily.rs','backend/api/src/repository/team_trust.rs',
                'backend/api/src/infrastructure/postgres.rs','backend/api/migrations/postgres/054_team_copilot_admissions.sql',

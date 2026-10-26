@@ -227,7 +227,7 @@ async fn execute(args: Args) -> Result<()> {
             }
             println!(
                 "{}",
-                serde_json::json!({"namespace":state.snapshot.namespace,"sequence":state.sequence,"legacy":legacy,"enrolled":enrolled,"closed":closed,"pending":pending,"scope":"enrollment_entitlement_only","financial_sources":"unconfirmed","product_authorization_enabled":false})
+                serde_json::json!({"namespace":state.snapshot.namespace,"sequence":state.sequence,"legacy":legacy,"enrolled":enrolled,"closed":closed,"pending":pending,"scope":"enrollment_entitlement_only","financial_sources":"unconfirmed","financial_transactions":state.snapshot.transactions.diagnostic(),"product_authorization_enabled":false})
             );
         }
         Command::VerifyDatabase {

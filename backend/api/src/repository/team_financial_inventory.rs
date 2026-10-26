@@ -22,11 +22,13 @@ pub struct Preview {
     pub digest: InventoryDigest,
     pub counts: BTreeMap<String, usize>,
     pub checkpoint: Option<Root>,
+    pub(super) checkpoint_transition: Option<Uuid>,
     pub checkpoint_matches: bool,
     pub identity_conflict: bool,
     pub account_unbound_records: bool,
     pub legacy_scope_unconfirmed: bool,
     pub independent_source_matches: bool,
+    pub financial_transaction_pending: bool,
 }
 impl Preview {
     /// Counts/booleans only. No financial payload, provider identity or root hash.
@@ -38,6 +40,7 @@ impl Preview {
             "account_unbound_records":self.account_unbound_records,
             "legacy_scope_unconfirmed":self.legacy_scope_unconfirmed,
             "independent_source_matches":self.independent_source_matches,
+            "financial_transaction_pending":self.financial_transaction_pending,
             "account_ingress_proof":"unconfirmed", "writer_fencing":"not_integrated",
             "financial_sources":"unconfirmed", "product_authorization_enabled":false,
             "production_ready":false})
@@ -51,17 +54,17 @@ struct Identity {
     subscription: Option<String>,
 }
 fn observations(
-    state: &crate::infrastructure::team_financial_guard::Read,
-    scope: &Scope,
+    state: &crate::services::team_financial_guard::Snapshot,
+    account: &str,
+    live: bool,
 ) -> Result<(Value, String)> {
     let entries: Vec<_> = state
-        .snapshot
         .sources
         .scopes
         .values()
-        .filter(|e| e.scope.account == scope.account && e.scope.live == scope.live)
+        .filter(|e| e.scope.account == account && e.scope.live == live)
         .collect();
-    let token = fingerprint(&(state.snapshot.namespace, &entries))?;
+    let token = fingerprint(&(state.namespace, &entries))?;
     let mut identities = Vec::new();
     for entry in entries {
         for outcome in entry
@@ -89,6 +92,89 @@ fn observations(
     }
     ensure!(identities.len() <= MAX_RECORDS, "financial_inventory_limit");
     Ok((serde_json::to_value(identities)?, token))
+}
+
+/// Shared historical ownership semantics for both inventory and writer scope
+/// discovery. Only parameter placeholders supplied by this module are embedded.
+fn ownership_cte(account: &str, live: &str, observed: &str) -> String {
+    format!(
+        r#"observed AS (SELECT * FROM jsonb_to_recordset({observed}::jsonb) AS i(organization uuid,customer text,subscription text)),
+identities AS (
+ SELECT organization_id AS organization,customer_id AS customer,NULL::text AS subscription FROM team_stripe_customer_operations WHERE account_id={account} AND livemode={live}
+ UNION ALL SELECT organization_id,customer_id,NULL FROM team_stripe_quotes WHERE account_id={account} AND livemode={live}
+ UNION ALL SELECT c.organization_id,q.customer_id,c.subscription_id FROM team_stripe_checkout_intents c JOIN team_stripe_quotes q ON q.id=c.quote_id WHERE c.account_id={account} AND c.livemode={live}
+ UNION ALL SELECT organization_id,customer_id,subscription_id FROM team_stripe_bindings WHERE account_id={account} AND livemode={live}
+ UNION ALL SELECT organization_id,customer_id,subscription_id FROM team_financial_source_tombstones WHERE account_id={account} AND livemode={live}
+ UNION ALL SELECT * FROM observed
+), owners AS (
+ SELECT DISTINCT organization,'customer'::text AS kind,customer AS identity FROM identities WHERE customer IS NOT NULL
+ UNION SELECT DISTINCT organization,'subscription',subscription FROM identities WHERE subscription IS NOT NULL
+)"#
+    )
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Associations {
+    pub organizations: Vec<Uuid>,
+    pub ambiguous: bool,
+    pub token: String,
+}
+pub(super) fn account_source_token(
+    guard: &FinancialGuard,
+    account: &crate::services::team_financial_ingress::Scope,
+) -> Result<String> {
+    account.key()?;
+    guard.namespace()?;
+    Ok(observations(&guard.read()?.snapshot, &account.account, account.live)?.1)
+}
+/// Read-only; caller must hold account then participant billing locks and compare
+/// again after waiting. A current binding alone never proves historical ownership.
+pub(super) async fn associations(
+    tx: &tokio_postgres::Transaction<'_>,
+    guard: &FinancialGuard,
+    account: &crate::services::team_financial_ingress::Scope,
+    customer: Option<&str>,
+    subscription: Option<&str>,
+) -> Result<Associations> {
+    account.key()?;
+    guard.namespace()?;
+    let (identities, before) =
+        observations(&guard.read()?.snapshot, &account.account, account.live)?;
+    let sql=format!("WITH {} SELECT DISTINCT organization FROM owners WHERE (kind='customer' AND identity=$4) OR (kind='subscription' AND identity=$5) ORDER BY organization LIMIT 101",ownership_cte("$1","$2","$3"));
+    let rows = tx
+        .query(
+            &sql,
+            &[
+                &account.account,
+                &account.live,
+                &identities,
+                &customer,
+                &subscription,
+            ],
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("financial_inventory_database_unavailable"))?;
+    ensure!(rows.len() <= 100, "financial_inventory_participant_limit");
+    ensure!(
+        observations(&guard.read()?.snapshot, &account.account, account.live)?.1 == before,
+        "financial_inventory_observation_changed"
+    );
+    let organizations = rows
+        .into_iter()
+        .map(|r| r.get::<_, Uuid>(0))
+        .collect::<Vec<_>>();
+    Ok(Associations {
+        ambiguous: organizations.len() > 1,
+        token: fingerprint(&(
+            "financial_association_v1",
+            before,
+            account,
+            customer,
+            subscription,
+            &organizations,
+        ))?,
+        organizations,
+    })
 }
 
 struct Table {
@@ -189,18 +275,7 @@ fn statement() -> String {
     // LIMIT+1 is an explicit failure, never a root of a silently truncated subset.
     format!(
         r#"
-WITH observed AS (SELECT * FROM jsonb_to_recordset($4::jsonb) AS i(organization uuid,customer text,subscription text)),
-identities AS (
- SELECT organization_id AS organization,customer_id AS customer,NULL::text AS subscription FROM team_stripe_customer_operations WHERE account_id=$2 AND livemode=$3
- UNION ALL SELECT organization_id,customer_id,NULL FROM team_stripe_quotes WHERE account_id=$2 AND livemode=$3
- UNION ALL SELECT c.organization_id,q.customer_id,c.subscription_id FROM team_stripe_checkout_intents c JOIN team_stripe_quotes q ON q.id=c.quote_id WHERE c.account_id=$2 AND c.livemode=$3
- UNION ALL SELECT organization_id,customer_id,subscription_id FROM team_stripe_bindings WHERE account_id=$2 AND livemode=$3
- UNION ALL SELECT organization_id,customer_id,subscription_id FROM team_financial_source_tombstones WHERE account_id=$2 AND livemode=$3
- UNION ALL SELECT * FROM observed
-), owners AS (
- SELECT DISTINCT organization,'customer'::text AS kind,customer AS identity FROM identities WHERE customer IS NOT NULL
- UNION SELECT DISTINCT organization,'subscription',subscription FROM identities WHERE subscription IS NOT NULL
-), associated_inbox AS (
+WITH {}, associated_inbox AS (
  SELECT i.* FROM team_stripe_inbox i WHERE i.account_id=$2 AND i.livemode=$3 AND EXISTS(
  SELECT 1 FROM owners o WHERE o.organization=$1 AND ((o.kind='customer' AND o.identity=i.customer_id) OR (o.kind='subscription' AND o.identity=i.subscription_id)))
 ), classified(table_name,columns) AS (VALUES {}),
@@ -218,6 +293,7 @@ SELECT jsonb_build_object(
  'legacy',EXISTS(SELECT 1 FROM billing_customers WHERE organization_id=$1 AND provider='stripe')
 ) FROM stats s
 "#,
+        ownership_cte("$2", "$3", "$4"),
         schema.join(","),
         facts.join(" UNION ALL "),
         MAX_RECORDS + 1,
@@ -302,9 +378,31 @@ pub async fn preview(
 ) -> Result<Preview> {
     scope.key()?;
     guard.namespace()?;
-    let (identities, before) = observations(&guard.read()?, scope)?;
-    let db = pg.transaction_client().await?;
-    let value: Value = db
+    let mut db = pg.transaction_client().await?;
+    let tx = db
+        .build_transaction()
+        .read_only(true)
+        .start()
+        .await
+        .map_err(|_| anyhow::anyhow!("financial_inventory_database_unavailable"))?;
+    let observed = in_transaction(&tx, guard, scope).await?;
+    tx.rollback()
+        .await
+        .map_err(|_| anyhow::anyhow!("financial_inventory_database_unavailable"))?;
+    Ok(observed)
+}
+
+/// Uses the caller's transaction, including its staged writes. It does not acquire
+/// writer locks, seed a source, or grant any authority; the coordinator must fence.
+pub(super) async fn in_transaction(
+    tx: &tokio_postgres::Transaction<'_>,
+    guard: &FinancialGuard,
+    scope: &Scope,
+) -> Result<Preview> {
+    scope.key()?;
+    guard.namespace()?;
+    let (identities, before) = observations(&guard.read()?.snapshot, &scope.account, scope.live)?;
+    let value: Value = tx
         .query_one(
             &statement(),
             &[
@@ -317,6 +415,214 @@ pub async fn preview(
         .await
         .map_err(|_| anyhow::anyhow!("financial_inventory_database_unavailable"))?
         .get(0);
+    materialize(guard, scope, value, before)
+}
+/// Sealed exact selection. No caller can supply arbitrary excluded IDs or a
+/// different participant list. It is evidence only, never a live lease grant.
+pub(super) struct CustomerResolution {
+    state: crate::services::team_financial_guard::Snapshot,
+    without: crate::services::team_financial_guard::Snapshot,
+    token: String,
+    scopes: Vec<Scope>,
+    request: crate::services::team_financial_source::AcceptedRequest,
+    outcomes: std::collections::BTreeMap<Uuid, String>,
+    scope: Scope,
+    customer: String,
+}
+impl CustomerResolution {
+    pub(super) fn state(&self) -> &crate::services::team_financial_guard::Snapshot {
+        &self.state
+    }
+    pub(super) fn scopes(&self) -> &[Scope] {
+        &self.scopes
+    }
+    pub(super) fn request(&self) -> &crate::services::team_financial_source::AcceptedRequest {
+        &self.request
+    }
+    pub(super) fn outcomes(&self) -> &std::collections::BTreeMap<Uuid, String> {
+        &self.outcomes
+    }
+    pub(super) fn scope(&self) -> &Scope {
+        &self.scope
+    }
+    pub(super) fn customer(&self) -> &str {
+        &self.customer
+    }
+    pub(super) fn resolved(&self, scope: &Scope) -> std::collections::BTreeSet<Uuid> {
+        if scope == &self.scope {
+            self.outcomes.keys().copied().collect()
+        } else {
+            Default::default()
+        }
+    }
+    pub(super) fn unchanged(&self, guard: &FinancialGuard) -> Result<()> {
+        ensure!(
+            observations(
+                &guard.read()?.snapshot,
+                &self.scope.account,
+                self.scope.live
+            )?
+            .1 == self.token,
+            "financial_inventory_observation_changed"
+        );
+        Ok(())
+    }
+    pub(super) async fn before(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        guard: &FinancialGuard,
+        scope: &Scope,
+    ) -> Result<Preview> {
+        ensure!(
+            self.scopes.contains(scope),
+            "financial_resolution_scope_changed"
+        );
+        self.unchanged(guard)?;
+        let (identities, _) = observations(&self.without, &scope.account, scope.live)?;
+        let value: Value = tx
+            .query_one(
+                &statement(),
+                &[
+                    &scope.organization,
+                    &scope.account,
+                    &scope.live,
+                    &identities,
+                ],
+            )
+            .await?
+            .get(0);
+        materialize(guard, scope, value, self.token.clone())
+    }
+}
+pub(super) async fn select_customer_resolution(
+    tx: &tokio_postgres::Transaction<'_>,
+    guard: &FinancialGuard,
+    scope: &Scope,
+    operation: Uuid,
+    customer: &str,
+) -> Result<CustomerResolution> {
+    use crate::services::team_financial_source::{OperationKind, ProviderIdentity};
+    scope.key()?;
+    ensure!(
+        crate::services::team_stripe::id(customer, "cus_"),
+        "financial_resolution_customer_invalid"
+    );
+    let account = crate::services::team_financial_ingress::Scope {
+        account: scope.account.clone(),
+        live: scope.live,
+    };
+    super::team_financial_ingress::lock(tx, &account).await?;
+    let state = guard.read()?.snapshot;
+    state.transactions.require_account_free(&account)?;
+    let entry = state
+        .sources
+        .scopes
+        .get(&scope.key()?)
+        .context("financial_source_uninitialized")?;
+    ensure!(
+        entry.frozen.is_empty()
+            && entry.pending.is_none()
+            && entry.head.is_some()
+            && entry
+                .conflicting_outcomes
+                .values()
+                .all(|o| o.operation != operation),
+        "financial_resolution_source_conflict"
+    );
+    let request = entry
+        .accepted
+        .get(&operation)
+        .context("financial_customer_request_unconfirmed")?
+        .clone();
+    ensure!(
+        request.kind == OperationKind::CreateCustomer,
+        "financial_resolution_operation_invalid"
+    );
+    let identity = Some(ProviderIdentity::Customer {
+        customer: customer.into(),
+    });
+    let evidence_hash = crate::services::team_stripe_customer_request::result_hash(
+        scope, operation, &identity, true,
+    )?;
+    let mut outcomes = std::collections::BTreeMap::new();
+    for outcome in entry.outcomes.values().filter(|o| o.operation == operation) {
+        ensure!(
+            outcome.request_hash == request.request_hash
+                && outcome.identity == identity
+                && outcome.evidence_hash == evidence_hash,
+            "financial_resolution_outcome_conflict"
+        );
+        if entry.unapplied_outcomes.contains(&outcome.id) {
+            outcomes.insert(outcome.id, fingerprint(outcome)?);
+        }
+    }
+    ensure!(
+        !outcomes.is_empty(),
+        "financial_resolution_no_unapplied_outcome"
+    );
+    let mut without = state.clone();
+    let old = without.sources.scopes.get_mut(&scope.key()?).unwrap();
+    for id in outcomes.keys() {
+        old.outcomes.remove(id);
+        old.unapplied_outcomes.remove(id);
+    }
+    let mut scopes = state
+        .sources
+        .scopes
+        .values()
+        .filter(|s| {
+            s.scope.account == scope.account
+                && s.scope.live == scope.live
+                && !crate::services::team_financial_transaction::retired_nonparticipant(
+                    &state,
+                    s,
+                    &[],
+                )
+        })
+        .map(|s| s.scope.clone())
+        .collect::<Vec<_>>();
+    scopes.sort_by_key(|s| s.organization);
+    ensure!(
+        !scopes.is_empty() && scopes.len() <= 100,
+        "financial_resolution_participant_limit"
+    );
+    let known = state
+        .sources
+        .scopes
+        .values()
+        .filter(|s| s.scope.account == scope.account && s.scope.live == scope.live)
+        .map(|s| s.scope.organization)
+        .collect::<std::collections::BTreeSet<_>>();
+    let sql=tx.query("SELECT organization_id FROM team_financial_source_heads WHERE account_id=$1 AND livemode=$2",&[&scope.account,&scope.live]).await?;
+    ensure!(
+        sql.iter().all(|r| known.contains(&r.get::<_, Uuid>(0))),
+        "financial_resolution_unknown_sql_scope"
+    );
+    // All account scopes are observed, before and after, rather than guessing
+    // participants from the request's current customer/binding alone.
+    for scope in &scopes {
+        super::team_seats::lock(tx, scope.organization).await?;
+    }
+    let selected = CustomerResolution {
+        token: observations(&state, &scope.account, scope.live)?.1,
+        state,
+        without,
+        scopes,
+        request,
+        outcomes,
+        scope: scope.clone(),
+        customer: customer.into(),
+    };
+    selected.unchanged(guard)?;
+    Ok(selected)
+}
+
+fn materialize(
+    guard: &FinancialGuard,
+    scope: &Scope,
+    value: Value,
+    before: String,
+) -> Result<Preview> {
     ensure!(
         value["schema_ok"] == true,
         "financial_inventory_schema_unclassified"
@@ -346,9 +652,22 @@ pub async fn preview(
     let source = guard.read()?;
     // Do not permit an observation spanning a source change in either direction.
     ensure!(
-        observations(&source, scope)?.1 == before,
+        observations(&source.snapshot, &scope.account, scope.live)?.1 == before,
         "financial_inventory_observation_changed"
     );
+    let financial_transaction_pending = source
+        .snapshot
+        .transactions
+        .require_account_free(&crate::services::team_financial_ingress::Scope {
+            account: scope.account.clone(),
+            live: scope.live,
+        })
+        .is_err()
+        || source
+            .snapshot
+            .transactions
+            .require_organization_free(scope.organization)
+            .is_err();
     let independent_source_matches = checkpoint.as_ref().is_some_and(|h| {
         let root = Root {
             schema: h.schema,
@@ -357,6 +676,7 @@ pub async fn preview(
             hash: h.hash.clone(),
         };
         matches
+            && !financial_transaction_pending
             && source
                 .snapshot
                 .sources
@@ -366,6 +686,7 @@ pub async fn preview(
     Ok(Preview {
         digest,
         counts: records.counts,
+        checkpoint_transition: checkpoint.as_ref().and_then(|h| h.transition),
         checkpoint: checkpoint.map(|h| Root {
             schema: h.schema,
             revision: h.revision,
@@ -377,6 +698,7 @@ pub async fn preview(
         account_unbound_records: value["unbound"] == true,
         legacy_scope_unconfirmed: value["legacy"] == true,
         independent_source_matches,
+        financial_transaction_pending,
     })
 }
 

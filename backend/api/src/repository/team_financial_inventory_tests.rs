@@ -36,6 +36,101 @@ fn source_inventory_json_requires_exact_contract_and_consistent_frozen_request()
     assert!(!err.contains("PRIVATE_INVENTORY_MARKER"));
 }
 
+async fn transaction_observation(
+    pg: &PostgresClient,
+    guard: &FinancialGuard,
+    scope: &Scope,
+    baseline: &InventoryDigest,
+) {
+    let mut db = pg.transaction_client().await.unwrap();
+    let tx = db.transaction().await.unwrap();
+    assert_eq!(
+        in_transaction(&tx, guard, scope).await.unwrap().digest,
+        *baseline
+    );
+    tx.execute(
+        "UPDATE team_stripe_customer_operations SET lookup_only=true WHERE organization_id=$1",
+        &[&scope.organization],
+    )
+    .await
+    .unwrap();
+    let staged = in_transaction(&tx, guard, scope).await.unwrap();
+    assert_ne!(staged.digest, *baseline);
+    // A diagnostic using another connection must not see the caller's staged
+    // writes. The future writer cannot substitute that observation for its own.
+    assert_eq!(preview(pg, guard, scope).await.unwrap().digest, *baseline);
+    let transition = Uuid::now_v7();
+    tx.execute("INSERT INTO team_financial_source_heads(organization_id,account_id,livemode,schema_version,revision,record_count,root_hash,transition_id,updated_at) VALUES($1,$2,$3,1,2,$4,$5,$6,now())",&[&scope.organization,&scope.account,&scope.live,&(staged.digest.records as i64),&staged.digest.hash,&transition]).await.unwrap();
+    let checkpoint = in_transaction(&tx, guard, scope).await.unwrap();
+    assert_eq!(checkpoint.digest, staged.digest);
+    assert!(checkpoint.checkpoint_matches);
+    assert_eq!(checkpoint.checkpoint.as_ref().unwrap().revision, 2);
+    // Reading our own matching checkpoint is still not independent authority.
+    assert!(!checkpoint.independent_source_matches);
+    assert!(preview(pg, guard, scope)
+        .await
+        .unwrap()
+        .checkpoint
+        .is_none());
+    tx.rollback().await.unwrap();
+    assert_eq!(preview(pg, guard, scope).await.unwrap().digest, *baseline);
+    assert!(preview(pg, guard, scope)
+        .await
+        .unwrap()
+        .checkpoint
+        .is_none());
+
+    let tx = db.transaction().await.unwrap();
+    tx.execute(
+        "UPDATE team_stripe_customer_operations SET lookup_only=true WHERE organization_id=$1",
+        &[&scope.organization],
+    )
+    .await
+    .unwrap();
+    let committed = in_transaction(&tx, guard, scope).await.unwrap().digest;
+    tx.commit().await.unwrap();
+    assert_eq!(preview(pg, guard, scope).await.unwrap().digest, committed);
+    pg.execute(
+        "UPDATE team_stripe_customer_operations SET lookup_only=false WHERE organization_id=$1",
+        &[&scope.organization],
+    )
+    .await
+    .unwrap();
+    assert_eq!(preview(pg, guard, scope).await.unwrap().digest, *baseline);
+
+    // The exact same decoder rejects unclassified schema and metadata even
+    // when they have not committed. Failure must not leave a baseline/seed.
+    let tx = db.transaction().await.unwrap();
+    tx.execute(
+        "ALTER TABLE team_stripe_quotes ADD COLUMN fixture_transaction_unknown text",
+        &[],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        in_transaction(&tx, guard, scope)
+            .await
+            .err()
+            .unwrap()
+            .to_string(),
+        "financial_inventory_schema_unclassified"
+    );
+    tx.rollback().await.unwrap();
+    let tx = db.transaction().await.unwrap();
+    tx.execute("UPDATE team_stripe_snapshots SET invoice_observation=invoice_observation||jsonb_build_object('prompt','PRIVATE_TX_INVENTORY_MARKER') WHERE organization_id=$1",&[&scope.organization]).await.unwrap();
+    assert_eq!(
+        in_transaction(&tx, guard, scope)
+            .await
+            .err()
+            .unwrap()
+            .to_string(),
+        "financial_inventory_json_contract_unsupported"
+    );
+    tx.rollback().await.unwrap();
+    assert_eq!(preview(pg, guard, scope).await.unwrap().digest, *baseline);
+    assert!(guard.read().unwrap().snapshot.sources.scopes.is_empty());
+}
+
 #[tokio::test]
 #[ignore = "requires isolated POSTGRES_TEST_URL and built operator CLI"]
 async fn financial_source_inventory_consistent_historical_scope_and_loss_detection() {
@@ -122,6 +217,7 @@ async fn financial_source_inventory_consistent_historical_scope_and_loss_detecti
     assert!(!baseline.account_unbound_records);
     assert!(baseline.checkpoint.is_none());
     assert!(!baseline.independent_source_matches);
+    transaction_observation(&pg, &guard, &scope, &baseline.digest).await;
     // Retry/lease/error scheduling must not alter semantic financial roots.
     for table in [
         "team_stripe_customer_operations",

@@ -272,6 +272,12 @@ pub enum Event {
         scope: Scope,
         outcome: Outcome,
     },
+    /// An invalid provider result and its absorbing integrity failure are one
+    /// durable fact; a crash cannot leave only the non-rejected half.
+    RejectedOutcome {
+        scope: Scope,
+        outcome: Outcome,
+    },
     Freeze {
         scope: Scope,
         reason: FreezeReason,
@@ -285,6 +291,7 @@ impl Event {
             | Self::Commit { scope, .. }
             | Self::Dispatch { scope, .. }
             | Self::Outcome { scope, .. }
+            | Self::RejectedOutcome { scope, .. }
             | Self::Freeze { scope, .. } => scope,
         }
     }
@@ -460,7 +467,10 @@ impl Snapshot {
                     .dispatches
                     .insert(dispatch.operation, dispatch.clone());
             }
-            Event::Outcome { outcome, .. } => {
+            Event::Outcome { outcome, .. } | Event::RejectedOutcome { outcome, .. } => {
+                if matches!(event, Event::RejectedOutcome { .. }) {
+                    entry.frozen.insert(FreezeReason::RequestIdentityConflict);
+                }
                 ensure!(
                     !outcome.id.is_nil()
                         && !outcome.operation.is_nil()
@@ -503,6 +513,7 @@ impl Snapshot {
                 }
                 if let Some(prior) = entry.outcomes.get(&outcome.id) {
                     if prior == outcome {
+                        self.scopes.insert(key, entry);
                         return Ok(());
                     }
                     entry.frozen.insert(FreezeReason::OutcomeIdentityConflict);

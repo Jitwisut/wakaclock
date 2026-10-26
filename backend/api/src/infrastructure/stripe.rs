@@ -199,6 +199,7 @@ pub struct StripeClient {
     client: reqwest::Client,
     origin: String,
     config: StripeApiConfig,
+    financial_guard: Option<crate::infrastructure::team_financial_guard::FinancialGuard>,
 }
 impl StripeClient {
     pub fn new(config: StripeApiConfig) -> Result<Self> {
@@ -215,6 +216,11 @@ impl StripeClient {
             client,
             origin,
             config,
+            financial_guard:
+                crate::infrastructure::team_financial_guard::FinancialObservation::from_environment(
+                )?
+                .guard()
+                .cloned(),
         })
     }
     #[cfg(test)]
@@ -229,6 +235,16 @@ impl StripeClient {
             false,
         )
         .unwrap()
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_guarded(
+        port: u16,
+        account: &str,
+        guard: crate::infrastructure::team_financial_guard::FinancialGuard,
+    ) -> Self {
+        let mut client = Self::fixture(port, account);
+        client.financial_guard = Some(guard);
+        client
     }
     pub fn account(&self) -> &str {
         &self.config.account_id
@@ -591,6 +607,10 @@ impl StripeClient {
         &self,
         claim: &crate::repository::team_stripe_customer::CustomerClaim,
     ) -> std::result::Result<CustomerLookup, ProviderError> {
+        claim
+            .provider_preflight(self.financial_guard.as_ref())
+            .await
+            .map_err(|_| ProviderError::scope())?;
         if !claim.lookup_only
             || claim.account_id != self.account()
             || claim.livemode != self.livemode()
@@ -671,25 +691,46 @@ impl StripeClient {
         &self,
         claim: &crate::repository::team_stripe_customer::CustomerClaim,
     ) -> std::result::Result<String, ProviderError> {
+        claim
+            .provider_preflight(self.financial_guard.as_ref())
+            .await
+            .map_err(|_| ProviderError::scope())?;
         if claim.lookup_only
             || claim.account_id != self.account()
             || claim.livemode != self.livemode()
         {
             return Err(ProviderError::scope());
         }
-        let operation = claim.operation_id.to_string();
+        let request = crate::services::team_stripe_customer_request::Request::new(
+            crate::services::team_financial_source::Scope {
+                organization: claim.organization_id,
+                account: claim.account_id.clone(),
+                live: claim.livemode,
+            },
+            claim.operation_id,
+            claim.actor,
+        )
+        .map_err(|_| ProviderError::contract())?;
         let value = self
             .request(
                 self.client
-                    .post(format!("{}/v1/customers", self.origin))
-                    .header(
-                        "Idempotency-Key",
-                        format!("atoaxis-customer-v1-{operation}"),
-                    )
-                    .form(&[("metadata[atoaxis_operation]", operation.as_str())]),
+                    .post(format!(
+                        "{}{}",
+                        self.origin,
+                        crate::services::team_stripe_customer_request::Request::PATH
+                    ))
+                    .header("Idempotency-Key", request.key())
+                    .form(&request.form()),
             )
             .await?;
-        Self::customer_identity(&value, claim)
+        let result = Self::customer_identity(&value, claim);
+        let customer = value["id"]
+            .as_str()
+            .filter(|id| crate::services::team_stripe::id(id, "cus_"));
+        claim
+            .retain_provider_result(customer, result.is_ok())
+            .map_err(|_| ProviderError::contract())?;
+        result
     }
     pub async fn verify_account(&self) -> std::result::Result<(), ProviderError> {
         let value = self.get("/v1/account").await?;
