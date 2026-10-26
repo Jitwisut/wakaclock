@@ -1,6 +1,6 @@
 # Phase 06 — VS Code extension family (Cline, Roo, Kilo, IBM Bob, Cody)
 
-สถานะ: **รอ Phase 05 + approval** (เจ้าของต้องติดตั้ง extension ตาม D4)
+สถานะ: **ขั้น 8 ใน README — รอขั้น 7 (Phase 03) + approval; สำรวจ storage ก่อนตาม ROADMAP P3** (เจ้าของต้องติดตั้ง extension ตาม D4)
 Tier: 2 · ขึ้นกับ: Phase 01, 02, `vscode_storage.rs` จาก Phase 05
 ทำขนานกับ Phase 07/08 ได้
 

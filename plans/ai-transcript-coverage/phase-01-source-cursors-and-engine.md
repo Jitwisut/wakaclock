@@ -1,7 +1,7 @@
 # Phase 01 — Source cursors และ parse engine
 
-สถานะ: **รอ Phase 00 + approval**
-ขึ้นกับ: Phase 00 (A4, A6) · ปลดล็อก: Phase 02–09
+สถานะ: **ขั้น 4 ใน README — รอขั้น 2 (Phase 02) + approval**
+ขึ้นกับ: Phase 00 (A4, A6), Phase 02 · ปลดล็อก: Phase 03–09
 
 ## เป้าหมาย
 

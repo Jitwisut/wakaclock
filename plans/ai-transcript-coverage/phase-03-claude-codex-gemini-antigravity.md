@@ -1,6 +1,6 @@
 # Phase 03 — Claude Code, Codex, Gemini CLI, Antigravity
 
-สถานะ: **รอ Phase 02 + approval** (ต้องได้คำตอบ Q4 และ Q8 ก่อน)
+สถานะ: **ขั้น 7 ใน README (ต่ออายุใบรับรอง Claude/Codex ทำก่อนในขั้น 3) — รอ approval** (ต้องได้คำตอบ Q4 ก่อน; Q8 ตอบแล้ว)
 Tier: 1 · ขึ้นกับ: Phase 01, 02
 
 ## เป้าหมาย

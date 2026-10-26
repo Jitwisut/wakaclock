@@ -1,7 +1,42 @@
 # AI Transcript Coverage Plan
 
 วันที่จัดทำ: 2026-10-26
-สถานะ: **Planning only — ยังไม่ได้รับอนุญาตให้แก้ protected AI/heartbeat code**
+สถานะ: **Phase 00 ทำในเครื่องเสร็จแล้ว รอผล SQL + ยอด 7 วัน — ยังไม่ได้รับอนุญาตให้แก้ protected AI/heartbeat code**
+
+## ตำแหน่งของแผนนี้
+
+- [`plans/ROADMAP.md`](../ROADMAP.md) เป็น **แผนหลักตัวเดียว** (นโยบาย accuracy-first, certification gate, ลำดับ P0–P3)
+- โฟลเดอร์นี้คือ **รายละเอียดการลงมือของ ROADMAP P3** + การแก้ข้อมูลซ้ำที่ Phase 00 พบ ถ้าขัดกับ ROADMAP ให้ ROADMAP ชนะ
+- `plans/ai-coverage-*`, `plans/planplugin/` เป็นประวัติงานเดิม อ่านเพื่ออ้างอิงเท่านั้น
+
+## แนวทาง — ลำดับงานเดียวที่ต้องทำตาม
+
+ทำทีละขั้นตามลำดับนี้ ห้ามข้ามขั้น ทุกขั้นที่แก้โค้ดต้องส่ง [คำขออนุมัติ](approval-gate-template.md) และรอคำตอบก่อน
+
+| ขั้น | งาน | ไฟล์รายละเอียด | ใครทำอะไร | เสร็จเมื่อ |
+|---|---|---|---|---|
+| 1 | ปิด Phase 00 | [phase-00](phase-00-baseline-and-contract.md), [ผล](phase-00-baseline-results.md) | เจ้าของรัน [SQL](phase-00-queries.sql) + ส่งยอดรายวัน 7 วัน (WakaTime + AtoAxis); Claude สรุปผล | ผลครบทุกข้อ, ตอบ Q2/Q3 |
+| 2 | **แก้ Claude นับบรรทัดซ้ำ** | [phase-02](phase-02-cross-source-dedupe-and-agent-ids.md) | Claude ส่งคำขออนุมัติ → แก้ hook ให้ส่ง tool-call ID จริง + claim ledger + fallback ±5s | duplicate ของข้อมูลใหม่ = 0 |
+| 3 | ต่ออายุใบรับรอง Claude Code + Codex | [phase-11](phase-11-certification-and-rollout.md) | เจ้าของทำ session ตามสคริปต์บน macOS → Windows → Linux VM | ใบรับรองใหม่ 3 OS |
+| 4 | โครงพื้นฐาน parser | [phase-01](phase-01-source-cursors-and-engine.md) | Claude ส่งคำขออนุมัติ → cursor SQLite/snapshot, registry, gate `emit_edit_heartbeats` | parser เดิมผลเท่าเดิมทุก byte |
+| 5 | GitHub Copilot (VS Code ก่อน, CLI ทีหลัง) | [phase-05](phase-05-github-copilot.md) | เครื่องเจ้าของมีข้อมูลจริงแล้ว → certify ได้ทันที | Copilot ได้ token/model + dry-run edit |
+| 6 | Cursor + Windsurf + cursor-agent | [phase-04](phase-04-cursor-windsurf-statevscdb.md) | เจ้าของติดตั้ง Cursor/Windsurf | certify macOS แล้วตาม OS อื่น |
+| 7 | Gemini CLI + Antigravity | [phase-03](phase-03-claude-codex-gemini-antigravity.md) | เจ้าของเปิด session Gemini จริง | fixture จริง + certify |
+| 8 | Tier 2 แบบ "สำรวจ storage ก่อน" | [phase-06](phase-06-vscode-extension-family.md), [phase-07](phase-07-jsonl-cli-family.md), [phase-08](phase-08-sqlite-app-family.md) | ทำเฉพาะ tool ที่ log มีหลักฐาน edit ชัด (ตาม ROADMAP P3 ข้อ 4–5); ที่เหลือบันทึก Unsupported | ทุก tool มีสถานะ |
+| 9 | Doctor / consent / dashboard | [phase-10](phase-10-doctor-dashboard-onboarding.md) | ทำคู่กับขั้น 5–8 ได้ทีละส่วน | ผู้ใช้เห็นและปิดเปิดได้ |
+| 10 | เปิดส่ง edit heartbeat ทีละ adapter | [phase-11](phase-11-certification-and-rollout.md) | คำขอแยกต่อ adapter พร้อมหลักฐาน 7 วัน ≤ 1% | ตาม DoD |
+| — | Tier 3 (long tail) | [phase-09](phase-09-generic-configurable-parser.md) | **ทำเมื่อมีผู้ใช้ขอเท่านั้น** ไม่อยู่ในลำดับหลัก | — |
+
+เหตุผลของลำดับ:
+- **ขั้น 2 ก่อนทุกอย่างที่เป็นโค้ด** — เป็น bug ที่ทำตัวเลข AI บน dashboard ผิดอยู่ตอนนี้ (Claude ~98k บรรทัดซ้ำ)
+  และไม่ต้องรอ cursor แบบใหม่ของขั้น 4
+- **ขั้น 3 เร็วและคุ้ม** — parser มีอยู่แล้ว ได้ชื่อเครื่องมือที่เชื่อถือได้กลับมา
+- **Copilot ก่อน Cursor** — มีข้อมูลจริงบนเครื่องแล้ว ไม่ต้องรอติดตั้ง
+- **Tier 3 ออกจากลำดับหลัก** — งานมาก ผู้ใช้น้อย และเสี่ยงต่อหลัก accuracy
+
+วิธีแก้ข้อมูลซ้ำที่เลือก (ขั้น 2): **แก้ hook ให้ส่ง tool-call ID จริง** (Claude `tool_use_id`, Codex `call_id` ในรูปแบบเดียวกับ
+transcript) แทนการคำนวณ hash ของ hook ซ้ำ เพราะ plugin ที่ติดตั้งจริง (1.0.2) ต่างจากโค้ดใน repo ทำให้การไล่ hash ทุกเวอร์ชันเปราะ;
+hook เวอร์ชันเก่าที่ยังส่งแบบเดิมใช้ fallback จับคู่ไฟล์เดียวกัน + เวลาห่าง ≤ 5 วินาที
 
 ## เป้าหมาย
 
@@ -74,21 +109,13 @@ AtoAxis มี parser แบบนี้อยู่แล้ว 3 ตัว (Cl
 | [phase-10-doctor-dashboard-onboarding.md](phase-10-doctor-dashboard-onboarding.md) | doctor, status, consent, dashboard |
 | [phase-11-certification-and-rollout.md](phase-11-certification-and-rollout.md) | live cert × 3 OS, ต่ออายุ, ปลด time-neutral |
 
-## ลำดับ Phase
+## หมายเลข phase กับลำดับงาน
 
-```
-00 ─► 01 ─► 02 ─► 03 ─► 04 ─► 05 ─┬─► 06 ─┐
-                                  ├─► 07 ─┼─► 09 ─► 10
-                                  └─► 08 ─┘
-11 (certification) ทำต่อท้ายทุก phase ที่ผลิต parser ใหม่; การปลด time-neutral ทำตอนท้าย
-```
+หมายเลขไฟล์ phase (00–11) เป็นแค่ชื่อเรียก **ลำดับที่ต้องทำคือตาราง "แนวทาง" ด้านบน**
+(ปรับ 2026-10-26 หลังผล Phase 00: ย้าย 02 มาก่อน 01, ย้าย 05 มาก่อน 04, ย้าย 09 ออกจากลำดับหลัก)
 
-- **00 ก่อนทุกอย่าง** เพราะต้องพิสูจน์ว่า tool-call ID มีทั้งสองฝั่ง และวัด duplicate ที่เกิดอยู่แล้ว
-- **01 ก่อน parser ใหม่** เพราะ cursor ปัจจุบันรองรับแค่ JSONL byte offset
-- **02 ก่อน 03** เพราะ duplicate ของ Claude/Codex เกิดอยู่แล้วตอนนี้ ไม่ควรเพิ่ม parser ก่อนแก้
-- **06/07/08 ทำขนานกันได้** เพราะใช้ engine จาก 01 และไม่แตะไฟล์เดียวกัน (แต่ละ phase เพิ่มไฟล์ parser ของตัวเอง
-  ส่วน registry/ID ต้อง merge ทีละ phase)
-- **09** ใช้บทเรียนจาก 06–08 ในการกำหนด descriptor
+- 06/07/08 ทำขนานกันได้ เพราะใช้ engine จาก 01 และเพิ่มไฟล์ parser ของตัวเอง (registry/ID ต้อง merge ทีละ phase)
+- 11 (certification) ทำต่อท้ายทุก phase ที่ผลิต parser ใหม่
 
 ## Tier
 
@@ -96,7 +123,7 @@ AtoAxis มี parser แบบนี้อยู่แล้ว 3 ตัว (Cl
 |---|---|---|
 | 1 | Claude Code, Codex, Gemini CLI, Antigravity, Cursor (IDE + cursor-agent), GitHub Copilot (VS Code + CLI), Windsurf | 03–05 |
 | 2 | Cline, Roo Code, Kilo Code, IBM Bob, Cody, OpenCode, Continue, Amp, Kiro, Qwen Code, Kimi / Kimi Code, Goose, Zed, Qoder, Factory Droid, Grok CLI, Warp, Pi | 06–08 |
-| 3 | OpenClaude, DeepSeek dsh, CodeBuddy, Codebuff, CodeWhale, Crush, Devin, Forge, Hermes, LingTai, Mistral Vibe, Mux, OMP, OpenClaw, Open Design, Quickwork, ZCode, Zerostack, Grok desktop | 09 |
+| 3 (ทำเมื่อมีผู้ใช้ขอ) | OpenClaude, DeepSeek dsh, CodeBuddy, Codebuff, CodeWhale, Crush, Devin, Forge, Hermes, LingTai, Mistral Vibe, Mux, OMP, OpenClaw, Open Design, Quickwork, ZCode, Zerostack, Grok desktop | 09 |
 
 ## Approval gate
 

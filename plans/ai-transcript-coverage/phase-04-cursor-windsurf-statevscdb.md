@@ -1,6 +1,6 @@
 # Phase 04 — Cursor IDE, Windsurf, cursor-agent CLI
 
-สถานะ: **รอ Phase 03 + approval** (เจ้าของต้องติดตั้ง Cursor และ Windsurf ตาม D4)
+สถานะ: **ขั้น 6 ใน README — รอ Phase 05 + approval** (เจ้าของต้องติดตั้ง Cursor และ Windsurf ตาม D4)
 Tier: 1 · ขึ้นกับ: Phase 01 (SQLite reader), Phase 02 (claims)
 
 ## เป้าหมาย

@@ -1,6 +1,6 @@
 # Phase 08 — SQLite app family (OpenCode, Goose, Zed, Qoder, Warp)
 
-สถานะ: **รอ Phase 05 + approval** (ต้องได้คำตอบ Q5 ก่อน)
+สถานะ: **ขั้น 8 ใน README — รอขั้น 7 (Phase 03) + approval; สำรวจ storage ก่อนตาม ROADMAP P3** (ต้องได้คำตอบ Q5 ก่อน)
 Tier: 2 · ขึ้นกับ: Phase 01 (`sqlite_source.rs`), Phase 02 · ทำขนานกับ Phase 06/07 ได้
 
 ## เป้าหมาย

@@ -1,6 +1,6 @@
 # Phase 05 — GitHub Copilot (VS Code + CLI)
 
-สถานะ: **รอ Phase 04 + approval** (ต้องได้คำตอบ Q1 เรื่อง `copilot` / `copilot-cli`)
+สถานะ: **ขั้น 5 ใน README (ทำก่อน Phase 04 เพราะเครื่องเจ้าของมีข้อมูลจริงแล้ว) — รอ Phase 01 + approval** (ต้องได้คำตอบ Q1 เรื่อง `copilot` / `copilot-cli`)
 Tier: 1 · ขึ้นกับ: Phase 01 (snapshot + SQLite), Phase 02
 
 ## เป้าหมาย

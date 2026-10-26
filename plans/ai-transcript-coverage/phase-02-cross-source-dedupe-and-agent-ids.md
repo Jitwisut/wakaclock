@@ -1,7 +1,8 @@
 # Phase 02 — ตัดซ้ำ hook ↔ transcript และเพิ่ม agent ID
 
-สถานะ: **รอ Phase 01 + approval** (ต้องได้คำตอบ Q1 ก่อน)
-ขึ้นกับ: Phase 00 (A1–A3, A5), Phase 01 · ปลดล็อก: Phase 03 เป็นต้นไป
+สถานะ: **ขั้น 2 ใน README (ทำก่อน Phase 01) — รอ Phase 00 + approval** (ต้องได้คำตอบ Q1 ก่อนเพิ่ม agent ID)
+ขึ้นกับ: Phase 00 (A1–A3, A5, A8) · ไม่ต้องรอ Phase 01 (ledger ใช้แค่ตารางใหม่ใน `state.rs`) · ปลดล็อก: Phase 01 เป็นต้นไป
+วิธีที่เลือก: **(b) แก้ hook ให้ส่ง tool-call ID จริง** + fallback ไฟล์เดียวกัน ±5s สำหรับ hook เวอร์ชันเก่า (ดู README)
 
 ## เป้าหมาย
 
