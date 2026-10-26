@@ -132,7 +132,21 @@ fn parse_usage(&self, ctx: &ParseContext, cursor: Option<&ParserCursor>)
 - ส่งผ่าน `POST /api/v1/ai/usage` (`AiUsageRecord`) ตามเดิม idempotent ด้วย `usage_event_id`
 - ไม่เปลี่ยน wire format
 
-### 9. Panic isolation
+### 9. Gate "ส่ง edit heartbeat" ต่อ adapter (ตาม Q9 / ผล Phase 00 A6)
+
+- heartbeat ทุกแถวเป็น anchor ที่นับเวลาได้แม้ `active_seconds=0` จึงต้องมี gate ต่อ adapter:
+  `emit_edit_heartbeats: bool` ใน manifest (`core/src/ai/adapter.rs`) — **ค่าเริ่ม `false`** สำหรับ parser ใหม่ทุกตัว
+- `false` → `run_ai_sync` ส่งแค่ usage (`/api/v1/ai/usage`) และเก็บ edit ที่ "จะส่ง" ไว้ในเครื่องเพื่อใช้ทำหลักฐาน Phase 11
+- `true` เฉพาะ Claude Code / Codex / Gemini CLI (ส่ง edit อยู่แล้วก่อนแผนนี้ ไม่เปลี่ยนพฤติกรรม)
+- การเปลี่ยนเป็น `true` ของ adapter ใหม่ = คำขออนุมัติแยกใน Phase 11
+
+### 10. ที่เก็บ edit แบบ dry-run
+
+- ตารางใหม่ใน `state.rs`: `dry_run_edits(parser_id, event_id, occurred_at, path_hash, lines_added, lines_deleted, model)`
+  ไม่เก็บ path ตรงๆ และไม่เก็บเนื้อหา prune 30 วัน
+- `wakaclock ai dry-run-report --agent <id> --days 7` สรุปจำนวน edit/บรรทัด และ timestamp สำหรับจำลองยอดเวลาแบบ offline
+
+### 11. Panic isolation
 
 - ห่อทุกการเรียก `parse_since` และ `parse_usage` ด้วย `std::panic::catch_unwind(AssertUnwindSafe(..))`
 - panic = บันทึก warning `parser_panic` ใน diagnostics, ไม่ขยับ cursor, ไปต่อ parser ถัดไป

@@ -115,7 +115,7 @@ fixtures ใต้ `core/src/ai/fixtures/<tool>/` (สังเคราะห�
 3. ผล: Tier 2 เก้าตัวได้ข้อมูลเท่าที่ log มี (เริ่ม time-neutral)
 4. ความเสี่ยง: map ผิดทำ edit ปลอม, join ผิด session, ซ้ำกับ hook ของ Kimi
 5. หลักฐาน: tests + live cert
-- Baseline: time-neutral → ผลต่อเวลา 0%
+- Baseline: time-neutral = ส่งแค่ usage (`emit_edit_heartbeats=false`, [Phase 01 ข้อ 9](phase-01-source-cursors-and-engine.md)); edit เก็บแบบ dry-run จนกว่า Phase 11 อนุมัติ → ผลต่อเวลา 0%
 
 ## Exit criteria
 

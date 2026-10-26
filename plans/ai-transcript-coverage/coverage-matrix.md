@@ -62,7 +62,7 @@
 | cursor-agent CLI | `~/.cursor/projects/*/agent-transcripts/**.jsonl`, `~/.cursor/ai-tracking/ai-code-tracking.db` | J+S | ✔ | ? | ? | ✔ | ? | 04 |
 | Windsurf | `AppSup/Windsurf/User/globalStorage/state.vscdb` (schema เดียวกับ Cursor) | S | ✔ | ✔ | ✔ | ✔ | bubbleId | 04 |
 | Copilot (VS Code) | `AppSup/Code/User/workspaceStorage/<hash>/chatSessions/*.json(l)`, `…/chatEditingSessions/<id>/state.json`; `globalStorage/github.copilot-chat/agent-traces.db` | N+S | ✔ | ✔ | ✔ | ✔ | requestId? | 05 |
-| Copilot CLI | `~/.copilot/session-state/<id>/events.jsonl`, `~/.copilot/session-store.db` | J+S | ✔ telemetry lines | ✔ | ✔ | ✔ | ? | 05 |
+| Copilot CLI | `~/.copilot/session-state/<id>/events.jsonl`; store ที่พบจริงบน macOS (P00): `AppSup/Code/User/globalStorage/github.copilot-chat/session-store.db` (`sessions`, `turns`, `session_files`, `checkpoints`) | J+S | ✔ telemetry lines / `session_files` | ✔ | ✔ | ✔ | ? | 05 |
 
 ### Tier 2
 

@@ -118,10 +118,10 @@ struct UiMessagesProfile {
 
 1. ไฟล์: ตามหัวข้อ "ไฟล์"
 2. ทำ: parser ร่วม `ui_messages.json` 4 profile + Cody
-3. ผล: Tier 2 ห้าตัวได้ edit + token (เริ่ม time-neutral)
+3. ผล: Tier 2 ห้าตัวได้ token ทันที; edit เก็บแบบ dry-run จนกว่าจะ certify (time-neutral)
 4. ความเสี่ยง: นับ edit ที่ถูก reject, ซ้ำกับ Kilo plugin/Roo bridge, prompt หลุด
 5. หลักฐาน: tests + live cert
-- Baseline: time-neutral → ผลต่อเวลา 0%
+- Baseline: time-neutral = ส่งแค่ usage (`emit_edit_heartbeats=false`, [Phase 01 ข้อ 9](phase-01-source-cursors-and-engine.md)); edit เก็บแบบ dry-run จนกว่า Phase 11 อนุมัติ → ผลต่อเวลา 0%
 
 ## Exit criteria
 

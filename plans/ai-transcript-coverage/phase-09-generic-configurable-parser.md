@@ -136,7 +136,7 @@ tool ที่ไม่ได้ cert ยังส่งข้อมูลได
 3. ผล: Tier 3 ส่งข้อมูลได้ (Unattributed จนกว่าจะ cert, เริ่ม time-neutral)
 4. ความเสี่ยง: descriptor ถูกใช้อ่านไฟล์นอกขอบเขต, map ผิดทำ edit ปลอม, dependency ใหม่ (zstd)
 5. หลักฐาน: tests + fuzz + live cert ที่ทำได้
-- Baseline: time-neutral → ผลต่อเวลา 0%
+- Baseline: time-neutral = ส่งแค่ usage (`emit_edit_heartbeats=false`, [Phase 01 ข้อ 9](phase-01-source-cursors-and-engine.md)); edit เก็บแบบ dry-run จนกว่า Phase 11 อนุมัติ → ผลต่อเวลา 0%
 
 ## Exit criteria
 

@@ -98,18 +98,23 @@
 - **ทำมือ**: รอบทุก 4 สัปดาห์ ใช้ checklist นี้ จัดลำดับตามวันที่จะหมด
 - ไม่ว่าแบบไหน: doctor ต้องเตือนล่วงหน้า 7 วันก่อนหมดอายุ (Phase 10)
 
-## การปลด time-neutral (ต่อ adapter)
+## การปลด time-neutral = เปิดส่ง edit heartbeat (ต่อ adapter)
+
+ผล Phase 00 (A6): heartbeat ทุกแถวเป็น anchor ที่นับเวลาได้แม้ `active_seconds=0` จึงตัดสิน (Q9, 2026-10-26) ว่า
+ก่อน certify parser ใหม่ส่งได้แค่ usage (token/model/prompt count) ทาง `/api/v1/ai/usage` เท่านั้น
+edit heartbeat จะเปิดเมื่อผ่านเงื่อนไขด้านล่าง และเมื่อเปิดแล้วจะนับเวลาแบบเดียวกับ WakaTime
 
 เงื่อนไขก่อนขอ:
 1. adapter `verified` บนทุก OS ที่รองรับ
-2. ข้อมูลจริง 7 วันทำงานที่ adapter นั้นส่ง (time-neutral) อยู่แล้ว
-3. จำลองยอดแบบ "ถ้านับเวลา" บนข้อมูล 7 วันนั้น (offline, ไม่แก้ production) แล้วเทียบ WakaTime
+2. ใช้ `wakaclock ai sync --dry-run` เก็บ edit ที่ "จะส่ง" ของ adapter นั้น 7 วันทำงาน (ไม่ส่งจริง)
+3. จำลองยอดแบบ "ถ้าส่ง edit" บนข้อมูล 7 วันนั้น (offline, ไม่แก้ production) แล้วเทียบ WakaTime
 4. ยอด `wakatime_compatible` ต้องห่าง WakaTime ≤ 1% ทั้งก่อนและหลังจำลอง
 
 คำขอต้องใช้ [approval-gate-template.md](approval-gate-template.md) ส่วน locked baseline ครบ 3 ข้อ
 พร้อมตัวเลขจริง และเป็นคำขอแยกต่อ adapter
 
-ถ้า Phase 00 พบว่า time-neutral กระทบยอดผ่าน anchor (A6) ส่วนนี้ต้องออกแบบใหม่ตามคำตอบ Q9
+หมายเหตุ: Claude Code, Codex, Gemini CLI ส่ง edit heartbeat จาก transcript อยู่แล้วก่อนแผนนี้ (เป็นส่วนหนึ่งของ
+baseline ปัจจุบัน) จึงไม่ถูกบังคับให้ถอยเป็น usage-only
 
 ## Rollout ของ client
 
@@ -124,7 +129,7 @@
 | ระดับ | วิธี | ผล |
 |---|---|---|
 | ปิด tool เดียว | `wakaclock ai sources disable <id>` (Phase 10) หรือ flag ใน manifest | parser ไม่ถูกเรียก, cursor คงอยู่ |
-| ปิดการนับเวลา | กลับเป็น time-neutral ต่อ adapter | ยอดเวลากลับเป็นเหมือนก่อนปลด |
+| ปิดการนับเวลา | ปิดการส่ง edit heartbeat ของ adapter (กลับเป็น usage-only) | edit ใหม่ไม่ถูกส่ง; แถวที่ส่งไปแล้วยังนับอยู่ ต้องให้เจ้าของตัดสินใจเรื่องข้อมูลเก่า |
 | ถอย client | ติดตั้ง version ก่อนหน้า | `parser_state` ใหม่ยังอ่านได้ (serde default) |
 | ข้อมูลผิดบน server | ไม่ลบเอง ต้องให้เจ้าของตัดสินใจ (D9 รูปแบบเดียวกัน) | — |
 

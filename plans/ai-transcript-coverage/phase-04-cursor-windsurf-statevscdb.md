@@ -105,11 +105,11 @@ Tier: 1 · ขึ้นกับ: Phase 01 (SQLite reader), Phase 02 (claims)
 
 1. ไฟล์: ตามหัวข้อ "ไฟล์"
 2. ทำ: ตัวอ่าน `cursorDiskKV` แบบ read-only + parser 3 ตัว
-3. ผล: Cursor/Windsurf/cursor-agent ได้ edit + token + model (เริ่ม time-neutral)
+3. ผล: Cursor/Windsurf/cursor-agent ได้ token + model ทันที; edit เก็บแบบ dry-run จนกว่าจะ certify (time-neutral)
 4. ความเสี่ยง: lock database ของ editor ที่กำลังใช้, อ่านข้อมูลเกินจำเป็น, reject ถูกนับเป็น edit,
    schema เปลี่ยนตาม version
 5. หลักฐาน: tests ข้างบน, checksum test, live cert 3 OS
-- Baseline: time-neutral → ผลต่อเวลา 0%
+- Baseline: time-neutral = ส่งแค่ usage (`emit_edit_heartbeats=false`, [Phase 01 ข้อ 9](phase-01-source-cursors-and-engine.md)); edit เก็บแบบ dry-run จนกว่า Phase 11 อนุมัติ → ผลต่อเวลา 0%
 
 ## Exit criteria
 

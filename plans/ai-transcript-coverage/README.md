@@ -25,7 +25,9 @@ AtoAxis มี parser แบบนี้อยู่แล้ว 3 ตัว (Cl
   ห้ามเขียน ห้าม lock นาน ห้าม copy ทั้ง database
 - Parser หนึ่งตัวพังต้องไม่ทำให้ parser อื่นหรือ editor heartbeat ปกติหยุด
 - event ID ที่ส่งไปแล้วต้องคงเดิมเมื่อ re-parse (idempotent) ห้ามส่งซ้ำ
-- เครื่องมือที่จับได้ใหม่เริ่มแบบ **time-neutral**: ไม่เพิ่มวินาที AI เข้ายอดจนกว่าจะผ่าน Phase 11
+- เครื่องมือที่จับได้ใหม่เริ่มแบบ **time-neutral**: ก่อน certify ส่ง **เฉพาะ usage** (token/model/prompt count)
+  ทาง `POST /api/v1/ai/usage` ซึ่งไม่แตะ timeline ห้ามส่ง edit heartbeat (แม้ `active_seconds=0` ก็ยังเป็น anchor
+  ที่นับเวลาได้ — ผล Phase 00 A6) การเปิดส่ง edit heartbeat ทำทีละ adapter ใน Phase 11
 - ชื่อเครื่องมือจะแสดงได้ก็ต่อเมื่ออยู่ใน `KNOWN_AGENT_IDS` และ source เป็น verified-tier
   นอกนั้นเป็น "Unattributed AI" ตามกฎเดิม (`enforce_attribution_policy`)
 - ไม่แตะค่าใดในตาราง Locked baseline (AI cap 6h, editor > AI, idle 15m, `wakatime_compatible`)
@@ -39,7 +41,7 @@ AtoAxis มี parser แบบนี้อยู่แล้ว 3 ตัว (Cl
 | D3 | License | Clean-room: ใช้แค่ข้อเท็จจริง (path, ชื่อตาราง/field) เขียน Rust เอง ไม่แปลโค้ด Go |
 | D4 | Live test | เจ้าของติดตั้ง tool ทีละตัวเมื่อถึง phase; verified ได้จากการรันจริงเท่านั้น |
 | D5 | Scope | ครบทุก tool ในตลาด แบ่ง 3 tier |
-| D6 | เวลา | เริ่ม time-neutral; เปิดนับทีละ adapter หลัง certify + 7 วันห่าง WakaTime ≤ 1% |
+| D6 | เวลา | เริ่ม time-neutral = ส่งแค่ usage ก่อน certify (แก้ 2026-10-26 ตามผล A6); เปิดส่ง edit heartbeat ทีละ adapter หลัง certify + หลักฐาน 7 วันห่าง WakaTime ≤ 1% |
 | D7 | Late hook | รอ hook 5 นาที (grace) ถ้ายังชนให้บันทึก conflict ไม่ retract |
 | D8 | OS | **ทุก OS ต้อง certify** (macOS, Windows, Linux; tool ที่ไม่มีบน OS นั้นบันทึก N/A). เครื่องทดสอบ: macOS = เครื่องหลัก, Windows = เครื่องจริงของเจ้าของ, Linux = VM |
 | D9 | Duplicate เก่า | Phase 00 วัดแบบอ่านอย่างเดียว แล้วให้เจ้าของตัดสินใจเรื่อง backfill |
@@ -137,4 +139,4 @@ AtoAxis มี parser แบบนี้อยู่แล้ว 3 ตัว (Cl
 | Q6 | Tool ที่ไม่มี hook ต้องขอ consent แยกต่อ tool หรือไม่ (ตอนนี้ sync ผูกกับ hook consent) | P10 |
 | Q7 | รอบต่ออายุใบรับรอง 30 วัน: อัตโนมัติด้วย campaign script หรือทำมือ | P11 |
 | ~~Q8~~ | ~~เครื่อง Windows/Linux สำหรับ certify~~ → **ตอบแล้ว 2026-10-26**: Windows ใช้เครื่องจริง, Linux ใช้ VM (ดู [Phase 11](phase-11-certification-and-rollout.md)) | — |
-| Q9 | ถ้าการทดสอบ anchor ใน P00 พบว่า time-neutral ทำให้ยอดขยับ จะเลือกทางไหน | หลัง P00 |
+| ~~Q9~~ | ~~ถ้า time-neutral ทำให้ยอดขยับ~~ → **ตอบแล้ว 2026-10-26**: ก่อน certify ส่งแค่ usage; edit heartbeat เปิดทีละ adapter หลัง certify | — |

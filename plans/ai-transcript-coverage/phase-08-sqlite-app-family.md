@@ -103,7 +103,7 @@ struct SqliteProfile {
 3. ผล: OpenCode/Goose/Qoder (+Zed/Warp ถ้าผ่านการสำรวจ) ได้ข้อมูล (เริ่ม time-neutral)
 4. ความเสี่ยง: lock db ของแอปที่เปิดอยู่, schema เปลี่ยน, ซ้ำกับ plugin OpenCode
 5. หลักฐาน: tests + checksum + live cert
-- Baseline: time-neutral → ผลต่อเวลา 0%
+- Baseline: time-neutral = ส่งแค่ usage (`emit_edit_heartbeats=false`, [Phase 01 ข้อ 9](phase-01-source-cursors-and-engine.md)); edit เก็บแบบ dry-run จนกว่า Phase 11 อนุมัติ → ผลต่อเวลา 0%
 
 ## Exit criteria
 

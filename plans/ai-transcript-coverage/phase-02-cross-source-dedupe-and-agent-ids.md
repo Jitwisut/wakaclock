@@ -27,6 +27,21 @@
   `record_event_alias`, `mark_fingerprint` มีแต่ไม่มีผู้เรียกนอก test
 - `KNOWN_AGENT_IDS` (`core/src/ai/event.rs` ~27-44) มี 16 ID
 
+## ผล Phase 00 ที่เปลี่ยน design (2026-10-26)
+
+- hook **ไม่ได้ส่ง** tool-call ID ดิบ: Claude hook อ่าน `tool_use_id` แต่ส่ง `claude-code-<sha256(session|tool_use_id|file)[:40]>`
+  เป็น `tool_call_id`; Codex hook ส่ง `call_id` ดิบ (ถ้ามี) แต่ transcript ใส่ `<session>:` นำหน้า → จับคู่ด้วย ID ได้ 0 คู่
+- client ซ้ำจริง: Claude hook 1,971 แถว มีคู่ transcript ภายใน ±5s 1,800 แถว (~98k บรรทัด) — ดู [ผล Phase 00](phase-00-baseline-results.md)
+- ดังนั้น `tool_call_id` ใน ledger ต้องได้จากทางใดทางหนึ่ง (เลือกใน approval ของ phase นี้):
+  - **(a) คำนวณซ้ำจาก transcript**: transcript มี `sessionId`, `tool_use_id`, `filePath` ครบ → client คำนวณ event ID แบบเดียวกับ hook
+    แล้ว claim ด้วยค่านั้น ไม่ต้องแก้ hook แต่ต้องยืนยันว่า input ของ hash ตรงกันทุกกรณี (path แบบเดียวกัน)
+    **ระวัง**: plugin ที่ติดตั้งจริง (1.0.2 ใน `~/.claude/plugins/cache/...`) ต่างจากไฟล์ใน repo ต้องยืนยันสูตร hash จาก
+    version ที่ติดตั้งจริงทุก version ที่ยังมีผู้ใช้
+  - **(b) แก้ hook** ให้ส่ง `tool_use_id` / `call_id` ดิบเป็น `tool_call_id` (protected, ต้องออก plugin version ใหม่) และ normalize
+    ID ของ Codex ให้ตรงกับ transcript (ตัด `<session>:` หรือเติมให้เหมือนกัน)
+  - ไม่ว่าเลือกทางไหน ต้องมี **fallback ตามเวลา/ไฟล์** (agent + path hash + ±5s) สำหรับ hook version เก่าที่ยังส่งแบบเดิม
+- ยังมี source `ide_telemetry` (transport `shell_hook`) จำนวนมากใน sidecar ต้องตรวจว่าซ้ำกับ hook/transcript หรือไม่ก่อนออกแบบ ledger ให้ครบ
+
 ## หลักการออกแบบ
 
 - **ไม่เปลี่ยน event ID ของ hook หรือ transcript ที่ส่งไปแล้ว** (เปลี่ยน = แถวเก่ากับใหม่ไม่ dedupe กัน)

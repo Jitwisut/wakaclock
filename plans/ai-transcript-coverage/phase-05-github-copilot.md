@@ -97,11 +97,11 @@ session ตามสคริปต์มาตรฐาน + กรณี rejec
 
 1. ไฟล์: ตามหัวข้อ "ไฟล์"
 2. ทำ: parser Copilot VS Code (snapshot + patch log + traces db) และ Copilot CLI (JSONL + db)
-3. ผล: Copilot ได้ edit + token + model (เริ่ม time-neutral)
+3. ผล: Copilot ได้ token + model ทันที; edit เก็บแบบ dry-run จนกว่าจะ certify (time-neutral)
 4. ความเสี่ยง: prompt หลุด (ไฟล์มีข้อความเต็ม), reject ถูกนับ, patch log เล่นผิด, schema เปลี่ยนตาม
    version ของ extension
 5. หลักฐาน: tests + marker test + live cert 3 OS
-- Baseline: time-neutral → ผลต่อเวลา 0%
+- Baseline: time-neutral = ส่งแค่ usage (`emit_edit_heartbeats=false`, [Phase 01 ข้อ 9](phase-01-source-cursors-and-engine.md)); edit เก็บแบบ dry-run จนกว่า Phase 11 อนุมัติ → ผลต่อเวลา 0%
 
 ## Exit criteria
 

@@ -61,7 +61,7 @@
 
 - เพิ่มชื่อ/ไอคอนของ agent ID ใหม่ใน frontend (ตาม [`.context/workflows/adding-dashboard-panel.md`](../../.context/workflows/adding-dashboard-panel.md))
 - Tool ที่มีแค่ token ไม่มี edit: แสดงตาม Q5 (เช่น อยู่ในหน้า usage/cost แต่ไม่อยู่ในกราฟบรรทัด)
-- Tool ที่ยัง time-neutral: แสดงบรรทัด/token ได้ แต่ต้องไม่ทำให้ดูเหมือนเวลา AI เพิ่ม
+- Tool ที่ยัง time-neutral (ส่งแค่ usage): แสดง token/model ได้; บรรทัดมีแค่ใน dry-run ในเครื่อง แต่ต้องไม่ทำให้ดูเหมือนเวลา AI เพิ่ม
   และต้องมีป้ายบอกว่า "ยังไม่นับเวลา"
 - **การเปลี่ยน label, unit, rounding หรือข้อความที่อาจทำให้ผู้ใช้เข้าใจจำนวนเวลาเปลี่ยน**
   อยู่ใน protected scope หมวด 4 ของ heartbeat-safety ต้องขออนุมัติแยก

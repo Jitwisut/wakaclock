@@ -114,7 +114,7 @@ Tier: 1 · ขึ้นกับ: Phase 01, 02
 3. ผล: Claude/Codex/Gemini/Antigravity ได้ edit + token + model; ใบรับรองใหม่
 4. ความเสี่ยง: แก้ parser เดิมแล้วพฤติกรรมเปลี่ยน, `$rewindTo` ทำ edit ผี, fixture หลุดเนื้อหาจริง
 5. หลักฐาน: golden, privacy test, live cert 3 OS
-- Baseline: Antigravity เริ่ม time-neutral; Claude/Codex/Gemini คงพฤติกรรมเวลาเดิม → ผลต่อเวลา 0%
+- Baseline: Antigravity เริ่ม time-neutral (ส่งแค่ usage, `emit_edit_heartbeats=false`); Claude/Codex/Gemini คงพฤติกรรมเวลาเดิม → ผลต่อเวลา 0%
 
 ## Exit criteria
 
