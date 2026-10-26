@@ -597,6 +597,27 @@ enum AgentAction {
 }
 
 #[derive(Subcommand)]
+enum AiSourcesAction {
+    /// Show each tool, whether it is read, and the local dry-run edit totals.
+    List {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Stop reading this tool's local logs.
+    Disable {
+        agent: String,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Read this tool's local logs again, starting from now (the gap is not backfilled).
+    Enable {
+        agent: String,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum AiAction {
     /// Commit metadata records before returning per-ID/hash durable acknowledgements.
     ProducerBatch {
@@ -638,6 +659,12 @@ enum AiAction {
     Status {
         #[arg(long, default_value_t = false)]
         json: bool,
+    },
+    /// List the local AI tools whose logs AtoAxis reads, or turn one off or back on.
+    /// Every tool is on by default; turning one off stops reading its logs entirely.
+    Sources {
+        #[command(subcommand)]
+        action: AiSourcesAction,
     },
     /// Print the local topology identity used by remote/container collector setup.
     /// The output contains only opaque IDs; local paths and repository URLs stay
@@ -730,8 +757,8 @@ enum AiAction {
     /// extension) — plan.md 8.2 requires attribution to keep working "when an agent
     /// edits files outside VS Code," which is exactly this path.
     Sync {
-        /// Only sync this agent (`claude-code`, `codex`, or `gemini-cli`); default is all supported
-        /// agents.
+        /// Only sync this agent (see `wakaclock ai sources list`); default is every
+        /// agent whose logs are turned on.
         #[arg(long)]
         agent: Option<String>,
         /// Parse and print what would be sent without contacting the server or
@@ -2673,6 +2700,7 @@ async fn run_command(
                 }
             }
             AiAction::Status { json } => print_ai_status(json)?,
+            AiAction::Sources { action } => run_ai_sources(action)?,
             AiAction::Topology { root, json } => print_ai_topology(root.as_deref(), json)?,
             AiAction::Capabilities { json } => print_ai_capabilities(json)?,
             AiAction::Setup {
@@ -3239,6 +3267,7 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
     // unavailable broker or parser probe.
     let diagnostics = collect_ai_diagnostics_v2(false)?;
     let context = ai_discovery_context()?;
+    let preferences = AiAttributionState::open().ok();
     let mut reports = Vec::new();
     for (id, parser) in supported_ai_parsers() {
         let discoveries = parser.discover_sources(&context);
@@ -3290,8 +3319,19 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
             .adapters
             .iter()
             .find(|adapter| adapter.agent == id);
+        let source = ai_source_summary(id, parser.as_ref(), paths.len(), preferences.as_ref());
+        let description = if source["enabled"].as_bool() == Some(false) {
+            format!("turned off ({description})")
+        } else {
+            description
+        };
         reports.push(serde_json::json!({
             "agent": id,
+            "enabled": source["enabled"],
+            "source_kind": source["source_kind"],
+            "sources": source["sources"],
+            "time_mode": source["time_mode"],
+            "dry_run_edits": source["dry_run_edits"],
             "status": description.clone(),
             "detected": freshness.and_then(|adapter| adapter.detected.value),
             "installed": freshness.and_then(|adapter| adapter.enabled.value),
@@ -3304,9 +3344,9 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
             "blocker": freshness.and_then(|adapter| adapter.diagnostic_code.clone()),
         }));
     }
-    // Kilo and Kimi are native-hook adapters rather than transcript parsers. Keep
-    // them on the same status surface so an installed hook is not mistaken for an
-    // unsupported adapter merely because there is no parser implementation.
+    // Kilo and Kimi have native hooks. When their logs are also parsed, the hook state
+    // joins the parser's row so each agent appears once; otherwise they get their own
+    // row so an installed hook is not mistaken for an unsupported adapter.
     for native in native_adapter_doctor_entries(&context.home_dir) {
         let agent = native
             .get("agent")
@@ -3316,6 +3356,17 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
             .get("installed")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
+        if let Some(report) = reports
+            .iter_mut()
+            .find(|report| report["agent"].as_str() == Some(agent))
+        {
+            report["hook_state"] = serde_json::json!(if installed {
+                "installed"
+            } else {
+                "not_installed"
+            });
+            continue;
+        }
         let detected = native
             .get("native_executable")
             .is_some_and(|value| !value.is_null());
@@ -4802,6 +4853,153 @@ fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
         .collect()
 }
 
+/// Whether the user left reading this tool's logs on. An unreadable preference store
+/// keeps the default (on), matching a fresh installation.
+fn source_turned_on(state: Option<&AiAttributionState>, parser_id: &str) -> bool {
+    state.is_none_or(|state| state.source_enabled(parser_id).unwrap_or(true))
+}
+
+/// `time_neutral` while a parser may only send usage; `counted` once its edits are sent.
+fn ai_time_mode(parser_id: &str) -> &'static str {
+    if wakaclock_core::ai::emits_edit_heartbeats(parser_id) {
+        "counted"
+    } else {
+        "time_neutral"
+    }
+}
+
+/// Paths of every source a parser currently finds.
+fn discovered_source_paths(
+    parser: &dyn AiActivityParser,
+    context: &DiscoveryContext,
+) -> Vec<PathBuf> {
+    parser
+        .discover_sources(context)
+        .into_iter()
+        .filter_map(|result| match result.state {
+            DiscoveryState::TranscriptFound { path } => Some(path),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Metadata-only description of one parser for `ai status` and `ai sources list`:
+/// no paths, prompts or file names, only kinds, counts and times.
+fn ai_source_summary(
+    id: &str,
+    parser: &dyn AiActivityParser,
+    sources: usize,
+    state: Option<&AiAttributionState>,
+) -> serde_json::Value {
+    let dry_run = state
+        .and_then(|state| state.dry_run_edit_summary(id).ok())
+        .unwrap_or((0, 0, 0, None));
+    serde_json::json!({
+        "agent": id,
+        "enabled": source_turned_on(state, id),
+        "source_kind": parser.source_kind(),
+        "sources": sources,
+        "time_mode": ai_time_mode(id),
+        "dry_run_edits": {
+            "count": dry_run.0,
+            "lines_added": dry_run.1,
+            "lines_deleted": dry_run.2,
+            "latest_at": dry_run.3
+                .and_then(|seconds| chrono::DateTime::<Utc>::from_timestamp(seconds, 0)),
+        },
+    })
+}
+
+fn run_ai_sources(action: AiSourcesAction) -> Result<(), Box<dyn Error>> {
+    let state = AiAttributionState::open()?;
+    let context = ai_discovery_context()?;
+    let (agent, enable, json) = match action {
+        AiSourcesAction::List { json } => {
+            let summaries: Vec<serde_json::Value> = supported_ai_parsers()
+                .iter()
+                .map(|(id, parser)| {
+                    let sources = discovered_source_paths(parser.as_ref(), &context).len();
+                    ai_source_summary(id, parser.as_ref(), sources, Some(&state))
+                })
+                .collect();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({ "sources": summaries }))?
+                );
+            } else {
+                println!("Local AI logs are read for metadata and counts only (no prompts, code or diffs).");
+                for summary in &summaries {
+                    println!(
+                        "{:<16} {:<4} {:<13} {:<13} sources={} dry-run edits={} (+{} -{})",
+                        summary["agent"].as_str().unwrap_or("unknown"),
+                        if summary["enabled"].as_bool() == Some(true) {
+                            "on"
+                        } else {
+                            "off"
+                        },
+                        summary["source_kind"].as_str().unwrap_or("unknown"),
+                        summary["time_mode"].as_str().unwrap_or("unknown"),
+                        summary["sources"],
+                        summary["dry_run_edits"]["count"],
+                        summary["dry_run_edits"]["lines_added"],
+                        summary["dry_run_edits"]["lines_deleted"],
+                    );
+                }
+            }
+            return Ok(());
+        }
+        AiSourcesAction::Disable { agent, json } => (agent, false, json),
+        AiSourcesAction::Enable { agent, json } => (agent, true, json),
+    };
+    let agent = normalize_agent_id(&agent);
+    let parsers = supported_ai_parsers();
+    let Some((id, parser)) = parsers.iter().find(|(id, _)| *id == agent) else {
+        return Err(
+            format!("no local log reader for `{agent}`; see `wakaclock ai sources list`").into(),
+        );
+    };
+    let was_enabled = state.source_enabled(id)?;
+    let mut seeded = 0usize;
+    if enable && !was_enabled {
+        // Start from the current end of every source so the time it was turned off
+        // is not read back.
+        for path in discovered_source_paths(parser.as_ref(), &context) {
+            let source_path = path.to_string_lossy().into_owned();
+            let cursor_key = format!("{id}:{source_path}");
+            let file_identity = transcript_identity(&path);
+            let file_len = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+            let cursor = match state.load_cursor(&cursor_key)? {
+                Some(cursor) if cursor.file_identity == file_identity => cursor,
+                _ => ParserCursor {
+                    source_path,
+                    file_identity,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                },
+            };
+            state.save_cursor(&cursor_key, &parser.seed_at_head(&cursor, file_len))?;
+            seeded += 1;
+        }
+    }
+    state.set_source_enabled(id, enable)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "agent": id, "enabled": enable, "sources_seeded": seeded })
+        );
+    } else if enable {
+        println!("Reading {id} logs again from now on.");
+    } else {
+        println!(
+            "Stopped reading {id} logs. Turn it back on with `wakaclock ai sources enable {id}`."
+        );
+    }
+    Ok(())
+}
+
 /// Keep edits a parser may not send yet as local dry-run evidence (counts and hashes).
 fn keep_edits_as_dry_run(
     state: &AiAttributionState,
@@ -5184,8 +5382,12 @@ async fn run_ai_identity_repair(
     let mut transcripts_scanned = Vec::new();
     let mut warnings = Vec::new();
 
+    let preferences = AiAttributionState::open().ok();
     for (id, parser) in supported_ai_parsers() {
         if normalized_agent.as_deref().is_some_and(|agent| agent != id) {
+            continue;
+        }
+        if !source_turned_on(preferences.as_ref(), id) {
             continue;
         }
         parser_versions.push(format!("{id}@{}", env!("CARGO_PKG_VERSION")));
@@ -5503,8 +5705,12 @@ async fn run_ai_measurement_repair_preview(
     let mut parser_versions = Vec::new();
     let mut transcripts_scanned = 0usize;
     let mut warning_count = 0usize;
+    let preferences = AiAttributionState::open().ok();
     for (id, parser) in supported_ai_parsers() {
         if normalized_agent.as_deref().is_some_and(|agent| agent != id) {
+            continue;
+        }
+        if !source_turned_on(preferences.as_ref(), id) {
             continue;
         }
         parser_versions.push(format!("{id}@{}", env!("CARGO_PKG_VERSION")));
@@ -5799,6 +6005,12 @@ async fn run_ai_sync(
                 format!("AI transcript sync is not supported for adapter `{agent}`").into(),
             );
         }
+        if !AiAttributionState::open()?.source_enabled(agent)? {
+            return Err(format!(
+                "reading `{agent}` logs is turned off; run `wakaclock ai sources enable {agent}`"
+            )
+            .into());
+        }
     }
     let _sync_lock = if dry_run || lease_already_held {
         None
@@ -5834,6 +6046,13 @@ async fn run_ai_sync(
     for (id, parser) in supported_ai_parsers() {
         check_deadline()?;
         if agent_filter.is_some_and(|filter| filter != id) {
+            continue;
+        }
+        // The user turned this tool off: read nothing, keep its cursors.
+        if !state.source_enabled(id)? {
+            if verbose {
+                println!("== {id} ==\n  turned off (wakaclock ai sources enable {id}), skipping");
+            }
             continue;
         }
         if verbose {
@@ -8835,6 +9054,39 @@ mod generic_ai_ingress_tests {
         keep_edits_as_dry_run(&state, "cursor", &[&first, &second]).unwrap();
         keep_edits_as_dry_run(&state, "cursor", &[&first]).unwrap();
         assert_eq!(state.dry_run_edit_count("cursor").unwrap(), 2);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn source_summaries_carry_counts_and_modes_but_no_paths() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-cli-sources-{}.sqlite3",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let state = AiAttributionState::open_at(&path).unwrap();
+        let edit = ai_event_for("qoder", PathBuf::from("/secret-repo/a.rs"), None);
+        keep_edits_as_dry_run(&state, "qoder", &[&edit]).unwrap();
+        state.set_source_enabled("qoder", false).unwrap();
+        let parsers = supported_ai_parsers();
+        let summary_for = |id: &str| {
+            let (_, parser) = parsers
+                .iter()
+                .find(|(parser_id, _)| *parser_id == id)
+                .unwrap();
+            ai_source_summary(id, parser.as_ref(), 2, Some(&state))
+        };
+        let qoder = summary_for("qoder");
+        assert_eq!(qoder["enabled"], false);
+        assert_eq!(qoder["source_kind"], "sqlite");
+        assert_eq!(qoder["time_mode"], "time_neutral");
+        assert_eq!(qoder["sources"], 2);
+        assert_eq!(qoder["dry_run_edits"]["count"], 1);
+        assert!(!qoder.to_string().contains("secret-repo"));
+        let claude = summary_for("claude-code");
+        assert_eq!(claude["enabled"], true);
+        assert_eq!(claude["source_kind"], "jsonl");
+        assert_eq!(claude["time_mode"], "counted");
+        assert!(source_turned_on(None, "qoder"));
         let _ = fs::remove_file(path);
     }
 }

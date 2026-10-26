@@ -1,6 +1,6 @@
 # Phase 10 — Doctor, status, consent และ dashboard
 
-สถานะ: **รอ Phase 09 + approval** (ต้องได้คำตอบ Q5, Q6 ก่อน)
+สถานะ: **ขั้น 9 ส่วน CLI ✅ (2026-10-26); dashboard รอคำตอบเรื่อง agent ID ฝั่ง server; onboarding ใน VS Code ยังไม่ทำ** ดู "ผลการทำ" ท้ายไฟล์
 ขึ้นกับ: Phase 01–09 · ส่วน diagnostics บางข้อทำคู่ไปกับแต่ละ phase ได้
 
 ## เป้าหมาย
@@ -109,3 +109,36 @@
 | ผู้ใช้ตกใจที่ tool อ่าน log ในเครื่อง | อธิบายชัด + ค่าเริ่มปิดสำหรับ tool ไม่มี hook |
 | dashboard ทำให้ดูเหมือนเวลาเพิ่ม | ป้าย time-neutral และไม่รวมในยอดเวลา |
 | status JSON เปลี่ยนแล้ว extension พัง | versioned schema + test |
+
+## ผลการทำ (ขั้น 9, 2026-10-26)
+
+ทำภายใต้การอนุมัติรวมขั้น 7–9 · Q6 = อ่านอัตโนมัติ เปิดไว้เป็นค่าเริ่ม ปิดรายเครื่องมือได้
+(แทนค่าเริ่ม "ปิด" ที่เขียนไว้ใน 10.2)
+
+**ทำแล้ว (CLI เท่านั้น)**
+- `wakaclock ai sources list [--json]`: ทุก parser พร้อม `enabled`, `source_kind`, `sources` (จำนวน),
+  `time_mode` (`time_neutral` / `counted`) และยอด dry-run edit (`count`, `lines_added`,
+  `lines_deleted`, `latest_at`) ไม่มี path, prompt หรือชื่อไฟล์
+- `wakaclock ai sources disable|enable <agent> [--json]`: เก็บใน state DB ในเครื่อง
+  (`~/.wakaclock/ai-attribution.sqlite3` ตาราง `ai_source_preferences`) ไม่ใช่ไฟล์ TOML เพื่อไม่เขียนทับ
+  config ที่ผู้ใช้แก้เอง ปิดแล้ว sync, identity repair และ measurement-repair preview จะไม่อ่าน tool นั้นเลย
+  (รวม usage และ dry-run) cursor เก็บไว้; เปิดใหม่จะ seed ทุก source ที่ปลายไฟล์ จึงไม่อ่านช่วงที่ปิดย้อนหลัง
+- `ai sync --agent <ปิดอยู่>` ล้มพร้อมข้อความให้เปิดก่อน (ไม่ใช่ "not supported")
+- `ai status --json` เพิ่มฟิลด์เดียวกัน (เพิ่มอย่างเดียว ไม่เปลี่ยนชื่อ/ไม่ลบฟิลด์เดิม) และรวมสถานะ hook ของ
+  Kilo/Kimi เข้าแถว parser ของมัน (เดิมขึ้น 2 แถว) — 18 agent ไม่ซ้ำ
+- ไม่แตะ `collect_ai_diagnostics_v2` / `ai doctor --upload` (schema ที่ส่งขึ้น server คงเดิม)
+
+**แก้เพิ่มระหว่างทาง (จากการรีวิว)**: source ที่เป็น database เดียว (Cursor, Windsurf, OpenCode, Qoder)
+เดิมจะส่ง usage ย้อนหลังทั้งประวัติเมื่ออ่านครั้งแรก ตอนนี้มี `history_floor_ms` ใน `ParserContext`:
+ครั้งแรกย้อนแค่ 24 ชม. (เท่ากับกติกา JSONL) และ seed = เริ่มจากตอนนี้; OpenCode/Qoder ได้โควตาแถวเพิ่ม
+สำหรับช่วงอ่านซ้ำ 500 แถว เพื่อให้ checkpoint ขยับเสมอ (commit `f35b98c3`)
+
+**ยังไม่ทำ / ต้องถามเจ้าของ**
+- Dashboard (10.4): server แสดง agent ที่ไม่อยู่ใน `KNOWN_AGENT_IDS` (`core/src/ai/event.rs`) เป็น
+  `unknown` (`handlers/v2/work_sessions.rs` `public_agent`) และใช้รายการเดียวกันใน SQL จัดประเภท actor
+  (`services/ai_stats.rs`) จึงต้องเพิ่ม ID แบบ server-first: `qwen-code`, `pi`, `kiro`, `factory-droid`,
+  `ibm-bob`, `qoder` (ID อื่นมีอยู่แล้ว) ซึ่งอยู่นอกเงื่อนไขการอนุมัติรวม (ห้ามแตะ server) → รอคำตอบ
+  ส่วนยอด token รวมในหน้า AI แสดงอยู่แล้วโดยไม่ต้องแก้ (usage endpoint รับ agent ใดก็ได้)
+- Onboarding ใน VS Code extension (10.3): ยังไม่ทำ ต้องขออนุมัติแยกเพราะเป็นไฟล์ client ที่ protected
+- ตัวนับ budget/lock skip/panic ต่อ 24 ชม. และ lag เป็นแถว: ยังไม่ทำ (ต้องมีที่เก็บตัวนับถาวร)
+- tests: core 481 passed, cli 109+7+8+44, clippy สะอาด; smoke test ใน HOME ชั่วคราวผ่าน

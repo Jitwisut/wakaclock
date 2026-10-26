@@ -208,6 +208,14 @@ impl AiAttributionState {
                 model         TEXT,
                 recorded_at   INTEGER NOT NULL
             );
+
+            -- Per-tool consent for reading local AI logs. Every parser is on by
+            -- default; a row with enabled = 0 is the user turning one tool off.
+            CREATE TABLE IF NOT EXISTS ai_source_preferences (
+                parser_id  TEXT PRIMARY KEY,
+                enabled    INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             ",
         )?;
         // `CREATE TABLE IF NOT EXISTS` does not add columns to an installation
@@ -1171,6 +1179,53 @@ impl AiAttributionState {
         Ok(count as usize)
     }
 
+    /// Totals of the dry-run edits kept for one parser: count, lines added, lines
+    /// deleted and the newest edit time (Unix seconds).
+    pub fn dry_run_edit_summary(
+        &self,
+        parser_id: &str,
+    ) -> Result<(usize, u64, u64, Option<i64>), AppError> {
+        let summary = self.conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(lines_added), 0), COALESCE(SUM(lines_deleted), 0),
+                    MAX(occurred_at)
+             FROM dry_run_edits WHERE parser_id = ?1",
+            params![parser_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as usize,
+                    row.get::<_, i64>(1)?.max(0) as u64,
+                    row.get::<_, i64>(2)?.max(0) as u64,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            },
+        )?;
+        Ok(summary)
+    }
+
+    /// Whether the user left reading this tool's local logs on (the default).
+    pub fn source_enabled(&self, parser_id: &str) -> Result<bool, AppError> {
+        let enabled: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT enabled FROM ai_source_preferences WHERE parser_id = ?1",
+                params![parser_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(enabled.is_none_or(|value| value != 0))
+    }
+
+    pub fn set_source_enabled(&self, parser_id: &str, enabled: bool) -> Result<(), AppError> {
+        self.conn.execute(
+            "INSERT INTO ai_source_preferences (parser_id, enabled, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(parser_id) DO UPDATE SET enabled = excluded.enabled,
+                                                  updated_at = excluded.updated_at",
+            params![parser_id, i64::from(enabled), chrono::Utc::now().timestamp()],
+        )?;
+        Ok(())
+    }
+
     /// Bounded retention for source record hashes and dry-run edits.
     pub fn prune_source_state(
         &self,
@@ -2012,6 +2067,29 @@ mod tests {
         assert!(!stored.contains("repo"));
         state.prune_source_state(90, 30).unwrap();
         assert_eq!(state.dry_run_edit_count("cursor").unwrap(), 1);
+    }
+
+    #[test]
+    fn dry_run_summaries_and_source_preferences() {
+        let path = temp_db_path("sources");
+        let _ = std::fs::remove_file(&path);
+        let state = AiAttributionState::open_at(&path).unwrap();
+        for (id, added) in [("e1", Some(3)), ("e2", None)] {
+            state
+                .record_dry_run_edit(id, "qoder", 200, "/repo/a.rs", added, Some(1), None)
+                .unwrap();
+        }
+        assert_eq!(
+            state.dry_run_edit_summary("qoder").unwrap(),
+            (2, 3, 2, Some(200))
+        );
+        assert_eq!(state.dry_run_edit_summary("pi").unwrap(), (0, 0, 0, None));
+        assert!(state.source_enabled("qoder").unwrap());
+        state.set_source_enabled("qoder", false).unwrap();
+        assert!(!state.source_enabled("qoder").unwrap());
+        assert!(state.source_enabled("pi").unwrap());
+        state.set_source_enabled("qoder", true).unwrap();
+        assert!(state.source_enabled("qoder").unwrap());
     }
 
     #[test]
