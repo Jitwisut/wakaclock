@@ -6,7 +6,9 @@
 
 use crate::ai::adapter::{AdapterRegistry, AdapterRuntime};
 use crate::ai::parser::AiActivityParser;
-use crate::ai::{ClaudeCodeParser, CodexParser, CopilotParser, GeminiCliParser};
+use crate::ai::{
+    ClaudeCodeParser, CodexParser, CopilotParser, CursorFamilyParser, GeminiCliParser,
+};
 
 /// One runnable parser and the runtime that owns its policy.
 pub struct RegisteredParser {
@@ -24,6 +26,8 @@ fn parser_for(runtime: AdapterRuntime, id: &str) -> Option<Box<dyn AiActivityPar
         // stays `None` (setup and install are unaffected) and the parser is chosen by
         // id. `None` never sends edits, which keeps them usage-only.
         (AdapterRuntime::None, "copilot") => Some(Box::new(CopilotParser::new())),
+        (AdapterRuntime::None, "cursor") => Some(Box::new(CursorFamilyParser::cursor())),
+        (AdapterRuntime::None, "windsurf") => Some(Box::new(CursorFamilyParser::windsurf())),
         _ => None,
     }
 }
@@ -63,8 +67,15 @@ mod tests {
     #[test]
     fn builtin_parsers_cover_every_transcript_adapter() {
         let ids: Vec<&str> = builtin_parsers().iter().map(|entry| entry.id).collect();
-        assert_eq!(ids.len(), 4);
-        for id in ["claude-code", "codex", "gemini-cli", "copilot"] {
+        assert_eq!(ids.len(), 6);
+        for id in [
+            "claude-code",
+            "codex",
+            "gemini-cli",
+            "copilot",
+            "cursor",
+            "windsurf",
+        ] {
             assert!(ids.contains(&id), "{id} missing from {ids:?}");
         }
     }
@@ -75,6 +86,7 @@ mod tests {
             assert!(emits_edit_heartbeats(id), "{id}");
         }
         assert!(!emits_edit_heartbeats("cursor"));
+        assert!(!emits_edit_heartbeats("windsurf"));
         // Copilot is parsed, but its edits stay dry-run until certified.
         assert!(!emits_edit_heartbeats("copilot"));
         assert!(!AdapterRuntime::KiloCode.emits_edit_heartbeats());

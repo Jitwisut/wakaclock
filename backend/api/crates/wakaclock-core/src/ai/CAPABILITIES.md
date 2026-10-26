@@ -89,3 +89,18 @@ rather than something recoverable exactly from either transcript format.
 
 Not read yet: `chatSessions/*.jsonl` (patch log with `modelId` and request token counts) and
 `chatEditingSessions/*/state.json`; inline completions are out of scope.
+
+## Cursor IDE and Windsurf (`cursor.rs` + `vscdb_kv.rs`, added 2026-10-26)
+
+| | |
+| --- | --- |
+| Source | `<editor>/User/globalStorage/state.vscdb` (`Cursor`, `Windsurf`, `Windsurf - Next`), table `cursorDiskKV` |
+| Rows read | only keys `bubbleId:<composerId>:<bubbleId>` (JSON value); every other key is ignored |
+| Verified locally | nothing — neither editor is installed on the development machine; schema from public facts, synthetic SQLite in tests |
+| Edits | assistant bubble (`type = 2`) whose `toolFormerData` names an editing tool with `status = completed`; path from `params` (often workspace-relative, kept relative); lines only if the tool result reports them |
+| Usage | assistant bubble `tokenCount` once the bubble is at least two minutes old; model from the bubble; provider unset (the editor routes to several model vendors); prompt counts not yet derived |
+| Re-reads | a window of recent rowids is re-read each pass because bubbles are updated in place; event and usage IDs are stable, so downstream delivery stays idempotent |
+| Sending | usage only; edits kept as local dry-run evidence until certified (catalog runtime `None`) |
+
+Not covered: `cursor-agent` CLI (moved to the Tier 2 survey), Tab completions, resolving
+workspace-relative paths to a workspace root.

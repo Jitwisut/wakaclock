@@ -44,6 +44,7 @@ pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod correlation;
+pub mod cursor;
 pub mod diagnostics;
 pub mod editor_capability;
 pub mod event;
@@ -66,6 +67,7 @@ pub mod state;
 pub mod topology;
 pub mod topology_handoff;
 pub mod usage;
+pub mod vscdb_kv;
 
 pub use adapter::{
     AdapterCatalogEntry, AdapterCatalogV1, AdapterManifest, AdapterRegistry, AdapterRuntime,
@@ -83,6 +85,7 @@ pub use copilot::CopilotParser;
 pub use correlation::{
     correlate, expire_unmatched, AiAttribution, CorrelationOutcome, EditorObservation,
 };
+pub use cursor::CursorFamilyParser;
 pub use diagnostics::{
     build_report as build_ai_diagnostics_report, AdapterFreshness, AdapterFreshnessV2,
     AiDiagnosticsReport, AiDiagnosticsReportV2, AttributionMode, BrokerHealth, BrokerHealthV2,

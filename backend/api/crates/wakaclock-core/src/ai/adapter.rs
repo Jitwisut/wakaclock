@@ -715,7 +715,12 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 shell_mutation: true,
                 ..Default::default()
             },
-            transcript_roots: vec![],
+            // Read by CursorFamilyParser (usage only; edits stay dry-run until certified).
+            transcript_roots: vec![
+                "Library/Application Support/Cursor/User/globalStorage/state.vscdb".to_string(),
+                ".config/Cursor/User/globalStorage/state.vscdb".to_string(),
+                "AppData/Roaming/Cursor/User/globalStorage/state.vscdb".to_string(),
+            ],
             payload_schema_versions: vec!["afterFileEdit-v1".to_string()],
             supported_change_kinds: file_kinds.clone(),
             verification: Verification::scaffold(
@@ -869,7 +874,12 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 instruction: "Windsurf hook surface not yet inspected".to_string(),
             },
             native_hooks: no_hooks(),
-            transcript_roots: vec![],
+            // Read by CursorFamilyParser (usage only; edits stay dry-run until certified).
+            transcript_roots: vec![
+                "Library/Application Support/Windsurf/User/globalStorage/state.vscdb".to_string(),
+                ".config/Windsurf/User/globalStorage/state.vscdb".to_string(),
+                "AppData/Roaming/Windsurf/User/globalStorage/state.vscdb".to_string(),
+            ],
             payload_schema_versions: vec![],
             supported_change_kinds: file_kinds.clone(),
             verification: Verification::unverified(),
