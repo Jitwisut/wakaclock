@@ -52,11 +52,15 @@ pub mod identity;
 mod jsonl;
 pub mod native_activity;
 pub mod parser;
+pub mod parser_registry;
 pub mod patch;
 pub mod path;
 pub mod producer;
 pub mod provider;
 pub mod revision;
+pub mod snapshot_source;
+pub mod source;
+pub mod sqlite_source;
 pub mod state;
 pub mod topology;
 pub mod topology_handoff;
@@ -107,6 +111,7 @@ pub use parser::{
     ParseContext, ParseWarning, ParserContext, ParserCursor, ParserPendingCall, ParserTurnContext,
     TranscriptLag,
 };
+pub use parser_registry::{builtin_parsers, emits_edit_heartbeats, RegisteredParser};
 pub use patch::{
     count_content_lines, count_structured_patch_lines, count_unified_diff_lines, LineDelta,
     StructuredPatchHunk,
@@ -122,11 +127,12 @@ pub use provider::{
     KNOWN_PROVIDER_IDS,
 };
 pub use revision::{
-    prove_alias, AliasEvidence, AliasProofKind, AttributionRetentionPolicy, AttributionRevision,
-    RevisionCandidate, RevisionWriteOutcome, ATTRIBUTION_REVISION_RETENTION_SECONDS,
-    EVENT_ALIAS_RETENTION_SECONDS, LATE_RECONCILIATION_GRACE_SECONDS,
-    PENDING_OBSERVATION_RETENTION_SECONDS,
+    legacy_claude_hook_event_id, prove_alias, AliasEvidence, AliasProofKind,
+    AttributionRetentionPolicy, AttributionRevision, RevisionCandidate, RevisionWriteOutcome,
+    ATTRIBUTION_REVISION_RETENTION_SECONDS, EVENT_ALIAS_RETENTION_SECONDS,
+    LATE_RECONCILIATION_GRACE_SECONDS, PENDING_OBSERVATION_RETENTION_SECONDS,
 };
+pub use source::{DbFingerprint, FileFingerprint, SourceCheckpoint, SourceKind};
 pub use state::{AiAttributionState, PendingUsage};
 pub use topology::{
     from_local_root, EditorSurface, ExecutionSurface, TopologyContext, TopologyError,

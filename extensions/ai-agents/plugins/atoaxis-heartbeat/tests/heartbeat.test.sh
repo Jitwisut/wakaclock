@@ -26,6 +26,11 @@ grep -q '"agent":"claude-code"' "$CAPTURE"
 grep -q '"lines_added":3' "$CAPTURE"
 grep -q '"lines_deleted":0' "$CAPTURE"
 grep -q '"producer_version":1' "$CAPTURE"
+# The raw tool-use ID is the dedup key shared with the transcript; the event ID keeps
+# its digest form so retries of hooks from older installs stay idempotent.
+EXPECTED_HASH="$(printf '%s' 's1|toolu1|/repo/src/app.ts' | shasum -a 256 | cut -c1-40)"
+grep -q "\"event_id\":\"claude-code-${EXPECTED_HASH}\"" "$CAPTURE"
+grep -E -q '"tool_(call|event)_id":"toolu1"' "$CAPTURE"
 if grep -q 'private source' "$CAPTURE"; then
   echo "privacy failure: Claude content reached broker" >&2
   exit 1

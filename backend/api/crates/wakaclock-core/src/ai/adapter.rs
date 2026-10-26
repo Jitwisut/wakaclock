@@ -200,6 +200,19 @@ pub enum AdapterRuntime {
     None,
 }
 
+impl AdapterRuntime {
+    /// Whether transcript edits from this runtime may be sent as heartbeats.
+    ///
+    /// Every heartbeat becomes a timeline anchor, even with `active_seconds = 0`, so a
+    /// newly added transcript parser would add AI time on its first sync. New runtimes
+    /// therefore send usage only and keep their edits locally (`dry_run_edits`) until
+    /// a separate, certified approval turns this on. Claude Code, Codex and Gemini CLI
+    /// already sent transcript edits before that rule and keep doing so.
+    pub fn emits_edit_heartbeats(self) -> bool {
+        matches!(self, Self::ClaudeCode | Self::Codex | Self::GeminiCli)
+    }
+}
+
 /// Versioned, resolved registry entry consumed by CLI and editor installers.
 /// `manifest` is flattened so older clients can continue reading the ordinary
 /// adapter fields while newer clients also get aliases, platform support,

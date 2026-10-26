@@ -93,6 +93,15 @@ existing historical certificates do not close these new findings.
 6. **Kimi Code CLI and standalone Deep Code:** parked until a real hook/API/
    transcript evidence source exists.
 
+**P3 execution detail (2026-10-26):** [`ai-transcript-coverage/`](ai-transcript-coverage/README.md)
+is the step-by-step plan for this phase: transcript/session parsers per tool,
+hook↔transcript dedup, and certification on macOS, Windows and Linux. Its Phase 00
+found that Claude Code hook and transcript rows use different tool-call IDs (~91%
+of hook edits duplicated client-side), so fixing that dedup runs before any new
+parser. Its order overrides the list above where they differ (Copilot before
+Cursor; long-tail tools only on request). This roadmap's policy and certification
+gate still apply.
+
 ## Certification gate
 
 An adapter is `Verified` only when all of these are recorded in a sanitized

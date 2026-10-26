@@ -38,16 +38,15 @@ use wakaclock_core::ai::topology_handoff::{
 use wakaclock_core::{
     ai::{
         editor_capability_catalog, is_known_agent_id, normalize_agent_id, normalize_client_id,
-        normalize_identity_reference, normalize_model_id, normalize_provider_id,
-        parse_claude_usage, parse_codex_usage, parse_gemini_usage, resolve_identity,
+        normalize_identity_reference, normalize_model_id, normalize_provider_id, resolve_identity,
         AdapterFreshnessV2, AdapterRuntime, AiActivityParser, AiAttributionState, AiConfidence,
         AiDiagnosticsReportV2, AiEditEvent, AiEventSource, BrokerHealthV2, CertificationTuple,
-        ClaudeCodeParser, CodexParser, DiagnosticMeasurement, DiagnosticsConsent, DiscoveryContext,
-        DiscoveryResult, DiscoveryState, EditorSurface, ExecutionSurface, GeminiCliParser,
-        IdentityStatus, MeasurementAvailability, ObserverConfig, ParseContext, ParserCursor,
-        ParserLagSummaryV2, RuntimeHealth, TopologyContext, TopologyIdentityInput, TranscriptLag,
-        VerificationStatus, FINGERPRINT_SCHEME_V1, IDENTITY_SCHEMA_VERSION,
-        PRODUCER_CONTRACT_VERSION, REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
+        DiagnosticMeasurement, DiagnosticsConsent, DiscoveryContext, DiscoveryResult,
+        DiscoveryState, EditorSurface, ExecutionSurface, IdentityStatus, MeasurementAvailability,
+        ObserverConfig, ParseContext, ParserCursor, ParserLagSummaryV2, RuntimeHealth,
+        TopologyContext, TopologyIdentityInput, TranscriptLag, VerificationStatus,
+        FINGERPRINT_SCHEME_V1, IDENTITY_SCHEMA_VERSION, PRODUCER_CONTRACT_VERSION,
+        REASON_CONFLICTING_EVIDENCE, REASON_INTERNAL_MARKER,
     },
     api_client::{
         http_status_of, is_retryable_delivery_error, retry_after_seconds, AiIdentityCorrection,
@@ -4794,34 +4793,44 @@ fn latest_sidecar_event_time() -> Option<String> {
 }
 
 fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
-    // The factory itself is intentionally small and typed, but the registry
-    // owns which runtime is exposed. A scaffold/manual adapter therefore cannot
-    // accidentally become a working parser merely because a name was added to a
-    // client-side list.
-    let registry = wakaclock_core::ai::AdapterRegistry::builtin();
-    registry
-        .catalog_v1()
-        .adapters
+    // The core registry derives the runnable parsers from the adapter catalog, so a
+    // scaffold/manual adapter cannot become a working parser merely because a name
+    // was added to a client-side list.
+    wakaclock_core::ai::builtin_parsers()
         .into_iter()
-        .filter_map(|entry| {
-            let id = entry.manifest.id.as_str();
-            let parser: Box<dyn AiActivityParser> = match entry.runtime {
-                AdapterRuntime::ClaudeCode => Box::new(ClaudeCodeParser::new()),
-                AdapterRuntime::Codex => Box::new(CodexParser::new()),
-                AdapterRuntime::GeminiCli => Box::new(GeminiCliParser::new()),
-                _ => return None,
-            };
-            // Builtin ids are static; keep the existing parser API stable while
-            // still deriving the inclusion decision from the catalog.
-            let static_id = match id {
-                "claude-code" => "claude-code",
-                "codex" => "codex",
-                "gemini-cli" => "gemini-cli",
-                _ => return None,
-            };
-            Some((static_id, parser))
-        })
+        .map(|registered| (registered.id, registered.parser))
         .collect()
+}
+
+/// Keep edits a parser may not send yet as local dry-run evidence (counts and hashes).
+fn keep_edits_as_dry_run(
+    state: &AiAttributionState,
+    parser_id: &str,
+    events: &[&AiEditEvent],
+) -> Result<(), AppError> {
+    for event in events {
+        state.record_dry_run_edit(
+            &scoped_storage_event_id(&event.event_id, event.session_id.as_deref()),
+            parser_id,
+            event.occurred_at.timestamp(),
+            &event.entity.to_string_lossy(),
+            event.lines_added,
+            event.lines_deleted,
+            event.model.as_deref(),
+        )?;
+    }
+    Ok(())
+}
+
+/// Run one parser call, turning a panic into an error so one broken parser cannot
+/// stop the sync for the others.
+fn catch_parser_panic<T, E: std::fmt::Display>(
+    call: impl FnOnce() -> Result<T, E>,
+) -> Result<T, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
+        Ok(result) => result.map_err(|error| error.to_string()),
+        Err(_) => Err("parser panicked".to_string()),
+    }
 }
 
 fn certification_tuple_for_agent(agent_id: &str) -> Option<CertificationTuple> {
@@ -5897,7 +5906,7 @@ async fn run_ai_sync(
                     if !from_start
                         && cursor.source_path == source_path_string
                         && cursor.file_identity == file_identity
-                        && cursor.byte_offset <= file_len =>
+                        && parser.cursor_is_reusable(&cursor, file_len) =>
                 {
                     cursor_reused = true;
                     cursor
@@ -5922,8 +5931,7 @@ async fn run_ai_sync(
                 .and_then(|modified| std::time::SystemTime::now().duration_since(modified).ok())
                 .is_some_and(|age| age > Duration::from_secs(24 * 60 * 60));
             if !from_start && is_first_cursor && is_old {
-                let mut seeded = cursor.clone();
-                seeded.byte_offset = file_len;
+                let seeded = parser.seed_at_head(&cursor, file_len);
                 state.save_cursor(&cursor_key, &seeded)?;
                 if verbose {
                     println!("  old transcript seeded at EOF ({file_len} bytes)");
@@ -5935,7 +5943,9 @@ async fn run_ai_sync(
             // sync for the others (the `AiActivityParser` contract says callers treat
             // `Err` as "skip this agent this cycle"). Record it and move to the next
             // agent instead of `?`-ing out of the whole run.
-            let batch = match parser.parse_since(&ParseContext::default(), Some(&cursor)) {
+            let batch = match catch_parser_panic(|| {
+                parser.parse_since(&ParseContext::default(), Some(&cursor))
+            }) {
                 Ok(batch) => batch,
                 Err(error) => {
                     eprintln!(
@@ -5949,14 +5959,10 @@ async fn run_ai_sync(
             // Usage is parsed independently from file-edit events: one model response may edit
             // several files, and copying its token count to each file would inflate totals. A
             // usage-parse failure is non-fatal — keep the file-edit events, drop token counts.
-            let usage_records = match id {
-                _ if !usage_scan_needed(cursor_reused, cursor.byte_offset, file_len) => {
-                    Ok(Vec::new())
-                }
-                "claude-code" => parse_claude_usage(&transcript_path),
-                "codex" => parse_codex_usage(&transcript_path),
-                "gemini-cli" => parse_gemini_usage(&transcript_path),
-                _ => Ok(Vec::new()),
+            let usage_records = if usage_scan_needed(cursor_reused, cursor.byte_offset, file_len) {
+                catch_parser_panic(|| parser.parse_usage(&transcript_path, Some(&cursor)))
+            } else {
+                Ok(Vec::new())
             }
             .unwrap_or_else(|error| {
                 eprintln!("  {id}: usage parse failed, continuing without token counts ({error})");
@@ -6026,6 +6032,22 @@ async fn run_ai_sync(
                     &usage_records,
                     &wakaclock_core::queue::Queue::open()?.device_id()?,
                 )?;
+            }
+
+            if !new_events.is_empty() && !wakaclock_core::ai::emits_edit_heartbeats(id) {
+                // A parser not yet approved to send edits contributes usage only. Every
+                // heartbeat is a timeline anchor, so its edits stay local as dry-run
+                // evidence until that approval; the cursor still advances.
+                keep_edits_as_dry_run(&state, id, &new_events)?;
+                if verbose {
+                    println!(
+                        "  {} edit(s) kept as dry-run evidence; this adapter sends usage only",
+                        new_events.len()
+                    );
+                }
+                state.save_cursor(&cursor_key, &batch.next_cursor)?;
+                check_deadline()?;
+                continue;
             }
 
             if !new_events.is_empty() {
@@ -6107,6 +6129,7 @@ async fn run_ai_sync(
     // make `--dry-run` fail in read-only environments even after it printed results.
     if !dry_run {
         let pruned = state.prune_delivered_older_than(30)?;
+        state.prune_source_state(90, 30)?;
         if verbose && pruned > 0 {
             println!("Pruned {pruned} delivered-event record(s) older than 30 days.");
         }
@@ -8786,6 +8809,32 @@ mod generic_ai_ingress_tests {
         assert!(AiSyncLock::try_acquire_at(&path)
             .expect("lock should be reacquirable")
             .is_some());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_panicking_parser_call_becomes_an_error() {
+        let panicked: Result<(), String> =
+            catch_parser_panic(|| -> Result<(), String> { panic!("boom") });
+        assert_eq!(panicked, Err("parser panicked".to_string()));
+        let failed: Result<(), String> = catch_parser_panic(|| Err("bad record"));
+        assert_eq!(failed, Err("bad record".to_string()));
+        assert_eq!(catch_parser_panic(|| Ok::<_, String>(7)), Ok(7));
+    }
+
+    #[test]
+    fn dry_run_edits_are_kept_once_per_event() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-cli-dry-run-{}.sqlite3",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let state = AiAttributionState::open_at(&path).unwrap();
+        let first = ai_event_for("cursor", PathBuf::from("/repo/a.rs"), None);
+        let mut second = ai_event_for("cursor", PathBuf::from("/repo/b.rs"), None);
+        second.event_id = "cursor-second".to_string();
+        keep_edits_as_dry_run(&state, "cursor", &[&first, &second]).unwrap();
+        keep_edits_as_dry_run(&state, "cursor", &[&first]).unwrap();
+        assert_eq!(state.dry_run_edit_count("cursor").unwrap(), 2);
         let _ = fs::remove_file(path);
     }
 }
