@@ -125,6 +125,30 @@ pub struct ParserContext {
     /// `None` and keep using the cursor's byte offset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceCheckpoint>,
+    /// Oldest usage time (Unix milliseconds) a database-backed source may report. One
+    /// database holds a tool's whole history, so on first sight only the last day is
+    /// read, matching the replay window for JSONL files; seeding sets it to now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_floor_ms: Option<i64>,
+}
+
+/// How far back a database-backed source reports usage the first time it is read.
+pub const SHARED_SOURCE_HISTORY: chrono::Duration = chrono::Duration::hours(24);
+
+/// The usage floor stored in `cursor`, or the first-sight window ending at `now`.
+pub fn history_floor(cursor: Option<&ParserCursor>, now: DateTime<Utc>) -> DateTime<Utc> {
+    cursor
+        .and_then(|cursor| cursor.context.as_ref())
+        .and_then(|context| context.history_floor_ms)
+        .and_then(DateTime::<Utc>::from_timestamp_millis)
+        .unwrap_or(now - SHARED_SOURCE_HISTORY)
+}
+
+/// Keep the floor chosen on first sight so later passes do not move it.
+pub fn keep_history_floor(context: &mut ParserContext, cursor: &ParserCursor, now: DateTime<Utc>) {
+    if context.history_floor_ms.is_none() {
+        context.history_floor_ms = Some(history_floor(Some(cursor), now).timestamp_millis());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

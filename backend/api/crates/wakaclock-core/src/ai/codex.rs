@@ -1041,6 +1041,7 @@ impl AiActivityParser for CodexParser {
                     turns: serialized_turns,
                     pending_calls: serialized_pending,
                     source: None,
+                    history_floor_ms: None,
                 }),
             },
             warnings,

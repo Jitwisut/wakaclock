@@ -17,8 +17,8 @@
 use crate::ai::event::{opaque_file_event_id, AiConfidence, AiEditEvent, AiEventSource};
 use crate::ai::normalize_identity_model;
 use crate::ai::parser::{
-    AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
-    ParseContext, ParseWarning, ParserCursor,
+    history_floor, keep_history_floor, AiActivityParser, AiParseError, DiscoveryContext,
+    DiscoveryResult, DiscoveryState, ParseBatch, ParseContext, ParseWarning, ParserCursor,
 };
 use crate::ai::source::{SourceCheckpoint, SourceKind};
 use crate::ai::sqlite_source::SqliteReadOptions;
@@ -171,12 +171,17 @@ impl CursorFamilyParser {
         })
     }
 
-    fn usage_record(&self, bubble: &Bubble, now: DateTime<Utc>) -> Option<AiUsageRecord> {
+    fn usage_record(
+        &self,
+        bubble: &Bubble,
+        now: DateTime<Utc>,
+        floor: DateTime<Utc>,
+    ) -> Option<AiUsageRecord> {
         if integer_at(&bubble.value, &["type"]) != Some(ASSISTANT_BUBBLE) {
             return None;
         }
         let created = created_at(&bubble.value)?;
-        if (now - created).num_seconds() < USAGE_SETTLE_SECONDS {
+        if created < floor || (now - created).num_seconds() < USAGE_SETTLE_SECONDS {
             return None;
         }
         let tokens = bubble
@@ -284,6 +289,7 @@ impl AiActivityParser for CursorFamilyParser {
             .collect();
         let mut next_context = cursor.context.clone().unwrap_or_default();
         next_context.source = read.checkpoint;
+        keep_history_floor(&mut next_context, cursor, Utc::now());
         Ok(ParseBatch {
             next_cursor: ParserCursor {
                 source_path: cursor.source_path.clone(),
@@ -316,10 +322,11 @@ impl AiActivityParser for CursorFamilyParser {
         )
         .map_err(std::io::Error::other)?;
         let now = Utc::now();
+        let floor = history_floor(cursor, now);
         Ok(read
             .bubbles
             .iter()
-            .filter_map(|bubble| self.usage_record(bubble, now))
+            .filter_map(|bubble| self.usage_record(bubble, now, floor))
             .collect())
     }
 
@@ -340,6 +347,7 @@ impl AiActivityParser for CursorFamilyParser {
             last_rowid: head,
             fingerprint: None,
         });
+        context.history_floor_ms = Some(Utc::now().timestamp_millis());
         seeded.context = Some(context);
         seeded
     }
@@ -401,7 +409,7 @@ mod tests {
     fn edit_bubble(status: &str, name: &str, path: &str) -> Value {
         json!({
             "type": 2,
-            "createdAt": "2026-10-26T10:00:00Z",
+            "createdAt": (Utc::now() - chrono::Duration::hours(1)).to_rfc3339(),
             "text": format!("assistant says {SECRET}"),
             "codeBlocks": [{"content": SECRET}],
             "modelInfo": {"modelName": "claude-sonnet-4"},
@@ -540,6 +548,24 @@ mod tests {
         );
         assert_eq!(usage.ai_session_id, "c1");
         usage.validate().unwrap();
+    }
+
+    #[test]
+    fn usage_older_than_the_history_floor_is_not_reported() {
+        let db = test_db::path("floor");
+        let connection = test_db::create(&db);
+        let mut old = edit_bubble("completed", "edit_file", "a.rs");
+        old["tokenCount"] = json!({"inputTokens": 5, "outputTokens": 5});
+        old["createdAt"] = json!((Utc::now() - chrono::Duration::days(3)).to_rfc3339());
+        test_db::put(&connection, "bubbleId:c1:b1", &old);
+        let parser = CursorFamilyParser::cursor();
+        assert!(parser.parse_usage(&db, None).unwrap().is_empty());
+        let mut recent = old.clone();
+        recent["createdAt"] = json!((Utc::now() - chrono::Duration::hours(1)).to_rfc3339());
+        test_db::put(&connection, "bubbleId:c1:b2", &recent);
+        let seeded = parser.seed_at_head(&cursor_for(&db, None), 0);
+        assert!(parser.parse_usage(&db, Some(&seeded)).unwrap().is_empty());
+        assert_eq!(parser.parse_usage(&db, None).unwrap().len(), 1);
     }
 
     #[test]

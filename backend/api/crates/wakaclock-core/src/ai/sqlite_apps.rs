@@ -21,8 +21,8 @@ use crate::ai::event::{opaque_file_event_id, AiConfidence, AiEditEvent, AiEventS
 use crate::ai::fields::{count_at, embedded_object, string_at, timestamp_at};
 use crate::ai::normalize_identity_model;
 use crate::ai::parser::{
-    AiActivityParser, AiParseError, DiscoveryContext, DiscoveryResult, DiscoveryState, ParseBatch,
-    ParseContext, ParseWarning, ParserCursor,
+    history_floor, keep_history_floor, AiActivityParser, AiParseError, DiscoveryContext,
+    DiscoveryResult, DiscoveryState, ParseBatch, ParseContext, ParseWarning, ParserCursor,
 };
 use crate::ai::source::{SourceCheckpoint, SourceKind};
 use crate::ai::sqlite_source::{open_read_only, read_rows_after, SqliteRead, SqliteReadOptions};
@@ -284,7 +284,12 @@ impl SqliteAppParser {
         }
     }
 
-    fn usage_record(&self, row: &Value, now: DateTime<Utc>) -> Option<AiUsageRecord> {
+    fn usage_record(
+        &self,
+        row: &Value,
+        now: DateTime<Utc>,
+        floor: DateTime<Utc>,
+    ) -> Option<AiUsageRecord> {
         let agent = self.agent();
         let (id, session, at, model, input, output, cache_read, cache_write) = match self.app {
             App::OpenCode => {
@@ -323,7 +328,7 @@ impl SqliteAppParser {
                 )
             }
         };
-        if (now - at).num_seconds() < USAGE_SETTLE_SECONDS {
+        if at < floor || (now - at).num_seconds() < USAGE_SETTLE_SECONDS {
             return None;
         }
         if input.unwrap_or(0) == 0 && output.unwrap_or(0) == 0 {
@@ -425,7 +430,8 @@ impl AiActivityParser for SqliteAppParser {
         let db = PathBuf::from(&cursor.source_path);
         let (last_rowid, previous) = checkpoint_of(Some(cursor));
         let options = SqliteReadOptions {
-            max_rows: context.max_batch_records,
+            // The rescan window must not use up the pass, or the checkpoint never moves.
+            max_rows: context.max_batch_records + RESCAN_ROWS as usize,
             time_budget: context.time_budget,
             ..SqliteReadOptions::default()
         };
@@ -486,6 +492,7 @@ impl AiActivityParser for SqliteAppParser {
             };
         let mut next_context = cursor.context.clone().unwrap_or_default();
         next_context.source = checkpoint;
+        keep_history_floor(&mut next_context, cursor, Utc::now());
         let events: Vec<AiEditEvent> = events;
         Ok(ParseBatch {
             next_cursor: ParserCursor {
@@ -513,8 +520,8 @@ impl AiActivityParser for SqliteAppParser {
         cursor: Option<&ParserCursor>,
     ) -> std::io::Result<Vec<AiUsageRecord>> {
         // The edit pass may already have stored this fingerprint, and a row skipped by
-        // the settle rule must be read again even when the database has not changed.
-        let _ = cursor;
+        // the settle rule must be read again even when the database has not changed, so
+        // usage re-reads a recent window; the history floor keeps old rows out.
         let options = SqliteReadOptions::default();
         let head = open_read_only(source, options.busy_timeout)
             .and_then(|connection| {
@@ -527,9 +534,10 @@ impl AiActivityParser for SqliteAppParser {
             _ => return Ok(Vec::new()),
         };
         let now = Utc::now();
+        let floor = history_floor(cursor, now);
         Ok(rows
             .iter()
-            .filter_map(|row| self.usage_record(row, now))
+            .filter_map(|row| self.usage_record(row, now, floor))
             .collect())
     }
 
@@ -552,6 +560,7 @@ impl AiActivityParser for SqliteAppParser {
             last_rowid: head,
             fingerprint: None,
         });
+        context.history_floor_ms = Some(Utc::now().timestamp_millis());
         seeded.context = Some(context);
         seeded
     }
@@ -570,6 +579,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wakaclock-sqlite-apps-{name}-{nonce}"));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn hour_ago() -> i64 {
+        Utc::now().timestamp_millis() - 3_600_000
     }
 
     fn cursor_for(db: &Path) -> ParserCursor {
@@ -608,7 +621,7 @@ mod tests {
         json!({"type": "tool", "tool": tool, "callID": format!("call-{path}"), "sessionID": "ses-1",
                "state": {"status": status, "input": {"filePath": path, "content": SECRET},
                          "metadata": {"filediff": {"additions": 5, "deletions": 2}},
-                         "time": {"start": 1_793_008_800_000_i64, "end": 1_793_008_801_000_i64}}})
+                         "time": {"start": hour_ago(), "end": hour_ago()}}})
     }
 
     #[test]
@@ -664,8 +677,13 @@ mod tests {
         let dir = temp_dir("opencode-usage");
         let (db, connection) = opencode_db(&dir);
         for (id, role, created) in [
-            ("m1", "assistant", 1_793_008_800_000_i64),
-            ("m2", "user", 1_793_008_800_000),
+            ("m1", "assistant", hour_ago()),
+            ("m2", "user", hour_ago()),
+            (
+                "m0",
+                "assistant",
+                Utc::now().timestamp_millis() - 3 * 86_400_000,
+            ),
             ("m3", "assistant", Utc::now().timestamp_millis()),
         ] {
             let data = json!({"id": id, "role": role, "sessionID": "ses-1", "modelID": "claude-sonnet-4",
@@ -708,15 +726,15 @@ mod tests {
                           "results": [{"path": "/repo/q.rs", "diffInfo": {"add": 3, "delete": 1}}]});
         connection
             .execute(
-                "INSERT INTO chat_message VALUES ('s1', 'r1', 'tool', ?1, NULL, 1793008800000, ?2)",
-                params![tool.to_string(), SECRET],
+                "INSERT INTO chat_message VALUES ('s1', 'r1', 'tool', ?1, NULL, ?3, ?2)",
+                params![tool.to_string(), SECRET, hour_ago()],
             )
             .unwrap();
         let tokens = json!({"prompt_tokens": 400, "completion_tokens": 40, "cached_tokens": 10});
         connection
             .execute(
-                "INSERT INTO chat_message VALUES ('s1', 'r1', 'assistant', NULL, ?1, 1793008800000, ?2)",
-                params![tokens.to_string(), SECRET],
+                "INSERT INTO chat_message VALUES ('s1', 'r1', 'assistant', NULL, ?1, ?3, ?2)",
+                params![tokens.to_string(), SECRET, hour_ago()],
             )
             .unwrap();
         let parser = SqliteAppParser::qoder();
@@ -734,6 +752,7 @@ mod tests {
             (usage[0].input_tokens, usage[0].output_tokens),
             (Some(400), Some(40))
         );
+        usage[0].validate().unwrap();
         let rendered = format!("{:?}{:?}", batch.events, usage);
         assert!(!rendered.contains(SECRET));
     }
@@ -771,6 +790,56 @@ mod tests {
             SqliteAppParser::qoder().discover(&context).state,
             DiscoveryState::NotInstalled
         );
+    }
+
+    #[test]
+    fn the_checkpoint_moves_past_the_rescan_window() {
+        let dir = temp_dir("advance");
+        let (db, connection) = opencode_db(&dir);
+        for index in 0..30 {
+            put_part(&connection, &format!("p{index}"), &json!({"type": "text"}));
+        }
+        let parser = SqliteAppParser::opencode();
+        let context = ParseContext {
+            max_batch_records: 10,
+            ..ParseContext::default()
+        };
+        let mut cursor = cursor_for(&db);
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            cursor = parser
+                .parse_since(&context, Some(&cursor))
+                .unwrap()
+                .next_cursor;
+            seen.push(checkpoint_of(Some(&cursor)).0);
+        }
+        assert_eq!(seen, vec![30, 30, 30]);
+        put_part(
+            &connection,
+            "late",
+            &tool_part("completed", "edit", "/repo/late.ts"),
+        );
+        let batch = parser.parse_since(&context, Some(&cursor)).unwrap();
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(checkpoint_of(Some(&batch.next_cursor)).0, 31);
+    }
+
+    #[test]
+    fn seeded_sources_report_no_earlier_usage() {
+        let dir = temp_dir("seed-usage");
+        let (db, connection) = opencode_db(&dir);
+        let data = json!({"id": "m1", "role": "assistant", "sessionID": "ses-1",
+                          "time": {"created": hour_ago()}, "tokens": {"input": 10, "output": 1}});
+        connection
+            .execute(
+                "INSERT INTO message (id, session_id, data) VALUES ('m1', 's', ?1)",
+                params![data.to_string()],
+            )
+            .unwrap();
+        let parser = SqliteAppParser::opencode();
+        let seeded = parser.seed_at_head(&cursor_for(&db), 0);
+        assert!(parser.parse_usage(&db, Some(&seeded)).unwrap().is_empty());
+        assert_eq!(parser.parse_usage(&db, None).unwrap().len(), 1);
     }
 
     #[test]
