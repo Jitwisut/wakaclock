@@ -1,6 +1,6 @@
 # Phase 10 — Doctor, status, consent และ dashboard
 
-สถานะ: **ขั้น 9 ส่วน CLI ✅ (2026-10-26); dashboard รอคำตอบเรื่อง agent ID ฝั่ง server; onboarding ใน VS Code ยังไม่ทำ** ดู "ผลการทำ" ท้ายไฟล์
+สถานะ: **ขั้น 9 ส่วน CLI ✅ และ agent ID ฝั่ง server ✅ (2026-10-26); onboarding ใน VS Code ยังไม่ทำ** ดู "ผลการทำ" ท้ายไฟล์
 ขึ้นกับ: Phase 01–09 · ส่วน diagnostics บางข้อทำคู่ไปกับแต่ละ phase ได้
 
 ## เป้าหมาย
@@ -137,7 +137,10 @@
 - Dashboard (10.4): server แสดง agent ที่ไม่อยู่ใน `KNOWN_AGENT_IDS` (`core/src/ai/event.rs`) เป็น
   `unknown` (`handlers/v2/work_sessions.rs` `public_agent`) และใช้รายการเดียวกันใน SQL จัดประเภท actor
   (`services/ai_stats.rs`) จึงต้องเพิ่ม ID แบบ server-first: `qwen-code`, `pi`, `kiro`, `factory-droid`,
-  `ibm-bob`, `qoder` (ID อื่นมีอยู่แล้ว) ซึ่งอยู่นอกเงื่อนไขการอนุมัติรวม (ห้ามแตะ server) → รอคำตอบ
+  `ibm-bob`, `qoder` (ID อื่นมีอยู่แล้ว) ซึ่งอยู่นอกเงื่อนไขการอนุมัติรวม (ห้ามแตะ server)
+  → **อนุมัติแยกแล้ว 2026-10-26** และเพิ่มแล้ว (ไม่เพิ่ม alias) พร้อม test ว่า parser ทุกตัวใน registry
+  เป็น ID ที่ server รู้จัก; ต้อง deploy server ก่อน client รุ่นที่ส่ง ID เหล่านี้ dashboard ไม่มีรายการ
+  agent ของตัวเอง (แสดงชื่อ ID ตามที่ server ส่งมา) จึงไม่ต้องแก้ frontend
   ส่วนยอด token รวมในหน้า AI แสดงอยู่แล้วโดยไม่ต้องแก้ (usage endpoint รับ agent ใดก็ได้)
 - Onboarding ใน VS Code extension (10.3): ยังไม่ทำ ต้องขออนุมัติแยกเพราะเป็นไฟล์ client ที่ protected
 - ตัวนับ budget/lock skip/panic ต่อ 24 ชม. และ lag เป็นแถว: ยังไม่ทำ (ต้องมีที่เก็บตัวนับถาวร)

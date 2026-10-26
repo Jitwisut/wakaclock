@@ -56,6 +56,8 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ## Approval gate — ต้องถามก่อนแก้
 
+การอนุมัติ 2026-10-26 (AI transcript coverage, agent ID): ผู้ใช้อนุมัติแยกให้เพิ่ม `qwen-code`, `pi`, `kiro`, `factory-droid`, `ibm-bob`, `qoder` ใน `KNOWN_AGENT_IDS` (`core/src/ai/event.rs`, server-first) และ commit/push ขึ้น `claude/ai-transcript-coverage`; ไม่แตะ `main`, ไม่เพิ่ม alias
+
 การอนุมัติ 2026-10-26 (AI transcript coverage ขั้น 7–9): ผู้ใช้อนุมัติแบบรวมตาม
 `plans/ai-transcript-coverage/` (ขั้น 7 Gemini CLI + Antigravity, ขั้น 8 Tier 2 + cursor-agent, ขั้น 9 doctor/consent/
 dashboard) บน `claude/ai-transcript-coverage`: parser ใหม่ส่งได้แค่ usage และเก็บ edit เป็น dry-run
