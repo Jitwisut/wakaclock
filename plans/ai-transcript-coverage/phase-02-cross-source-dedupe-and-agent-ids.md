@@ -1,8 +1,34 @@
 # Phase 02 — ตัดซ้ำ hook ↔ transcript และเพิ่ม agent ID
 
-สถานะ: **ขั้น 2 ใน README (ทำก่อน Phase 01) — รอ Phase 00 + approval** (ต้องได้คำตอบ Q1 ก่อนเพิ่ม agent ID)
-ขึ้นกับ: Phase 00 (A1–A3, A5, A8) · ไม่ต้องรอ Phase 01 (ledger ใช้แค่ตารางใหม่ใน `state.rs`) · ปลดล็อก: Phase 01 เป็นต้นไป
-วิธีที่เลือก: **(b) แก้ hook ให้ส่ง tool-call ID จริง** + fallback ไฟล์เดียวกัน ±5s สำหรับ hook เวอร์ชันเก่า (ดู README)
+สถานะ: **ส่วนตัดซ้ำของ Claude แก้แล้วใน worktree (2026-10-26) ยังไม่ commit** — ส่วนเพิ่ม agent ID ยังรอ Q1
+ขึ้นกับ: Phase 00 (A1–A3, A5, A8) · ไม่ต้องรอ Phase 01 · ปลดล็อก: Phase 01 เป็นต้นไป
+วิธีที่ใช้จริง: **จับคู่ด้วย ID เท่านั้น** — ไม่มี fallback ตามเวลา เพราะ
+[design protocol §3](../design-canonical-operation-and-revision-protocol.md) และ D07 ห้ามจับคู่ด้วยความใกล้ของเวลา
+(คำขออนุมัติแบบ ±5s ถูกแทนด้วยแบบนี้ และได้รับอนุมัติใหม่แล้ว)
+
+## ผลการทำ (2026-10-26)
+
+ที่ทำ:
+- `process_record` (`cli/src/broker.rs`) เช็กก่อนส่ง heartbeat: ถ้า producer อีกฝั่งส่ง tool call เดียวกันไปแล้ว
+  ให้บันทึก alias ใน `event_aliases` (ตัวที่มาก่อนเป็น canonical), mark ว่า delivered แล้วไม่ส่งซ้ำ
+- transcript มาทีหลัง → คำนวณ event ID ของ hook ซ้ำ: `claude-code-` + sha256(`session|tool_use_id|file`)[:40]
+  (proof ใหม่ `LegacyHookDigestAndEntity` ใน `core/src/ai/revision.rs`) ใช้ได้กับ hook ทุกเวอร์ชัน
+- hook 1.0.3 มาทีหลัง → hook ส่ง `tool_use_id` ตัวจริงแล้ว จึงหา `claude-code-v1:<id>` ของ transcript ได้
+  (proof เดิม `ToolEventAndEntity`)
+- hook 1.0.2 มาทีหลัง transcript → พิสูจน์ไม่ได้ จึงส่งตามปกติ (ไม่เดา)
+- `AiAttributionState::is_delivered_in_any_scope` ค้น key ทุก scope (`<id>`, `<id>|session:…`, `<id>|…|owner:…`)
+- plugin `atoaxis-heartbeat` 1.0.2 → 1.0.3: `tool_call_id` = `tool_use_id` ตัวจริง (event ID คงสูตรเดิม)
+
+หลักฐาน:
+- local data: คำนวณ event ID ของ hook จาก transcript ได้ตรง 1,345 จาก 1,988 (ที่เหลือส่วนใหญ่ไม่มี transcript แล้ว)
+- `cargo test -p wakaclock-core` ผ่าน (414 + 12 + 1), `-p wakaclock-cli` ผ่าน (106 + 7 + 8 + 44), clippy `-D warnings` ผ่าน
+- `heartbeat.test.sh` ผ่าน; `scripts/ai-attribution-integration.py` scenario ใหม่ "Claude hook + transcript of one edit" ผ่าน
+- Cursor scaffold 2 scenario ล้มทั้งก่อนและหลังแก้ (ยืนยันด้วยการ build โค้ดเดิมมารัน) — ไม่เกี่ยวกับงานนี้
+
+ยังไม่ได้ทำ:
+- test เทียบยอดเวลา "hook + transcript ซ้ำ" กับ "hook อย่างเดียว" ฝั่ง timeline (ต้องแตะ test ของ server ซึ่งไม่อยู่ใน scope)
+- ยืนยันฝั่ง server ว่า duplicate ของข้อมูลใหม่ = 0 (รอสิทธิ์ ClickHouse)
+- เผยแพร่ plugin 1.0.3 และให้ผู้ใช้อัปเดต; Codex hook/transcript ยังไม่แตะ (hook ทำงานแค่ 15 ครั้ง)
 
 ## เป้าหมาย
 
@@ -40,7 +66,7 @@
     version ที่ติดตั้งจริงทุก version ที่ยังมีผู้ใช้
   - **(b) แก้ hook** ให้ส่ง `tool_use_id` / `call_id` ดิบเป็น `tool_call_id` (protected, ต้องออก plugin version ใหม่) และ normalize
     ID ของ Codex ให้ตรงกับ transcript (ตัด `<session>:` หรือเติมให้เหมือนกัน)
-  - ไม่ว่าเลือกทางไหน ต้องมี **fallback ตามเวลา/ไฟล์** (agent + path hash + ±5s) สำหรับ hook version เก่าที่ยังส่งแบบเดิม
+  - ~~fallback ตามเวลา/ไฟล์ ±5s~~ — **ยกเลิก** เพราะขัด design protocol §3 / D07; hook เก่าใช้วิธี (a) แทน
 - ยังมี source `ide_telemetry` (transport `shell_hook`) จำนวนมากใน sidecar ต้องตรวจว่าซ้ำกับ hook/transcript หรือไม่ก่อนออกแบบ ledger ให้ครบ
 
 ## หลักการออกแบบ

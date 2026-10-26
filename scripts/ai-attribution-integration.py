@@ -447,6 +447,97 @@ def scenario_cursor_after_file_edit_scaffold(server_url: str) -> None:
         check(heartbeat.get("ai_lines_deleted") == 1, f"[cursor afterFileEdit scaffold] ai_lines_deleted was {heartbeat.get('ai_lines_deleted')!r}")
 
 
+CLAUDE_PLUGIN_DIR = REPO_ROOT / "extensions" / "ai-agents" / "plugins" / "atoaxis-heartbeat"
+
+
+def claude_transcript_edit(session_id: str, tool_use_id: str, cwd: Path, file_path: Path) -> str:
+    """One Claude Code transcript record for a completed Edit, shaped like
+    `backend/api/crates/wakaclock-core/src/ai/fixtures/claude_code/edit_tool_result.json`."""
+    from datetime import datetime, timezone
+
+    return json.dumps(
+        {
+            "type": "user",
+            "sessionId": session_id,
+            "cwd": str(cwd),
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id, "is_error": False}]},
+            "toolUseResult": {
+                "type": "text",
+                "filePath": str(file_path),
+                "userModified": False,
+                "structuredPatch": [
+                    {"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 2, "lines": ["-value = 1", "+value = 1", "+value2 = 2"]}
+                ],
+            },
+        }
+    )
+
+
+def scenario_claude_hook_and_transcript_are_one_edit(server_url: str) -> None:
+    """The Claude hook reports an edit immediately and transcript sync replays the same
+    tool call later. The pair must reach the backend as one heartbeat, while a
+    transcript edit no hook reported must still be delivered on its own."""
+    with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as home_dir:
+        repo = Path(repo_dir).resolve()
+        home = Path(home_dir).resolve()
+        hooked = repo / "hooked.py"
+        unhooked = repo / "unhooked.py"
+        for path in (hooked, unhooked):
+            path.write_text("value = 1\nvalue2 = 2\n")
+        env = base_env(home, server_url)
+        session_id = f"session-{uuid.uuid4()}"
+
+        hook_payload = json.dumps(
+            {
+                "session_id": session_id,
+                "tool_use_id": "toolu_hooked",
+                "cwd": str(repo),
+                "tool_name": "Edit",
+                "tool_input": {"file_path": str(hooked), "old_string": "value = 1", "new_string": "value = 1\nvalue2 = 2"},
+            }
+        )
+        result = subprocess.run(
+            ["bash", str(CLAUDE_PLUGIN_DIR / "scripts" / "heartbeat.sh")],
+            input=hook_payload,
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=30,
+        )
+        check(result.returncode == 0, f"[claude hook+transcript] hook failed: {result.stderr}")
+        run_cli(["sync"], repo, env)
+        hook_beats = [hb for hb in drain_heartbeats() if hb.get("entity") == str(hooked)]
+        check(len(hook_beats) == 1, f"[claude hook+transcript] expected 1 hook heartbeat, got {len(hook_beats)}")
+
+        transcript = home / ".claude" / "projects" / "integration" / f"{session_id}.jsonl"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(
+            claude_transcript_edit(session_id, "toolu_hooked", repo, hooked)
+            + "\n"
+            + claude_transcript_edit(session_id, "toolu_unhooked", repo, unhooked)
+            + "\n"
+        )
+        sync = run_cli(
+            ["ai", "sync", "--agent", "claude-code", "--transcript", str(transcript), "--from-start"],
+            repo,
+            env,
+        )
+        check(sync.returncode == 0, f"[claude hook+transcript] ai sync failed: {sync.stderr}")
+        run_cli(["sync"], repo, env)
+        later = drain_heartbeats()
+        hooked_again = [hb for hb in later if hb.get("entity") == str(hooked)]
+        unhooked_beats = [hb for hb in later if hb.get("entity") == str(unhooked)]
+        check(
+            not hooked_again,
+            f"[claude hook+transcript] the hooked edit was sent again by transcript sync ({len(hooked_again)} extra)",
+        )
+        check(
+            len(unhooked_beats) == 1,
+            f"[claude hook+transcript] the transcript-only edit should be delivered once, got {len(unhooked_beats)}",
+        )
+
+
 def main() -> int:
     if not BINARY.exists():
         print(
@@ -510,6 +601,10 @@ def main() -> int:
         (
             "Cursor afterFileEdit (scaffold, unverified payload shape)",
             lambda: scenario_cursor_after_file_edit_scaffold(server_url),
+        ),
+        (
+            "Claude hook + transcript of one edit",
+            lambda: scenario_claude_hook_and_transcript_are_one_edit(server_url),
         ),
     ]
 

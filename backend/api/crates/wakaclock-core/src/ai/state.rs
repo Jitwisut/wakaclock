@@ -380,6 +380,25 @@ impl AiAttributionState {
         Ok(undelivered)
     }
 
+    /// Whether `event_id` was delivered under any storage scope. Transcript sync keys a
+    /// delivery as `<id>|session:<s>` and the broker inbox may add `|owner:<scope>`, so
+    /// a producer-level lookup matches the bare ID or any `<id>|…` key. `substr` is used
+    /// instead of `LIKE` because `_` in an event ID would act as a wildcard.
+    pub fn is_delivered_in_any_scope(&self, event_id: &str) -> Result<bool, AppError> {
+        let scoped_prefix = format!("{event_id}|");
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM delivered_events
+                 WHERE event_id = ?1 OR substr(event_id, 1, length(?2)) = ?2
+                 LIMIT 1",
+                params![event_id, scoped_prefix],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false))
+    }
+
     /// Idempotent — marking an already-delivered `event_id` again is a no-op, not an
     /// error, since a crash between sending a heartbeat and recording delivery must be
     /// safe to retry (plan.md 8.6: "A crash must either leave the old cursor replayable

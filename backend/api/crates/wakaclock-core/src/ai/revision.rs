@@ -14,6 +14,7 @@
 use crate::ai::event::is_safe_event_id;
 use crate::heartbeat::ActorType;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// The initial late-reconciliation grace window proposed by the F0 design.
 pub const LATE_RECONCILIATION_GRACE_SECONDS: i64 = 15;
@@ -85,6 +86,11 @@ impl AttributionRetentionPolicy {
 pub enum AliasProofKind {
     ToolEventAndEntity,
     ContentVersionAndEntity,
+    /// The Claude Code hook (plugin <= 1.0.2) reports a digest of
+    /// `session|tool_use_id|file` instead of the raw tool ID. Recomputing that digest
+    /// from the transcript's own session, tool ID and entity is the same tool-call
+    /// proof as [`Self::ToolEventAndEntity`], only encoded; it is never a time match.
+    LegacyHookDigestAndEntity,
 }
 
 impl AliasProofKind {
@@ -92,6 +98,7 @@ impl AliasProofKind {
         match self {
             Self::ToolEventAndEntity => "tool_event_and_entity",
             Self::ContentVersionAndEntity => "content_version_and_entity",
+            Self::LegacyHookDigestAndEntity => "legacy_hook_digest_and_entity",
         }
     }
 
@@ -99,8 +106,37 @@ impl AliasProofKind {
         match value {
             "tool_event_and_entity" => Some(Self::ToolEventAndEntity),
             "content_version_and_entity" => Some(Self::ContentVersionAndEntity),
+            "legacy_hook_digest_and_entity" => Some(Self::LegacyHookDigestAndEntity),
             _ => None,
         }
+    }
+}
+
+/// The event ID the Claude Code hook script assigns to one file edit:
+/// `claude-code-` plus the first 40 hex characters of SHA-256 over
+/// `session_id|tool_use_id|file_path`. Mirrors `EVENT_MATERIAL`/`EVENT_HASH` in
+/// `extensions/ai-agents/plugins/atoaxis-heartbeat/scripts/heartbeat.sh`; the two must
+/// change together.
+pub fn legacy_claude_hook_event_id(session_id: &str, tool_use_id: &str, entity: &str) -> String {
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(format!("{session_id}|{tool_use_id}|{entity}").as_bytes())
+    );
+    format!("claude-code-{}", &digest[..40])
+}
+
+fn legacy_hook_digest_matches(hook: &AliasEvidence, transcript: &AliasEvidence) -> bool {
+    match (
+        transcript.session_id.as_deref(),
+        transcript.tool_event_id.as_deref(),
+    ) {
+        (Some(session_id), Some(tool_use_id))
+            if !session_id.is_empty() && !tool_use_id.is_empty() =>
+        {
+            hook.event_id
+                == legacy_claude_hook_event_id(session_id, tool_use_id, &transcript.entity)
+        }
+        _ => false,
     }
 }
 
@@ -165,6 +201,12 @@ pub fn prove_alias(left: &AliasEvidence, right: &AliasEvidence) -> Option<AliasP
         || left.entity != right.entity
     {
         return None;
+    }
+
+    // Checked before the conflict rule: a legacy hook's tool ID is its own digest, so it
+    // never equals the transcript's raw tool ID even though both name one tool call.
+    if legacy_hook_digest_matches(left, right) || legacy_hook_digest_matches(right, left) {
+        return Some(AliasProofKind::LegacyHookDigestAndEntity);
     }
 
     if conflicting_values(left.tool_event_id.as_ref(), right.tool_event_id.as_ref())
@@ -374,6 +416,66 @@ mod tests {
         let left = AliasEvidence::new("hook-1", "entity-1").with_session_id("session-1");
         let right = AliasEvidence::new("transcript-1", "entity-1").with_session_id("session-1");
         assert_eq!(prove_alias(&left, &right), None);
+    }
+
+    #[test]
+    fn legacy_hook_digest_matches_the_hook_script() {
+        // Expected value computed with the hook's own pipeline:
+        // printf '%s' 'session-1|toolu_01|/repo/src/a.rs' | shasum -a 256 | cut -c1-40
+        assert_eq!(
+            legacy_claude_hook_event_id("session-1", "toolu_01", "/repo/src/a.rs"),
+            "claude-code-c4e65e5557b717c9a8d955f89b8d58d34f79bd04"
+        );
+    }
+
+    #[test]
+    fn legacy_hook_digest_is_tool_call_alias_proof() {
+        let hook_id = legacy_claude_hook_event_id("session-1", "toolu_01", "/repo/src/a.rs");
+        let hook = AliasEvidence::new(hook_id.clone(), "/repo/src/a.rs")
+            .with_tool_event_id(hook_id)
+            .with_session_id("session-1");
+        let transcript = AliasEvidence::new("claude-code-v1:toolu_01", "/repo/src/a.rs")
+            .with_tool_event_id("toolu_01")
+            .with_session_id("session-1");
+        assert_eq!(
+            prove_alias(&transcript, &hook),
+            Some(AliasProofKind::LegacyHookDigestAndEntity)
+        );
+        assert_eq!(
+            prove_alias(&hook, &transcript),
+            Some(AliasProofKind::LegacyHookDigestAndEntity)
+        );
+    }
+
+    #[test]
+    fn legacy_hook_digest_requires_the_same_call_session_and_file() {
+        let hook_id = legacy_claude_hook_event_id("session-1", "toolu_01", "/repo/src/a.rs");
+        let hook =
+            AliasEvidence::new(hook_id.clone(), "/repo/src/a.rs").with_tool_event_id(hook_id);
+        for (session, tool, entity) in [
+            ("session-2", "toolu_01", "/repo/src/a.rs"),
+            ("session-1", "toolu_02", "/repo/src/a.rs"),
+        ] {
+            let transcript = AliasEvidence::new("claude-code-v1:other", entity)
+                .with_tool_event_id(tool)
+                .with_session_id(session);
+            assert_eq!(prove_alias(&transcript, &hook), None);
+        }
+        // A different file is a different entity, so it never reaches the digest check.
+        let other_file = AliasEvidence::new("claude-code-v1:toolu_01", "/repo/src/b.rs")
+            .with_tool_event_id("toolu_01")
+            .with_session_id("session-1");
+        assert_eq!(prove_alias(&other_file, &hook), None);
+        // Without a session the digest cannot be recomputed, so there is no proof.
+        let no_session = AliasEvidence::new("claude-code-v1:toolu_01", "/repo/src/a.rs")
+            .with_tool_event_id("toolu_01");
+        assert_eq!(prove_alias(&no_session, &hook), None);
+    }
+
+    #[test]
+    fn legacy_hook_digest_proof_kind_round_trips() {
+        let kind = AliasProofKind::LegacyHookDigestAndEntity;
+        assert_eq!(AliasProofKind::parse(kind.as_str()), Some(kind));
     }
 
     #[test]

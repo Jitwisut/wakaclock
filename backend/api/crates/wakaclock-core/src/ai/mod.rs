@@ -122,10 +122,10 @@ pub use provider::{
     KNOWN_PROVIDER_IDS,
 };
 pub use revision::{
-    prove_alias, AliasEvidence, AliasProofKind, AttributionRetentionPolicy, AttributionRevision,
-    RevisionCandidate, RevisionWriteOutcome, ATTRIBUTION_REVISION_RETENTION_SECONDS,
-    EVENT_ALIAS_RETENTION_SECONDS, LATE_RECONCILIATION_GRACE_SECONDS,
-    PENDING_OBSERVATION_RETENTION_SECONDS,
+    legacy_claude_hook_event_id, prove_alias, AliasEvidence, AliasProofKind,
+    AttributionRetentionPolicy, AttributionRevision, RevisionCandidate, RevisionWriteOutcome,
+    ATTRIBUTION_REVISION_RETENTION_SECONDS, EVENT_ALIAS_RETENTION_SECONDS,
+    LATE_RECONCILIATION_GRACE_SECONDS, PENDING_OBSERVATION_RETENTION_SECONDS,
 };
 pub use state::{AiAttributionState, PendingUsage};
 pub use topology::{

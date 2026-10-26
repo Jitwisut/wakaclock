@@ -16,7 +16,7 @@
 | ขั้น | งาน | ไฟล์รายละเอียด | ใครทำอะไร | เสร็จเมื่อ |
 |---|---|---|---|---|
 | 1 | ปิด Phase 00 | [phase-00](phase-00-baseline-and-contract.md), [ผล](phase-00-baseline-results.md) | เจ้าของรัน [SQL](phase-00-queries.sql) + ส่งยอดรายวัน 7 วัน (WakaTime + AtoAxis); Claude สรุปผล | ผลครบทุกข้อ, ตอบ Q2/Q3 |
-| 2 | **แก้ Claude นับบรรทัดซ้ำ** | [phase-02](phase-02-cross-source-dedupe-and-agent-ids.md) | Claude ส่งคำขออนุมัติ → แก้ hook ให้ส่ง tool-call ID จริง + claim ledger + fallback ±5s | duplicate ของข้อมูลใหม่ = 0 |
+| 2 | **แก้ Claude นับบรรทัดซ้ำ** | [phase-02](phase-02-cross-source-dedupe-and-agent-ids.md) | ✅ แก้ใน worktree แล้ว (ยังไม่ commit): จับคู่ด้วย ID เท่านั้น + hook 1.0.3 ส่ง tool-call ID จริง | duplicate ของข้อมูลใหม่ = 0 (รอยืนยันฝั่ง server) |
 | 3 | ต่ออายุใบรับรอง Claude Code + Codex | [phase-11](phase-11-certification-and-rollout.md) | เจ้าของทำ session ตามสคริปต์บน macOS → Windows → Linux VM | ใบรับรองใหม่ 3 OS |
 | 4 | โครงพื้นฐาน parser | [phase-01](phase-01-source-cursors-and-engine.md) | Claude ส่งคำขออนุมัติ → cursor SQLite/snapshot, registry, gate `emit_edit_heartbeats` | parser เดิมผลเท่าเดิมทุก byte |
 | 5 | GitHub Copilot (VS Code ก่อน, CLI ทีหลัง) | [phase-05](phase-05-github-copilot.md) | เครื่องเจ้าของมีข้อมูลจริงแล้ว → certify ได้ทันที | Copilot ได้ token/model + dry-run edit |
@@ -34,9 +34,10 @@
 - **Copilot ก่อน Cursor** — มีข้อมูลจริงบนเครื่องแล้ว ไม่ต้องรอติดตั้ง
 - **Tier 3 ออกจากลำดับหลัก** — งานมาก ผู้ใช้น้อย และเสี่ยงต่อหลัก accuracy
 
-วิธีแก้ข้อมูลซ้ำที่เลือก (ขั้น 2): **แก้ hook ให้ส่ง tool-call ID จริง** (Claude `tool_use_id`, Codex `call_id` ในรูปแบบเดียวกับ
-transcript) แทนการคำนวณ hash ของ hook ซ้ำ เพราะ plugin ที่ติดตั้งจริง (1.0.2) ต่างจากโค้ดใน repo ทำให้การไล่ hash ทุกเวอร์ชันเปราะ;
-hook เวอร์ชันเก่าที่ยังส่งแบบเดิมใช้ fallback จับคู่ไฟล์เดียวกัน + เวลาห่าง ≤ 5 วินาที
+วิธีแก้ข้อมูลซ้ำที่ใช้จริง (ขั้น 2): **จับคู่ด้วย ID เท่านั้น** — transcript คำนวณ event ID ของ hook ซ้ำจาก
+`session|tool_use_id|file` (ใช้ได้กับ hook ทุกเวอร์ชัน) และ hook 1.0.3 ส่ง `tool_use_id` ตัวจริง; **ไม่มี fallback ตามเวลา**
+เพราะ [design protocol §3](../design-canonical-operation-and-revision-protocol.md) และ D07 ห้าม รายละเอียดและหลักฐานอยู่ใน
+[phase-02](phase-02-cross-source-dedupe-and-agent-ids.md)
 
 ## เป้าหมาย
 
