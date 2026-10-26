@@ -149,3 +149,23 @@ record. No local sample of any of these logs exists; edits stay dry-run (usage o
 Not parsed yet (need tool-specific joins and were recorded as unsupported for now): Grok CLI
 (edits only in `hunk_records.jsonl`), Amp (tool leases confirmed by later results in `.log`
 files), Continue (edit outcomes and tokens in separate `dev_data` files).
+
+## SQLite app family (`sqlite_apps.rs`, added 2026-10-26)
+
+| Agent ID | Database | Edits | Usage |
+| --- | --- | --- | --- |
+| `opencode` | `~/.local/share/opencode/opencode*.db` (or the app-support `opencode` folder) | `part.data` with `type = "tool"`, tool `edit`/`write`/`patch`/`multiedit`/`apply_patch`, `state.status = "completed"`, `state.input.filePath`, lines from `state.metadata.filediff.{additions, deletions}` | assistant `message.data` `tokens.{input, output, cache.read, cache.write}`, `modelID` |
+| `qoder` | `AppSup/Qoder/SharedClientCache/cache/db/local.db` | `chat_message.tool_result` `results[].{path, diffInfo.{add, delete}}` | `chat_message.token_info` `prompt_tokens`/`completion_tokens`/`cached_tokens` |
+
+Both are read through `sqlite_source.rs` (read-only URI, 250 ms busy timeout, time budget,
+db + WAL fingerprint). Rows are updated in place while a response streams, so each pass
+re-reads the last 500 rows and IDs are stable per row; usage waits two minutes. A missing
+table or column is reported as "schema not recognised" and nothing is read. Not covered:
+OpenCode's legacy `storage/**/*.json` files and any v2 `session_message` schema. No local
+database of either tool exists; edits stay dry-run (usage only), so the OpenCode native
+plugin's markers cannot be double counted.
+
+Not parsed (recorded as unsupported until a live sample settles the schema): Goose (per-session
+token counters that grow in place, which the first-write-wins usage ID cannot express), Zed
+and Warp (no documented table for edits or tokens), cursor-agent CLI (`agent-transcripts` and
+`ai-code-tracking.db` carry no confirmed per-edit record).

@@ -251,7 +251,7 @@ mod tests {
         let registry = super::super::AdapterRegistry::builtin();
         // 14 hook/manual adapters plus 5 transcript-only ones (qwen-code, pi, kiro,
         // factory-droid, ibm-bob) added with the Tier 2 parsers.
-        assert_eq!(registry.manifests().len(), 19);
+        assert_eq!(registry.manifests().len(), 20);
         for adapter in registry.manifests() {
             let capabilities = for_adapter(&adapter.id);
             assert!(!capabilities.is_empty());

@@ -934,9 +934,10 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 command_names: vec!["opencode".to_string()],
                 version_arg: Some("--version".to_string()),
             },
+            // Session database read by SqliteAppParser; usage only, edits dry-run.
             install: InstallStrategy::TranscriptOnly,
             native_hooks: no_hooks(),
-            transcript_roots: vec![],
+            transcript_roots: vec![".local/share/opencode".to_string()],
             payload_schema_versions: vec![],
             supported_change_kinds: file_kinds.clone(),
             verification: Verification::unverified(),
@@ -1019,6 +1020,24 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
             transcript_roots: vec![
                 "Library/Application Support/IBM Bob/User/globalStorage/ibm.bob-code/tasks".to_string(),
                 "Library/Application Support/Bob-IDE/User/globalStorage/ibm.bob-code/tasks".to_string(),
+            ],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "qoder".to_string(),
+            provider: "qoder".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec![],
+                version_arg: None,
+            },
+            // Transcript-only: local.db read by SqliteAppParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![
+                "Library/Application Support/Qoder/SharedClientCache/cache/db".to_string(),
             ],
             payload_schema_versions: vec![],
             supported_change_kinds: file_kinds.clone(),

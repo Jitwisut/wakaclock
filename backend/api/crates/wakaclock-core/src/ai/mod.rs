@@ -65,6 +65,7 @@ pub mod provider;
 pub mod revision;
 pub mod snapshot_source;
 pub mod source;
+pub mod sqlite_apps;
 pub mod sqlite_source;
 pub mod state;
 pub mod topology;
@@ -142,6 +143,7 @@ pub use revision::{
     ATTRIBUTION_REVISION_RETENTION_SECONDS, EVENT_ALIAS_RETENTION_SECONDS,
     LATE_RECONCILIATION_GRACE_SECONDS, PENDING_OBSERVATION_RETENTION_SECONDS,
 };
+pub use sqlite_apps::SqliteAppParser;
 pub use source::{DbFingerprint, FileFingerprint, SourceCheckpoint, SourceKind};
 pub use state::{AiAttributionState, PendingUsage};
 pub use topology::{

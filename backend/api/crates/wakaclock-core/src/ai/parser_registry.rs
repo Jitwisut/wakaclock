@@ -10,7 +10,7 @@ use crate::ai::parser::AiActivityParser;
 use crate::ai::ui_messages::{self, UiMessagesParser};
 use crate::ai::{
     AntigravityParser, ClaudeCodeParser, CodexParser, CopilotParser, CursorFamilyParser,
-    GeminiCliParser,
+    GeminiCliParser, SqliteAppParser,
 };
 
 /// One runnable parser and the runtime that owns its policy.
@@ -56,6 +56,8 @@ fn parser_for(runtime: AdapterRuntime, id: &str) -> Option<Box<dyn AiActivityPar
         (AdapterRuntime::None, "factory-droid") => Some(Box::new(JsonlFamilyParser::new(
             &jsonl_family::FACTORY_DROID,
         ))),
+        (AdapterRuntime::None, "opencode") => Some(Box::new(SqliteAppParser::opencode())),
+        (AdapterRuntime::None, "qoder") => Some(Box::new(SqliteAppParser::qoder())),
         // Kimi keeps its hook installer runtime; its session logs are read as well.
         (AdapterRuntime::KimiCodeCli, "kimi-code-cli") => {
             Some(Box::new(JsonlFamilyParser::new(&jsonl_family::KIMI)))
@@ -99,7 +101,7 @@ mod tests {
     #[test]
     fn builtin_parsers_cover_every_transcript_adapter() {
         let ids: Vec<&str> = builtin_parsers().iter().map(|entry| entry.id).collect();
-        assert_eq!(ids.len(), 16);
+        assert_eq!(ids.len(), 18);
         for id in [
             "antigravity",
             "claude-code",
@@ -117,6 +119,8 @@ mod tests {
             "factory-droid",
             "kimi-code-cli",
             "ibm-bob",
+            "opencode",
+            "qoder",
         ] {
             assert!(ids.contains(&id), "{id} missing from {ids:?}");
         }
@@ -139,6 +143,8 @@ mod tests {
             "kiro",
             "factory-droid",
             "kimi-code-cli",
+            "opencode",
+            "qoder",
         ] {
             assert!(!emits_edit_heartbeats(id), "{id}");
         }
