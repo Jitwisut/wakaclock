@@ -13,24 +13,29 @@
 
 ทำทีละขั้นตามลำดับนี้ ห้ามข้ามขั้น ทุกขั้นที่แก้โค้ดต้องส่ง [คำขออนุมัติ](approval-gate-template.md) และรอคำตอบก่อน
 
+**การทดสอบ (ตัดสิน 2026-10-26):** พัฒนาให้ครบก่อนแล้วทดสอบกับเครื่องมือจริงครั้งเดียวตอนท้าย —
+ระหว่างพัฒนาแต่ละขั้นยังรัน test อัตโนมัติ (unit/integration/clippy) ตาม approval gate แต่ **live certification,
+campaign, การล็อกอิน Claude/Codex, SQL ฝั่ง server และยอด 7 วัน** ย้ายไปรวมใน "ขั้นทดสอบรวม" ท้ายตาราง
+
 | ขั้น | งาน | ไฟล์รายละเอียด | ใครทำอะไร | เสร็จเมื่อ |
 |---|---|---|---|---|
-| 1 | ปิด Phase 00 | [phase-00](phase-00-baseline-and-contract.md), [ผล](phase-00-baseline-results.md) | เจ้าของรัน [SQL](phase-00-queries.sql) + ส่งยอดรายวัน 7 วัน (WakaTime + AtoAxis); Claude สรุปผล | ผลครบทุกข้อ, ตอบ Q2/Q3 |
+| 1 | ปิด Phase 00 | [phase-00](phase-00-baseline-and-contract.md), [ผล](phase-00-baseline-results.md) | ✅ ส่วนในเครื่องเสร็จแล้ว; SQL ฝั่ง server + ยอด 7 วัน **ย้ายไปขั้นทดสอบรวม (ขั้น 10)** | ผลในเครื่องครบ |
 | 2 | **แก้ Claude นับบรรทัดซ้ำ** | [phase-02](phase-02-cross-source-dedupe-and-agent-ids.md) | ✅ แก้ใน worktree แล้ว (ยังไม่ commit): จับคู่ด้วย ID เท่านั้น + hook 1.0.3 ส่ง tool-call ID จริง | duplicate ของข้อมูลใหม่ = 0 (รอยืนยันฝั่ง server) |
-| 3 | ต่ออายุใบรับรอง Claude Code + Codex | [phase-11](phase-11-certification-and-rollout.md) | เจ้าของทำ session ตามสคริปต์บน macOS → Windows → Linux VM | ใบรับรองใหม่ 3 OS |
-| 4 | โครงพื้นฐาน parser | [phase-01](phase-01-source-cursors-and-engine.md) | Claude ส่งคำขออนุมัติ → cursor SQLite/snapshot, registry, gate `emit_edit_heartbeats` | parser เดิมผลเท่าเดิมทุก byte |
+| 3 | ~~ต่ออายุใบรับรอง Claude Code + Codex~~ → **ย้ายไปขั้นทดสอบรวม** | [phase-11](phase-11-certification-and-rollout.md) | lab ใน worktree build ไว้แล้ว (manifest จะเก่าเมื่อโค้ดเปลี่ยน ต้อง build ใหม่ตอนทดสอบ) | — |
+| 4 | โครงพื้นฐาน parser | [phase-01](phase-01-source-cursors-and-engine.md) | ✅ แก้ใน worktree แล้ว (ยังไม่ commit) — ดูผลใน phase-01 | parser เดิมผลเท่าเดิมทุก byte |
 | 5 | GitHub Copilot (VS Code ก่อน, CLI ทีหลัง) | [phase-05](phase-05-github-copilot.md) | เครื่องเจ้าของมีข้อมูลจริงแล้ว → certify ได้ทันที | Copilot ได้ token/model + dry-run edit |
 | 6 | Cursor + Windsurf + cursor-agent | [phase-04](phase-04-cursor-windsurf-statevscdb.md) | เจ้าของติดตั้ง Cursor/Windsurf | certify macOS แล้วตาม OS อื่น |
 | 7 | Gemini CLI + Antigravity | [phase-03](phase-03-claude-codex-gemini-antigravity.md) | เจ้าของเปิด session Gemini จริง | fixture จริง + certify |
 | 8 | Tier 2 แบบ "สำรวจ storage ก่อน" | [phase-06](phase-06-vscode-extension-family.md), [phase-07](phase-07-jsonl-cli-family.md), [phase-08](phase-08-sqlite-app-family.md) | ทำเฉพาะ tool ที่ log มีหลักฐาน edit ชัด (ตาม ROADMAP P3 ข้อ 4–5); ที่เหลือบันทึก Unsupported | ทุก tool มีสถานะ |
 | 9 | Doctor / consent / dashboard | [phase-10](phase-10-doctor-dashboard-onboarding.md) | ทำคู่กับขั้น 5–8 ได้ทีละส่วน | ผู้ใช้เห็นและปิดเปิดได้ |
-| 10 | เปิดส่ง edit heartbeat ทีละ adapter | [phase-11](phase-11-certification-and-rollout.md) | คำขอแยกต่อ adapter พร้อมหลักฐาน 7 วัน ≤ 1% | ตาม DoD |
+| 10 | **ขั้นทดสอบรวม**: ปิด Phase 00 (SQL + ยอด 7 วัน), build lab ใหม่, campaign + ใบรับรองทุก tool ทุก OS | [phase-00](phase-00-baseline-and-contract.md), [phase-11](phase-11-certification-and-rollout.md) | เจ้าของ: Docker, ล็อกอิน tool, สิทธิ์ ClickHouse, ยอด WakaTime, ติดตั้ง tool | ใบรับรองครบ, duplicate = 0 ฝั่ง server |
+| 11 | เปิดส่ง edit heartbeat ทีละ adapter | [phase-11](phase-11-certification-and-rollout.md) | คำขอแยกต่อ adapter พร้อมหลักฐาน 7 วัน ≤ 1% | ตาม DoD |
 | — | Tier 3 (long tail) | [phase-09](phase-09-generic-configurable-parser.md) | **ทำเมื่อมีผู้ใช้ขอเท่านั้น** ไม่อยู่ในลำดับหลัก | — |
 
 เหตุผลของลำดับ:
 - **ขั้น 2 ก่อนทุกอย่างที่เป็นโค้ด** — เป็น bug ที่ทำตัวเลข AI บน dashboard ผิดอยู่ตอนนี้ (Claude ~98k บรรทัดซ้ำ)
   และไม่ต้องรอ cursor แบบใหม่ของขั้น 4
-- **ขั้น 3 เร็วและคุ้ม** — parser มีอยู่แล้ว ได้ชื่อเครื่องมือที่เชื่อถือได้กลับมา
+- **ทดสอบจริงครั้งเดียวตอนท้าย** — เจ้าของเลือก (2026-10-26) เพื่อไม่ต้องตั้ง lab/ล็อกอินซ้ำทุก phase; ข้อแลกคือ bug ที่เจอเฉพาะกับ tool จริงจะเจอช้าลง
 - **Copilot ก่อน Cursor** — มีข้อมูลจริงบนเครื่องแล้ว ไม่ต้องรอติดตั้ง
 - **Tier 3 ออกจากลำดับหลัก** — งานมาก ผู้ใช้น้อย และเสี่ยงต่อหลัก accuracy
 

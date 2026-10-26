@@ -1,6 +1,8 @@
 # Phase 11 — Certification, ต่ออายุ และ rollout
 
-สถานะ: **ทำต่อท้ายทุก phase ที่มี parser ใหม่** (ต้องได้คำตอบ Q7 ก่อน cert แรก; Q8 ตอบแล้ว)
+สถานะ: **ทำครั้งเดียวในขั้นทดสอบรวมหลังพัฒนาครบ** (ตัดสิน 2026-10-26; ต้องได้คำตอบ Q7 ก่อน; Q8 ตอบแล้ว)
+เครื่องมือ live cert บน macOS คือ lab ใน [docs/work-session-validation-lab.md](../../docs/work-session-validation-lab.md)
+(docker compose project `atoaxis-receipt-validation` ใช้ volume ร่วมกับ lab ใน checkout หลัก จึงต้องใช้ `private.json` ชุดเดิม)
 ขึ้นกับ: parser ของแต่ละ phase · การปลด time-neutral ทำตอนท้ายสุด
 
 ## เป้าหมาย

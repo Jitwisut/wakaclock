@@ -1,7 +1,30 @@
 # Phase 01 — Source cursors และ parse engine
 
-สถานะ: **ขั้น 4 ใน README — รอขั้น 2 (Phase 02) + approval**
-ขึ้นกับ: Phase 00 (A4, A6), Phase 02 · ปลดล็อก: Phase 03–09
+สถานะ: **ทำแล้วใน worktree (2026-10-26) ยังไม่ commit** — ขั้น 4 ใน README
+ขึ้นกับ: Phase 02 (เสร็จแล้ว) · ปลดล็อก: Phase 03–09
+
+## ผลการทำ (2026-10-26)
+
+ต่างจาก design ด้านล่างโดยตั้งใจ (ไฟล์ชุดเดิมตามคำขออนุมัติ):
+- checkpoint ของ SQLite/snapshot เก็บใน `ParserContext.source` (มีที่สร้างตรงๆ 3 จุด) แทนการเพิ่ม field ใน `ParserCursor`
+  (มีที่สร้างตรงๆ 43 จุด); JSON ของ cursor เดิมอ่านได้เหมือนเดิม
+- gate เป็น method `AdapterRuntime::emits_edit_heartbeats()` ไม่เพิ่ม field ใน catalog (ไม่เปลี่ยน schema `catalog-v1.json`)
+- งบเวลา SQLite ใช้ `InterruptHandle` + watchdog thread แทน `progress_handler` (`rusqlite` ไม่ได้เปิด feature `hooks`; ไม่แตะ `Cargo.toml`)
+- `is_reusable` / `seed_at_head` เป็น method ของ trait (`cursor_is_reusable`, `seed_at_head`) ค่า default = พฤติกรรม JSONL เดิม
+- คำสั่งรายงาน dry-run ยกไป Phase 10 (รอบนี้เก็บข้อมูลอย่างเดียว)
+
+ไฟล์ใหม่: `core/src/ai/{source,sqlite_source,snapshot_source,parser_registry}.rs`
+ไฟล์ที่แก้: `core/src/ai/{parser,state,adapter,claude,codex,gemini,mod}.rs`, `cli/src/main.rs`
+(`supported_ai_parsers` → registry, `run_ai_sync` ใช้ trait method + `catch_parser_panic` + gate `keep_edits_as_dry_run`, prune ตารางใหม่)
+
+หลักฐาน: `cargo test -p wakaclock-core` 432 + 12 + 1 ผ่าน; `-p wakaclock-cli` 108 + 7 + 8 + 44 ผ่าน;
+clippy `-D warnings` ผ่าน; rustfmt ไฟล์/ส่วนของงานนี้ผ่าน; integration ผ่านทุก scenario ยกเว้น Cursor scaffold 2 ตัว
+(ล้มตั้งแต่ก่อนแก้). test ใหม่ครอบคลุม: cursor รุ่นเก่า, record hash, dry-run idempotent/ไม่เก็บ path, registry/gate,
+panic → error, SQLite (batch, row limit, unchanged, missing, WAL ที่ writer เปิดค้าง, lock ข้ามภายใน 2s,
+interrupt เมื่อเกินงบ, checksum ไม่เปลี่ยน, เขียนไม่ได้), snapshot (unchanged/too large, rewrite ส่งเฉพาะ record ใหม่/เปลี่ยน)
+
+ยังไม่ได้ทำ: dry-run เทียบก่อน/หลังกับ transcript จริงในเครื่อง (ย้ายไปขั้นทดสอบรวม); ยังไม่มี parser ตัวไหนใช้
+`sqlite_source`/`snapshot_source` จริง (เริ่มใช้ใน Phase 04–08)
 
 ## เป้าหมาย
 
