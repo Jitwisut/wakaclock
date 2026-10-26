@@ -834,7 +834,12 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 instruction: "no documented AtoAxis integration point yet".to_string(),
             },
             native_hooks: no_hooks(),
-            transcript_roots: vec![],
+            // Read by AntigravityParser (JSONL only; usage-only, edits stay dry-run).
+            transcript_roots: vec![
+                ".gemini/antigravity/brain".to_string(),
+                ".gemini/antigravity-ide/brain".to_string(),
+                ".gemini/antigravity-cli/brain".to_string(),
+            ],
             payload_schema_versions: vec![],
             supported_change_kinds: file_kinds.clone(),
             verification: Verification::unverified(),

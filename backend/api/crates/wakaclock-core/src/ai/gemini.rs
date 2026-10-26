@@ -269,7 +269,32 @@ fn parse_json_document(path: &Path, cursor: &ParserCursor) -> Result<ParseBatch,
     })
 }
 
+/// Who an edit found by [`edit_from_record`] is attributed to. Gemini CLI and
+/// Antigravity share the record shape but not the agent identity.
+pub(crate) struct EditIdentity {
+    pub agent: &'static str,
+    pub provider: Option<&'static str>,
+    pub id_prefix: &'static str,
+    pub producer_surface: Option<&'static str>,
+}
+
+const GEMINI_CLI: EditIdentity = EditIdentity {
+    agent: "gemini-cli",
+    provider: Some("google"),
+    id_prefix: "gemini-cli-v1",
+    producer_surface: None,
+};
+
 fn parse_edit(value: &Value, offset: u64) -> Option<AiEditEvent> {
+    edit_from_record(value, offset, &GEMINI_CLI)
+}
+
+/// A successful file-edit tool result in a Gemini-style record, or `None`.
+pub(crate) fn edit_from_record(
+    value: &Value,
+    offset: u64,
+    identity: &EditIdentity,
+) -> Option<AiEditEvent> {
     let tool = first_string(value, &["tool_name", "toolName", "name", "tool", "action"])
         .map(|name| name.to_ascii_lowercase())?;
     if !EDIT_TOOLS.iter().any(|candidate| tool.contains(candidate)) {
@@ -301,11 +326,13 @@ fn parse_edit(value: &Value, offset: u64) -> Option<AiEditEvent> {
     let occurred_at = first_timestamp(value).unwrap_or_else(Utc::now);
     let operation_id = first_string(value, &["event_id", "eventId", "call_id", "callId", "id"])
         .unwrap_or_else(|| offset.to_string());
-    let event_id = opaque_file_event_id("gemini-cli-v1", &operation_id, &path);
+    let event_id = opaque_file_event_id(identity.id_prefix, &operation_id, &path);
     Some(AiEditEvent {
         event_id,
-        agent: "gemini-cli".to_string(),
-        provider: normalize_identity_provider(Some("google")),
+        agent: identity.agent.to_string(),
+        provider: identity
+            .provider
+            .and_then(|provider| normalize_identity_provider(Some(provider))),
         model: normalize_identity_model(
             first_string(value, &["model", "model_name", "modelName"]).as_deref(),
         ),
@@ -316,7 +343,7 @@ fn parse_edit(value: &Value, offset: u64) -> Option<AiEditEvent> {
         identity_reason: None,
         identity_source: Some(AiEventSource::Transcript.as_str().to_string()),
         tool_event_id: Some(operation_id),
-        producer_surface: None,
+        producer_surface: identity.producer_surface.map(str::to_string),
         occurred_at,
         entity,
         project_root: root,

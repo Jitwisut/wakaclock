@@ -104,3 +104,14 @@ Not read yet: `chatSessions/*.jsonl` (patch log with `modelId` and request token
 
 Not covered: `cursor-agent` CLI (moved to the Tier 2 survey), Tab completions, resolving
 workspace-relative paths to a workspace root.
+
+## Antigravity (`antigravity.rs`, added 2026-10-26)
+
+| | |
+| --- | --- |
+| Source | `~/.gemini/{antigravity,antigravity-ide,antigravity-cli}/brain/<session>/.system_generated/logs/transcript.jsonl` |
+| Surface | `producer_surface` = `desktop`, `ide` or `cli` from the directory |
+| Verified locally | nothing — Antigravity is not installed on the development machine; record shape assumed to match Gemini CLI |
+| Edits | same successful-tool-result rule as Gemini CLI (`gemini::edit_from_record`, shared with an identity parameter) |
+| Usage | none: the SQLite stores hold protobuf payloads and are not decoded (owner decision Q4) |
+| Sending | edits kept as local dry-run evidence until certified (catalog runtime `None`) |

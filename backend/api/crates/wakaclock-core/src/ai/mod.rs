@@ -38,6 +38,7 @@
 
 pub mod activity;
 pub mod adapter;
+pub mod antigravity;
 pub mod canonical;
 pub mod certification;
 pub mod claude;
@@ -73,6 +74,7 @@ pub use adapter::{
     AdapterCatalogEntry, AdapterCatalogV1, AdapterManifest, AdapterRegistry, AdapterRuntime,
     InstallStrategy,
 };
+pub use antigravity::AntigravityParser;
 pub use canonical::{fingerprint_for_heartbeat, FINGERPRINT_SCHEME_V1};
 pub use certification::{
     CertificationCatalogEntry, CertificationCatalogV1, CertificationDecision,
