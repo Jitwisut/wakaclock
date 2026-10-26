@@ -49,6 +49,7 @@ pub mod cursor;
 pub mod diagnostics;
 pub mod editor_capability;
 pub mod event;
+pub(crate) mod fields;
 pub mod follow_up;
 pub mod gemini;
 pub mod identity;
@@ -67,6 +68,7 @@ pub mod sqlite_source;
 pub mod state;
 pub mod topology;
 pub mod topology_handoff;
+pub mod ui_messages;
 pub mod usage;
 pub mod vscdb_kv;
 

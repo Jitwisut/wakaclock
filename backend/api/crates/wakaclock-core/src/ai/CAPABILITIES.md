@@ -115,3 +115,17 @@ workspace-relative paths to a workspace root.
 | Edits | same successful-tool-result rule as Gemini CLI (`gemini::edit_from_record`, shared with an identity parameter) |
 | Usage | none: the SQLite stores hold protobuf payloads and are not decoded (owner decision Q4) |
 | Sending | edits kept as local dry-run evidence until certified (catalog runtime `None`) |
+
+## Cline extension family (`ui_messages.rs`, added 2026-10-26)
+
+| | |
+| --- | --- |
+| Tools | Cline (`saoudrizwan.claude-dev`), Roo Code (`rooveterinaryinc.roo-cline`, `…roo-code-nightly`), Kilo Code (`kilocode.kilo-code`); profile for IBM Bob (`ibm.bob-code`) exists but is not registered — there is no catalog manifest for it yet |
+| Source | `<editor>/User/globalStorage/<extension>/tasks/<task>/ui_messages.json` for Code, Code - Insiders, Cursor, Windsurf, VSCodium, plus remote `~/.{vscode,cursor,windsurf}-server/data/User/globalStorage` |
+| Verified locally | nothing — none of these extensions is installed on the development machine |
+| Edits | `tool` messages (`ask` or `say`) for `editedExistingFile`, `appliedDiff`, `searchAndReplace`, `insertContent`, `newFileCreated`, `writeToFile`, `fileDeleted`; lines from SEARCH/REPLACE or unified diff, or new content; paths stay workspace-relative |
+| Usage | `api_req_started` `tokensIn`/`tokensOut`/`cacheReads`/`cacheWrites` once two minutes old; no model or prompt counts yet |
+| Re-reads | the file is rewritten as the task runs; it is re-read when its fingerprint changes and IDs are stable per message; first discovery marks existing messages seen |
+| Sending | usage only; edits kept as local dry-run evidence (whether an approval-gated edit was rejected is not yet verified) |
+
+Cody is not parsed: its chat history (`state.vscdb` `ItemTable` key `sourcegraph.cody-ai`) has no per-edit record, so edits could only be inferred from context-file diffs, which the accuracy-first rule does not allow.

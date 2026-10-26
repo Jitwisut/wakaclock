@@ -6,6 +6,7 @@
 
 use crate::ai::adapter::{AdapterRegistry, AdapterRuntime};
 use crate::ai::parser::AiActivityParser;
+use crate::ai::ui_messages::{self, UiMessagesParser};
 use crate::ai::{
     AntigravityParser, ClaudeCodeParser, CodexParser, CopilotParser, CursorFamilyParser,
     GeminiCliParser,
@@ -30,6 +31,17 @@ fn parser_for(runtime: AdapterRuntime, id: &str) -> Option<Box<dyn AiActivityPar
         (AdapterRuntime::None, "antigravity") => Some(Box::new(AntigravityParser::new())),
         (AdapterRuntime::None, "cursor") => Some(Box::new(CursorFamilyParser::cursor())),
         (AdapterRuntime::None, "windsurf") => Some(Box::new(CursorFamilyParser::windsurf())),
+        (AdapterRuntime::None, "cline") => {
+            Some(Box::new(UiMessagesParser::new(&ui_messages::CLINE)))
+        }
+        (AdapterRuntime::None, "roo-code") => {
+            Some(Box::new(UiMessagesParser::new(&ui_messages::ROO_CODE)))
+        }
+        // Kilo Code keeps its plugin's installer runtime; its task logs are read as well.
+        // Only Claude Code, Codex and Gemini CLI send edits, so this stays usage-only.
+        (AdapterRuntime::KiloCode, "kilo-code") => {
+            Some(Box::new(UiMessagesParser::new(&ui_messages::KILO_CODE)))
+        }
         _ => None,
     }
 }
@@ -69,7 +81,7 @@ mod tests {
     #[test]
     fn builtin_parsers_cover_every_transcript_adapter() {
         let ids: Vec<&str> = builtin_parsers().iter().map(|entry| entry.id).collect();
-        assert_eq!(ids.len(), 7);
+        assert_eq!(ids.len(), 10);
         for id in [
             "antigravity",
             "claude-code",
@@ -78,6 +90,9 @@ mod tests {
             "copilot",
             "cursor",
             "windsurf",
+            "cline",
+            "roo-code",
+            "kilo-code",
         ] {
             assert!(ids.contains(&id), "{id} missing from {ids:?}");
         }
@@ -91,6 +106,9 @@ mod tests {
         assert!(!emits_edit_heartbeats("cursor"));
         assert!(!emits_edit_heartbeats("windsurf"));
         assert!(!emits_edit_heartbeats("antigravity"));
+        for id in ["cline", "roo-code", "kilo-code"] {
+            assert!(!emits_edit_heartbeats(id), "{id}");
+        }
         // Copilot is parsed, but its edits stay dry-run until certified.
         assert!(!emits_edit_heartbeats("copilot"));
         assert!(!AdapterRuntime::KiloCode.emits_edit_heartbeats());
