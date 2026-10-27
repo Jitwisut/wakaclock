@@ -224,7 +224,7 @@ export function MarketingHomePage({ locale = 'en' }: { locale?: SiteLocale }) {
                   alt={`${SITE_NAME} product mark`}
                   className="size-16 object-contain"
                   height={64}
-                  src="/atoaxis-symbol-v2.png"
+                  src="/atoaxis-mark.svg"
                   width={64}
                 />
                 <figcaption className="mt-1 text-[0.65rem]" style={MUTED_TEXT}>

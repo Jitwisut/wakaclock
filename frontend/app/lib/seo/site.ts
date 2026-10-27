@@ -111,7 +111,7 @@ export const ORGANIZATION = {
   email: 'hello@atoaxis.com',
   // The product name is also used as the publisher identity in structured data.
   legalName: SITE_NAME,
-  logo: absoluteUrl('/atoaxis-symbol-v2.png'),
+  logo: absoluteUrl('/atoaxis-mark-512.png'),
   name: SITE_NAME,
   sameAs: FOUNDER.sameAs,
   url: SITE_URL,
