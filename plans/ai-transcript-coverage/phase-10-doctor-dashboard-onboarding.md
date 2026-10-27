@@ -142,8 +142,8 @@
   เป็น ID ที่ server รู้จัก; ต้อง deploy server ก่อน client รุ่นที่ส่ง ID เหล่านี้ dashboard ไม่มีรายการ
   agent ของตัวเอง (แสดงชื่อ ID ตามที่ server ส่งมา) จึงไม่ต้องแก้ frontend
   ส่วนยอด token รวมในหน้า AI แสดงอยู่แล้วโดยไม่ต้องแก้ (usage endpoint รับ agent ใดก็ได้)
-- Onboarding ใน VS Code extension (10.3): ยังไม่ทำ ต้องขออนุมัติแยกเพราะเป็นไฟล์ client ที่ protected
-- ตัวนับ budget/lock skip/panic ต่อ 24 ชม. และ lag เป็นแถว: ยังไม่ทำ (ต้องมีที่เก็บตัวนับถาวร)
+- Onboarding ใน VS Code extension (10.3): ทำแล้ว 2026-10-27 (อนุมัติแยก กลุ่ม C) — ดูหัวข้อท้ายไฟล์
+- ตัวนับ budget/lock skip/panic ต่อ 24 ชม.: ทำแล้ว 2026-10-27 (กลุ่ม B); lag เป็นแถว: ยังไม่ทำ
 - tests: core 481 passed, cli 109+7+8+44, clippy สะอาด; smoke test ใน HOME ชั่วคราวผ่าน
 
 ## ผลการทำ: auto sync ทุกเครื่องมือ (2026-10-26, อนุมัติแยก, consent แบบ A)
@@ -167,3 +167,38 @@
   editor เข้า queue ทุกครั้ง (ห่างจากเส้นตาย 45 วินาทีของ extension มาก)
 - ข้อสังเกต: ตอน offline แต่ละ tool ที่ถึงคิวพิมพ์ warning "sync skipped: HTTP error" หนึ่งครั้ง
   (เหมือนพฤติกรรม 3 ตัวเดิม) usage ยังอยู่ใน queue; รอบถัดไปเงียบเพราะ backoff ของ pending usage
+
+## ผลการทำ: กลุ่ม A1 / B / C (2026-10-27, อนุมัติแยก)
+
+- **A1 (Cursor/Windsurf usage)**: `parse_usage_within` ตัด fingerprint ออกจาก checkpoint ก่อนอ่าน
+  (`core/src/ai/cursor.rs`) จึงอ่านหน้าต่าง 500 แถวล่าสุดซ้ำทุกรอบแบบเดียวกับ OpenCode/Qoder; usage ที่ยัง
+  ไม่ครบ 120 วินาทีจะถูกส่งในรอบถัดไปแม้ DB ไม่เปลี่ยน; ID usage คงที่ จึงอ่านซ้ำได้โดยไม่ซ้ำ
+  test `usage_is_read_again_when_the_database_has_not_changed`; วัดเวลา `ai sync --agent cursor`
+  (debug build, 500 bubble × ~100 KB, DB ไม่เปลี่ยน): 0.15 วินาทีต่อรอบ และ queue usage ได้ครบ 500 แถวทุกรอบ;
+  `wakaclock heartbeat` (consent A, server ปิด): 500 × 100 KB ครั้งแรก 1.49 วินาที, 4,000 × 50 KB 0.96 วินาที,
+  ครั้งต่อมา 0.02–0.03 วินาที; heartbeat เข้า queue ทุกครั้ง ไม่มี budget hit
+- **B (ตัวนับ 24 ชม.)**: ตาราง `ai_sync_events(parser_id, kind, at)` ลบแถวเกิน 24 ชม. ทุกครั้งที่เขียน
+  - `sqlite_source.rs` นับผลการอ่านต่อ thread (`take_read_outcomes`): หมดงบเวลา (ไม่นับการชนเพดานแถว),
+    DB ถูก lock, query ล้ม (= schema ไม่รู้จัก); `run_ai_sync` เอาค่าไปบันทึกให้ parser ที่เพิ่งรัน (ชนิดละ 1 ครั้งต่อรอบ)
+  - `parser_panic` จาก `catch_parser_panic`; `sync_lock_skip` (parser `*`) เมื่อ `AiSyncLock` ถูกถือ;
+    parser แบบไฟล์ที่ใช้ช่องเวลาอัตโนมัติหมด = `budget_hit` (รวมเวลาที่รอ network ตอนส่ง usage ด้วย);
+    parser แบบ DB นับจากการอ่าน และบันทึกก่อนเช็กเส้นตายของช่อง จึงไม่หายเมื่อช่องหมดเวลาพร้อมกัน
+    (เส้นทางนี้ตรวจจากการอ่านโค้ด ยังไม่มี test ที่ทำให้ช่องหมดเวลากลางการอ่าน DB)
+  - การเขียนเป็น best-effort ไม่ทำให้ sync หรือ heartbeat ล้ม; ไม่บันทึกตอน `--dry-run`
+  - แสดงใน `ai status` (ข้อความ + `last_24h` ใน JSON + `sync_lock_skips_24h`) และ `ai sources list`
+    **ไม่ใส่** ใน `AiDiagnosticsReportV2` (ถูก upload โดย `ai doctor --upload`) จึงไม่เปลี่ยน wire
+- **C (VS Code)**: คำสั่ง "AtoAxis: Manage AI Log Sources" (`wakaclock.manageAiSources`) แสดงเครื่องมือ
+  (ที่พบในเครื่องก่อน), เปิด/ปิด, counted หรือ usage only, จำนวน source, dry-run edit, ปัญหา 24 ชม. (ถ้า CLI มี)
+  เลือกแล้วสลับเปิด/ปิดผ่าน `ai sources enable|disable --json`; ข้อความบอกว่าอ่านแค่ metadata/จำนวน และ
+  เปิดแล้วเริ่มจากตอนนี้ไม่ upload ย้อนหลัง; CLI รุ่นเก่า → `AiSourcesUnsupportedError` ให้อัปเดต;
+  logic อยู่ใน `src/aiSources.ts` (ไม่ import vscode), `cli.ts` เพิ่มแค่ 2 method ที่ใช้ `runCli` เดิม;
+  ไม่รวมการ build/publish VSIX
+- end-to-end ของ B: ถือ lock แบบ EXCLUSIVE บน DB ของ Cursor ระหว่าง heartbeat แรก → `ai_sync_events` ได้
+  `('cursor','source_busy',1)` และ `ai sources list` แสดง `· 24h: busy 1`; heartbeat ยังเข้า queue (0.61 วินาที)
+- tests: core 486 (2 ignored), cli 111+7+8+44, server lib 503, clippy สะอาด; extension 242 (vitest) + `tsc --noEmit` ผ่าน
+  (extension ใน worktree ใช้ `node_modules` แบบ symlink ไปยัง checkout หลัก ซึ่ง lockfile ตรงกัน)
+- `main.rs` แก้เฉพาะ `print_ai_status`, `ai_source_summary`/`run_ai_sources`, `catch_parser_panic`,
+  `run_ai_sync` (จุดบันทึกตัวนับ), `run_bounded_ai_sync`/`bounded_ai_sync_pass` และ test; ไม่แตะการสร้าง
+  heartbeat, queue หรือ timeline
+- คำสั่ง C ใช้ได้เมื่อ CLI ที่มากับ extension มี `ai sources` แล้ว (ต้อง release CLI ก่อน) ก่อนหน้านั้นผู้ใช้เห็นข้อความให้อัปเดต
+- ยังไม่ทำ: lag เป็นแถว, ค่า `explicit` (รอ query Phase 00 0.7), ทดสอบกับเครื่องมือจริง (ขั้น 10)

@@ -8,10 +8,41 @@
 
 use crate::ai::source::DbFingerprint;
 use rusqlite::{params, Connection, ErrorCode, OpenFlags, Row};
+use std::cell::Cell;
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// Reads on this thread that stopped short since the last [`take_read_outcomes`]. A
+/// caller takes them right after running one parser, so the counts belong to it
+/// without every parser having to report them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReadOutcomes {
+    /// Reads stopped by the time budget (not by the row limit).
+    pub budget_hits: u32,
+    /// Reads skipped or cut short because the owner held a lock.
+    pub busy: u32,
+    /// Queries that failed for another reason, which is how an unknown schema shows.
+    pub failures: u32,
+}
+
+thread_local! {
+    static READ_OUTCOMES: Cell<ReadOutcomes> = Cell::new(ReadOutcomes::default());
+}
+
+/// Return and reset this thread's read outcomes.
+pub fn take_read_outcomes() -> ReadOutcomes {
+    READ_OUTCOMES.with(|outcomes| outcomes.take())
+}
+
+fn note(update: impl FnOnce(&mut ReadOutcomes)) {
+    READ_OUTCOMES.with(|outcomes| {
+        let mut current = outcomes.get();
+        update(&mut current);
+        outcomes.set(current);
+    });
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct SqliteReadOptions {
@@ -118,8 +149,14 @@ pub fn read_rows_after<T>(
     }
     let connection = match open_read_only(path, options.busy_timeout) {
         Ok(connection) => connection,
-        Err(error) if is_lock_error(&error) => return Ok(SqliteRead::Locked),
-        Err(error) => return Err(error),
+        Err(error) if is_lock_error(&error) => {
+            note(|outcomes| outcomes.busy += 1);
+            return Ok(SqliteRead::Locked);
+        }
+        Err(error) => {
+            note(|outcomes| outcomes.failures += 1);
+            return Err(error);
+        }
     };
 
     let deadline = Instant::now() + options.time_budget;
@@ -144,15 +181,22 @@ pub fn read_rows_after<T>(
             complete,
         }),
         Err(BatchError::Locked { rows, last }) if rows.is_empty() && last == last_rowid => {
+            note(|outcomes| outcomes.busy += 1);
             Ok(SqliteRead::Locked)
         }
-        Err(BatchError::Locked { rows, last }) => Ok(SqliteRead::Rows {
-            rows,
-            last_rowid: last,
-            fingerprint,
-            complete: false,
-        }),
-        Err(BatchError::Sqlite(error)) => Err(error),
+        Err(BatchError::Locked { rows, last }) => {
+            note(|outcomes| outcomes.busy += 1);
+            Ok(SqliteRead::Rows {
+                rows,
+                last_rowid: last,
+                fingerprint,
+                complete: false,
+            })
+        }
+        Err(BatchError::Sqlite(error)) => {
+            note(|outcomes| outcomes.failures += 1);
+            Err(error)
+        }
     }
 }
 
@@ -182,7 +226,11 @@ fn read_batches<T>(
     let mut rows = Vec::new();
     let mut last = last_rowid;
     loop {
-        if rows.len() >= options.max_rows || Instant::now() >= deadline {
+        if rows.len() >= options.max_rows {
+            return Ok((rows, last, false));
+        }
+        if Instant::now() >= deadline {
+            note(|outcomes| outcomes.budget_hits += 1);
             return Ok((rows, last, false));
         }
         let limit = options.batch_rows.min(options.max_rows - rows.len()) as i64;
@@ -190,7 +238,10 @@ fn read_batches<T>(
         let mut cursor = match statement.query(params![last, limit]) {
             Ok(cursor) => cursor,
             Err(error) if is_lock_error(&error) => return Err(BatchError::Locked { rows, last }),
-            Err(error) if is_interrupt(&error) => return Ok((rows, last, false)),
+            Err(error) if is_interrupt(&error) => {
+                note(|outcomes| outcomes.budget_hits += 1);
+                return Ok((rows, last, false));
+            }
             Err(error) => return Err(BatchError::Sqlite(error)),
         };
         loop {
@@ -205,7 +256,10 @@ fn read_batches<T>(
                 Err(error) if is_lock_error(&error) => {
                     return Err(BatchError::Locked { rows, last })
                 }
-                Err(error) if is_interrupt(&error) => return Ok((rows, last, false)),
+                Err(error) if is_interrupt(&error) => {
+                    note(|outcomes| outcomes.budget_hits += 1);
+                    return Ok((rows, last, false));
+                }
                 Err(error) => return Err(BatchError::Sqlite(error)),
             }
         }
@@ -357,12 +411,14 @@ mod tests {
         let path = temp_db("locked");
         let writer = seed(&path, 3);
         writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+        take_read_outcomes();
         let started = Instant::now();
         assert_eq!(
             read(&path, 0, &SqliteReadOptions::default()),
             SqliteRead::Locked
         );
         assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(take_read_outcomes().busy, 1);
         writer.execute_batch("ROLLBACK;").unwrap();
     }
 
@@ -378,6 +434,7 @@ mod tests {
             time_budget: Duration::from_millis(200),
             ..SqliteReadOptions::default()
         };
+        take_read_outcomes();
         let started = Instant::now();
         let result = read_rows_after(
             &path,
@@ -393,6 +450,34 @@ mod tests {
             SqliteRead::Rows { complete, .. } => assert!(!complete),
             other => panic!("unexpected {other:?}"),
         }
+        assert_eq!(take_read_outcomes().budget_hits, 1);
+    }
+
+    #[test]
+    fn a_row_limit_is_not_a_budget_hit_but_a_failed_query_is_counted() {
+        let path = temp_db("outcomes");
+        drop(seed(&path, 10));
+        take_read_outcomes();
+        let options = SqliteReadOptions {
+            max_rows: 4,
+            ..SqliteReadOptions::default()
+        };
+        let SqliteRead::Rows { complete, .. } = read(&path, 0, &options) else {
+            panic!("expected rows");
+        };
+        assert!(!complete);
+        assert_eq!(take_read_outcomes(), ReadOutcomes::default());
+        let missing = read_rows_after(
+            &path,
+            0,
+            None,
+            "SELECT rowid, value FROM no_such_table WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+            |row| row.get::<_, String>(1),
+            &SqliteReadOptions::default(),
+        );
+        assert!(missing.is_err());
+        assert_eq!(take_read_outcomes().failures, 1);
+        assert_eq!(take_read_outcomes(), ReadOutcomes::default());
     }
 
     #[test]

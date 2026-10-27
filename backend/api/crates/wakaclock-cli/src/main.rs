@@ -31,6 +31,7 @@ mod team_context_capture;
 mod tool_snapshot;
 use tool_snapshot::{AiToolInput, ToolSnapshot, WorkspaceChange};
 use wakaclock_ast::detect_file;
+use wakaclock_core::ai::state::{SyncEventKind, SYNC_EVENT_ALL_PARSERS};
 use wakaclock_core::ai::topology_handoff::{
     CloudJobEvidence, CollectorCapabilities, CollectorRegistration, HandoffEvent,
     HandoffEventIdentity, HandoffIngestOutcome, HandoffLedger,
@@ -3332,6 +3333,7 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
             "sources": source["sources"],
             "time_mode": source["time_mode"],
             "dry_run_edits": source["dry_run_edits"],
+            "last_24h": source["last_24h"],
             "status": description.clone(),
             "detected": freshness.and_then(|adapter| adapter.detected.value),
             "installed": freshness.and_then(|adapter| adapter.enabled.value),
@@ -3395,12 +3397,22 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
             "blocker": freshness.and_then(|adapter| adapter.diagnostic_code.clone()),
         }));
     }
+    // Sync-lock skips belong to a whole pass, not to one agent.
+    let sync_lock_skips = preferences
+        .as_ref()
+        .and_then(|state| {
+            state
+                .sync_event_counts(SYNC_EVENT_ALL_PARSERS, Utc::now().timestamp())
+                .ok()
+        })
+        .map_or(0, |counts| counts.sync_lock_skips);
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "diagnostics": diagnostics,
                 "agents": reports,
+                "sync_lock_skips_24h": sync_lock_skips,
             }))?
         );
     } else {
@@ -3412,9 +3424,15 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
         );
         for report in reports {
             println!(
-                "{}: {}",
+                "{}: {}{}",
                 report["agent"].as_str().unwrap_or("unknown"),
-                report["status"].as_str().unwrap_or("unknown")
+                report["status"].as_str().unwrap_or("unknown"),
+                sync_event_suffix(&report["last_24h"])
+            );
+        }
+        if sync_lock_skips > 0 {
+            println!(
+                "AI sync passes skipped because another sync was running (24h): {sync_lock_skips}"
             );
         }
     }
@@ -4894,6 +4912,9 @@ fn ai_source_summary(
     let dry_run = state
         .and_then(|state| state.dry_run_edit_summary(id).ok())
         .unwrap_or((0, 0, 0, None));
+    let last_24h = state
+        .and_then(|state| state.sync_event_counts(id, Utc::now().timestamp()).ok())
+        .unwrap_or_default();
     serde_json::json!({
         "agent": id,
         "enabled": source_turned_on(state, id),
@@ -4907,7 +4928,54 @@ fn ai_source_summary(
             "latest_at": dry_run.3
                 .and_then(|seconds| chrono::DateTime::<Utc>::from_timestamp(seconds, 0)),
         },
+        "last_24h": last_24h,
     })
+}
+
+/// " · 24h: budget 2, busy 1" for a summary's non-zero sync event counts, else "".
+fn sync_event_suffix(counts: &serde_json::Value) -> String {
+    let parts: Vec<String> = [
+        ("budget_hits", "budget"),
+        ("source_busy", "busy"),
+        ("sync_lock_skips", "lock skips"),
+        ("parser_panics", "panics"),
+        ("schema_unknown", "schema"),
+    ]
+    .iter()
+    .filter_map(|(key, label)| {
+        let count = counts[*key].as_u64().unwrap_or(0);
+        (count > 0).then(|| format!("{label} {count}"))
+    })
+    .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" · 24h: {}", parts.join(", "))
+    }
+}
+
+/// Count what stopped this thread's database reads short for `parser_id`. Best effort:
+/// a counter that cannot be written never fails the sync.
+fn record_read_outcomes(state: &AiAttributionState, parser_id: &str) {
+    let outcomes = wakaclock_core::ai::sqlite_source::take_read_outcomes();
+    let now = Utc::now().timestamp();
+    for (count, kind) in [
+        (outcomes.budget_hits, SyncEventKind::BudgetHit),
+        (outcomes.busy, SyncEventKind::SourceBusy),
+        (outcomes.failures, SyncEventKind::SchemaUnknown),
+    ] {
+        // One pass that hit the same limit twice (edits, then usage) counts once.
+        if count > 0 {
+            let _ = state.record_sync_event(parser_id, kind, now);
+        }
+    }
+}
+
+/// Best-effort record of one sync event in the local state database.
+fn record_sync_event(parser_id: &str, kind: SyncEventKind) {
+    if let Ok(state) = AiAttributionState::open() {
+        let _ = state.record_sync_event(parser_id, kind, Utc::now().timestamp());
+    }
 }
 
 fn run_ai_sources(action: AiSourcesAction) -> Result<(), Box<dyn Error>> {
@@ -4931,7 +4999,7 @@ fn run_ai_sources(action: AiSourcesAction) -> Result<(), Box<dyn Error>> {
                 println!("Local AI logs are read for metadata and counts only (no prompts, code or diffs).");
                 for summary in &summaries {
                     println!(
-                        "{:<16} {:<4} {:<13} {:<13} sources={} dry-run edits={} (+{} -{})",
+                        "{:<16} {:<4} {:<13} {:<13} sources={} dry-run edits={} (+{} -{}){}",
                         summary["agent"].as_str().unwrap_or("unknown"),
                         if summary["enabled"].as_bool() == Some(true) {
                             "on"
@@ -4944,6 +5012,7 @@ fn run_ai_sources(action: AiSourcesAction) -> Result<(), Box<dyn Error>> {
                         summary["dry_run_edits"]["count"],
                         summary["dry_run_edits"]["lines_added"],
                         summary["dry_run_edits"]["lines_deleted"],
+                        sync_event_suffix(&summary["last_24h"]),
                     );
                 }
             }
@@ -5027,9 +5096,11 @@ fn catch_parser_panic<T, E: std::fmt::Display>(
 ) -> Result<T, String> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
         Ok(result) => result.map_err(|error| error.to_string()),
-        Err(_) => Err("parser panicked".to_string()),
+        Err(_) => Err(PARSER_PANICKED.to_string()),
     }
 }
+
+const PARSER_PANICKED: &str = "parser panicked";
 
 fn certification_tuple_for_agent(agent_id: &str) -> Option<CertificationTuple> {
     let registry = wakaclock_core::ai::AdapterRegistry::builtin();
@@ -6018,6 +6089,7 @@ async fn run_ai_sync(
         match AiSyncLock::acquire()? {
             Some(lock) => Some(lock),
             None => {
+                record_sync_event(SYNC_EVENT_ALL_PARSERS, SyncEventKind::SyncLockSkip);
                 return Err("already_running".into());
             }
         }
@@ -6172,6 +6244,8 @@ async fn run_ai_sync(
                 }),
                 ..ParseContext::default()
             };
+            // Start this parser's read outcomes from zero (see `record_read_outcomes`).
+            wakaclock_core::ai::sqlite_source::take_read_outcomes();
             let batch =
                 match catch_parser_panic(|| parser.parse_since(&parse_context, Some(&cursor))) {
                     Ok(batch) => batch,
@@ -6180,9 +6254,23 @@ async fn run_ai_sync(
                         "  {id}: transcript parse failed — skipping this agent this cycle ({error})"
                     );
                         agent_service::record_scan(false, None, Some(&format!("{id}: {error}")));
+                        if !dry_run {
+                            if error == PARSER_PANICKED {
+                                let _ = state.record_sync_event(
+                                    id,
+                                    SyncEventKind::ParserPanic,
+                                    Utc::now().timestamp(),
+                                );
+                            }
+                            record_read_outcomes(&state, id);
+                        }
                         break;
                     }
                 };
+            // A database read cut short by this slot's deadline is still counted.
+            if !dry_run && deadline.is_some_and(|limit| Instant::now() >= limit) {
+                record_read_outcomes(&state, id);
+            }
             check_deadline()?;
             // Usage is parsed independently from file-edit events: one model response may edit
             // several files, and copying its token count to each file would inflate totals. A
@@ -6209,8 +6297,18 @@ async fn run_ai_sync(
                     eprintln!(
                         "  {id}: usage parse failed, continuing without token counts ({error})"
                     );
+                    if !dry_run && error == PARSER_PANICKED {
+                        let _ = state.record_sync_event(
+                            id,
+                            SyncEventKind::ParserPanic,
+                            Utc::now().timestamp(),
+                        );
+                    }
                     Vec::new()
                 });
+            if !dry_run {
+                record_read_outcomes(&state, id);
+            }
             if verbose {
                 for warning in &batch.warnings {
                     eprintln!("  warning: {}", warning.message);
@@ -7842,7 +7940,10 @@ pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient)
     // One lock for the whole pass: if another sync holds it, this pass has nothing to do.
     let _lock = match AiSyncLock::acquire() {
         Ok(Some(lock)) => lock,
-        Ok(None) => return,
+        Ok(None) => {
+            record_sync_event(SYNC_EVENT_ALL_PARSERS, SyncEventKind::SyncLockSkip);
+            return;
+        }
         Err(error) => {
             eprintln!("Warning: automatic AI sync skipped: {error}");
             return;
@@ -7900,12 +8001,29 @@ async fn bounded_ai_sync_pass(
     {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
+            if error.to_string() == "deadline_exceeded" {
+                record_slot_budget_hit(agent);
+            }
             eprintln!("Warning: automatic {agent} sync skipped: {error}")
         }
-        Err(_) => eprintln!(
-            "Warning: automatic {agent} sync exceeded {:.1} seconds; will retry later",
-            budget.as_secs_f32()
-        ),
+        Err(_) => {
+            record_slot_budget_hit(agent);
+            eprintln!(
+                "Warning: automatic {agent} sync exceeded {:.1} seconds; will retry later",
+                budget.as_secs_f32()
+            )
+        }
+    }
+}
+
+/// A file parser that used up its automatic slot. Database parsers are left out: they
+/// stop on their own budget and that read already counted it.
+fn record_slot_budget_hit(agent: &str) {
+    let reads_a_database = supported_ai_parsers().iter().any(|(id, parser)| {
+        *id == agent && parser.source_kind() == wakaclock_core::ai::SourceKind::Sqlite
+    });
+    if !reads_a_database {
+        record_sync_event(agent, SyncEventKind::BudgetHit);
     }
 }
 
@@ -9179,6 +9297,45 @@ mod generic_ai_ingress_tests {
     }
 
     #[test]
+    fn database_read_outcomes_are_counted_for_the_parser_that_ran() {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-cli-outcomes-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let state = AiAttributionState::open_at(&dir.join("state.sqlite3")).unwrap();
+        let tool_db = dir.join("tool.db");
+        rusqlite::Connection::open(&tool_db)
+            .unwrap()
+            .execute_batch("CREATE TABLE t (value TEXT);")
+            .unwrap();
+        wakaclock_core::ai::sqlite_source::take_read_outcomes();
+        let read = wakaclock_core::ai::sqlite_source::read_rows_after(
+            &tool_db,
+            0,
+            None,
+            "SELECT rowid, value FROM renamed WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+            |row| row.get::<_, String>(1),
+            &wakaclock_core::ai::sqlite_source::SqliteReadOptions::default(),
+        );
+        assert!(read.is_err());
+        record_read_outcomes(&state, "opencode");
+        let counts = state
+            .sync_event_counts("opencode", Utc::now().timestamp())
+            .unwrap();
+        assert_eq!((counts.schema_unknown, counts.budget_hits), (1, 0));
+        // Taken once: the next parser starts from zero.
+        record_read_outcomes(&state, "qoder");
+        assert_eq!(
+            state
+                .sync_event_counts("qoder", Utc::now().timestamp())
+                .unwrap(),
+            Default::default()
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn source_summaries_carry_counts_and_modes_but_no_paths() {
         let path = std::env::temp_dir().join(format!(
             "wakaclock-cli-sources-{}.sqlite3",
@@ -9188,6 +9345,13 @@ mod generic_ai_ingress_tests {
         let edit = ai_event_for("qoder", PathBuf::from("/secret-repo/a.rs"), None);
         keep_edits_as_dry_run(&state, "qoder", &[&edit]).unwrap();
         state.set_source_enabled("qoder", false).unwrap();
+        let now = Utc::now().timestamp();
+        for kind in [SyncEventKind::SourceBusy, SyncEventKind::SourceBusy] {
+            state.record_sync_event("qoder", kind, now).unwrap();
+        }
+        state
+            .record_sync_event("qoder", SyncEventKind::SchemaUnknown, now)
+            .unwrap();
         let parsers = supported_ai_parsers();
         let summary_for = |id: &str| {
             let (_, parser) = parsers
@@ -9202,11 +9366,17 @@ mod generic_ai_ingress_tests {
         assert_eq!(qoder["time_mode"], "time_neutral");
         assert_eq!(qoder["sources"], 2);
         assert_eq!(qoder["dry_run_edits"]["count"], 1);
+        assert_eq!(qoder["last_24h"]["source_busy"], 2);
+        assert_eq!(
+            sync_event_suffix(&qoder["last_24h"]),
+            " · 24h: busy 2, schema 1"
+        );
         assert!(!qoder.to_string().contains("secret-repo"));
         let claude = summary_for("claude-code");
         assert_eq!(claude["enabled"], true);
         assert_eq!(claude["source_kind"], "jsonl");
         assert_eq!(claude["time_mode"], "counted");
+        assert_eq!(sync_event_suffix(&claude["last_24h"]), "");
         assert!(source_turned_on(None, "qoder"));
         let _ = fs::remove_file(path);
     }

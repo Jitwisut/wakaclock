@@ -324,13 +324,23 @@ impl AiActivityParser for CursorFamilyParser {
         cursor: Option<&ParserCursor>,
         budget: std::time::Duration,
     ) -> std::io::Result<Vec<AiUsageRecord>> {
+        // The edit pass may already have stored this fingerprint, and a bubble skipped by
+        // the settle rule must be read again even when the database has not changed, so
+        // usage re-reads the rescan window without it; the history floor keeps old rows out.
         let defaults = SqliteReadOptions::default();
         let options = SqliteReadOptions {
             time_budget: budget.min(defaults.time_budget),
             ..defaults
         };
-        let read = read_bubbles(source, checkpoint_of(cursor).as_ref(), &options)
-            .map_err(std::io::Error::other)?;
+        let checkpoint = checkpoint_of(cursor).map(|checkpoint| match checkpoint {
+            SourceCheckpoint::Sqlite { last_rowid, .. } => SourceCheckpoint::Sqlite {
+                last_rowid,
+                fingerprint: None,
+            },
+            other => other,
+        });
+        let read =
+            read_bubbles(source, checkpoint.as_ref(), &options).map_err(std::io::Error::other)?;
         let now = Utc::now();
         let floor = history_floor(cursor, now);
         Ok(read
@@ -576,6 +586,31 @@ mod tests {
         let seeded = parser.seed_at_head(&cursor_for(&db, None), 0);
         assert!(parser.parse_usage(&db, Some(&seeded)).unwrap().is_empty());
         assert_eq!(parser.parse_usage(&db, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn usage_is_read_again_when_the_database_has_not_changed() {
+        let db = test_db::path("unchanged");
+        let connection = test_db::create(&db);
+        let mut settled = edit_bubble("completed", "edit_file", "a.rs");
+        settled["tokenCount"] = json!({"inputTokens": 40, "outputTokens": 8});
+        test_db::put(&connection, "bubbleId:c1:b1", &settled);
+        let parser = CursorFamilyParser::cursor();
+        let batch = parse(&parser, &cursor_for(&db, None));
+        let after_edit_pass = batch.next_cursor;
+        assert!(matches!(
+            after_edit_pass
+                .context
+                .as_ref()
+                .and_then(|context| context.source.as_ref()),
+            Some(SourceCheckpoint::Sqlite {
+                fingerprint: Some(_),
+                ..
+            })
+        ));
+        let records = parser.parse_usage(&db, Some(&after_edit_pass)).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].usage_event_id, "cursor-usage-v1:b1");
     }
 
     #[test]

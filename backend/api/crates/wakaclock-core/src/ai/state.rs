@@ -7,9 +7,64 @@ use crate::ai::revision::{
 use crate::ai::usage::AiUsageRecord;
 use crate::error::AppError;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+/// How far back `ai status` counts sync events.
+pub const SYNC_EVENT_WINDOW_SECONDS: i64 = 24 * 60 * 60;
+
+/// Parser id used for events that belong to a whole sync pass, not one parser.
+pub const SYNC_EVENT_ALL_PARSERS: &str = "*";
+
+/// Why a sync pass read less than it could have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncEventKind {
+    /// The pass ran out of time before reading everything.
+    BudgetHit,
+    /// The tool's own database was locked by its writer.
+    SourceBusy,
+    /// Another sync held the sync lock, so this pass did nothing.
+    SyncLockSkip,
+    /// A parser panicked and was skipped.
+    ParserPanic,
+    /// The tool's database could be opened but not queried as expected.
+    SchemaUnknown,
+}
+
+impl SyncEventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BudgetHit => "budget_hit",
+            Self::SourceBusy => "source_busy",
+            Self::SyncLockSkip => "sync_lock_skip",
+            Self::ParserPanic => "parser_panic",
+            Self::SchemaUnknown => "schema_unknown",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        [
+            Self::BudgetHit,
+            Self::SourceBusy,
+            Self::SyncLockSkip,
+            Self::ParserPanic,
+            Self::SchemaUnknown,
+        ]
+        .into_iter()
+        .find(|kind| kind.as_str() == value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct SyncEventCounts {
+    pub budget_hits: u64,
+    pub source_busy: u64,
+    pub sync_lock_skips: u64,
+    pub parser_panics: u64,
+    pub schema_unknown: u64,
+}
 
 /// Local, per-machine parser cursors and delivered-event identity — plan.md 8.6's
 /// `ai-attribution.sqlite3`. This is deliberately separate from `queue.rs`'s
@@ -223,6 +278,16 @@ impl AiAttributionState {
                 parser_id       TEXT PRIMARY KEY,
                 last_attempt_at INTEGER NOT NULL
             );
+
+            -- Local-only record of passes that could not read everything (time budget,
+            -- a busy tool database, a panic, an unknown schema), shown as 24-hour counts
+            -- by `ai status`. Rows older than a day are deleted as new ones arrive.
+            CREATE TABLE IF NOT EXISTS ai_sync_events (
+                parser_id TEXT NOT NULL,
+                kind      TEXT NOT NULL,
+                at        INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_sync_events_at ON ai_sync_events(at);
             ",
         )?;
         // `CREATE TABLE IF NOT EXISTS` does not add columns to an installation
@@ -1255,6 +1320,54 @@ impl AiAttributionState {
         Ok(())
     }
 
+    /// Note one sync event and drop events older than [`SYNC_EVENT_WINDOW_SECONDS`].
+    pub fn record_sync_event(
+        &self,
+        parser_id: &str,
+        kind: SyncEventKind,
+        at: i64,
+    ) -> Result<(), AppError> {
+        self.conn.execute(
+            "DELETE FROM ai_sync_events WHERE at < ?1",
+            params![at - SYNC_EVENT_WINDOW_SECONDS],
+        )?;
+        self.conn.execute(
+            "INSERT INTO ai_sync_events (parser_id, kind, at) VALUES (?1, ?2, ?3)",
+            params![parser_id, kind.as_str(), at],
+        )?;
+        Ok(())
+    }
+
+    /// Sync events per kind for one parser within the window ending at `now`.
+    pub fn sync_event_counts(
+        &self,
+        parser_id: &str,
+        now: i64,
+    ) -> Result<SyncEventCounts, AppError> {
+        let mut statement = self.conn.prepare(
+            "SELECT kind, COUNT(*) FROM ai_sync_events
+             WHERE parser_id = ?1 AND at >= ?2 GROUP BY kind",
+        )?;
+        let rows = statement
+            .query_map(params![parser_id, now - SYNC_EVENT_WINDOW_SECONDS], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+        let mut counts = SyncEventCounts::default();
+        for row in rows {
+            let (kind, count) = row?;
+            let count = u64::try_from(count).unwrap_or(0);
+            match SyncEventKind::parse(&kind) {
+                Some(SyncEventKind::BudgetHit) => counts.budget_hits = count,
+                Some(SyncEventKind::SourceBusy) => counts.source_busy = count,
+                Some(SyncEventKind::SyncLockSkip) => counts.sync_lock_skips = count,
+                Some(SyncEventKind::ParserPanic) => counts.parser_panics = count,
+                Some(SyncEventKind::SchemaUnknown) => counts.schema_unknown = count,
+                None => {}
+            }
+        }
+        Ok(counts)
+    }
+
     /// Bounded retention for source record hashes and dry-run edits.
     pub fn prune_source_state(
         &self,
@@ -2123,6 +2236,52 @@ mod tests {
         state.record_auto_sync_attempt("qoder", 10).unwrap();
         state.record_auto_sync_attempt("qoder", 20).unwrap();
         assert_eq!(state.auto_sync_attempts().unwrap().get("qoder"), Some(&20));
+    }
+
+    #[test]
+    fn sync_events_are_counted_for_a_day_and_then_dropped() {
+        let path = temp_db_path("sync-events");
+        let _ = std::fs::remove_file(&path);
+        let state = AiAttributionState::open_at(&path).unwrap();
+        let day = SYNC_EVENT_WINDOW_SECONDS;
+        state
+            .record_sync_event("cursor", SyncEventKind::BudgetHit, 1_000)
+            .unwrap();
+        for at in [day, day + 10] {
+            state
+                .record_sync_event("cursor", SyncEventKind::SourceBusy, at)
+                .unwrap();
+        }
+        state
+            .record_sync_event("qoder", SyncEventKind::SchemaUnknown, day)
+            .unwrap();
+        let counts = state.sync_event_counts("cursor", day + 10).unwrap();
+        assert_eq!(
+            (
+                counts.budget_hits,
+                counts.source_busy,
+                counts.schema_unknown
+            ),
+            (1, 2, 0)
+        );
+        // A day later the first event is outside the window and has been deleted.
+        state
+            .record_sync_event("cursor", SyncEventKind::ParserPanic, day + 2_000)
+            .unwrap();
+        let counts = state.sync_event_counts("cursor", day + 2_000).unwrap();
+        assert_eq!((counts.budget_hits, counts.parser_panics), (0, 1));
+        let stored: i64 = state
+            .conn
+            .query_row("SELECT COUNT(*) FROM ai_sync_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stored, 4);
+        assert_eq!(
+            state
+                .sync_event_counts("qoder", day)
+                .unwrap()
+                .schema_unknown,
+            1
+        );
     }
 
     #[test]
