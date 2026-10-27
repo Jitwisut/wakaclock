@@ -3,6 +3,7 @@ import * as os from "node:os";
 import { writeHookConsentState } from "./agentSetup";
 import type { AiAgentId, AiAgentSetupResult, AiAgentStatus } from "./agentSetup";
 import { formatAiDetectionReport, runAiDetectionSelfTest } from "./aiDetectionSelfTest";
+import { manageAiSources } from "./aiSources";
 import type { HeartbeatBufferManager } from "./buffer";
 import type { WakaclockCliService } from "./cli";
 import type { WakaclockConfigService } from "./config";
@@ -90,6 +91,8 @@ export function registerCommands(
     | "getStatus"
     | "getBrokerStatus"
     | "getAiDiagnosticsSnapshot"
+    | "listAiSources"
+    | "setAiSourceEnabled"
   >,
   bufferManager: Pick<HeartbeatBufferManager, "flushCurrentEditor">,
   statusBar: Pick<StatusBarController, "applyVisibility" | "refresh">,
@@ -265,6 +268,16 @@ export function registerCommands(
           error instanceof Error ? error.message : "Unable to inspect AI integrations."
         );
       }
+    }),
+    vscode.commands.registerCommand("wakaclock.manageAiSources", async () => {
+      await manageAiSources({
+        listAiSources: () => cliService.listAiSources(),
+        setAiSourceEnabled: (agent, enabled) => cliService.setAiSourceEnabled(agent, enabled),
+        pick: (items, placeHolder) =>
+          Promise.resolve(vscode.window.showQuickPick(items, { placeHolder, matchOnDescription: true })),
+        showInformation: (message) => Promise.resolve(vscode.window.showInformationMessage(message)),
+        showError: (message) => Promise.resolve(vscode.window.showErrorMessage(message)),
+      });
     }),
     vscode.commands.registerCommand("wakaclock.showBrokerStatus", async () => {
       try {

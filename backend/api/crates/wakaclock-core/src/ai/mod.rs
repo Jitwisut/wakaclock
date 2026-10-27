@@ -38,18 +38,23 @@
 
 pub mod activity;
 pub mod adapter;
+pub mod antigravity;
 pub mod canonical;
 pub mod certification;
 pub mod claude;
 pub mod codex;
+pub mod copilot;
 pub mod correlation;
+pub mod cursor;
 pub mod diagnostics;
 pub mod editor_capability;
 pub mod event;
+pub(crate) mod fields;
 pub mod follow_up;
 pub mod gemini;
 pub mod identity;
 mod jsonl;
+pub mod jsonl_family;
 pub mod native_activity;
 pub mod parser;
 pub mod parser_registry;
@@ -60,16 +65,20 @@ pub mod provider;
 pub mod revision;
 pub mod snapshot_source;
 pub mod source;
+pub mod sqlite_apps;
 pub mod sqlite_source;
 pub mod state;
 pub mod topology;
 pub mod topology_handoff;
+pub mod ui_messages;
 pub mod usage;
+pub mod vscdb_kv;
 
 pub use adapter::{
     AdapterCatalogEntry, AdapterCatalogV1, AdapterManifest, AdapterRegistry, AdapterRuntime,
     InstallStrategy,
 };
+pub use antigravity::AntigravityParser;
 pub use canonical::{fingerprint_for_heartbeat, FINGERPRINT_SCHEME_V1};
 pub use certification::{
     CertificationCatalogEntry, CertificationCatalogV1, CertificationDecision,
@@ -78,9 +87,11 @@ pub use certification::{
 };
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
+pub use copilot::CopilotParser;
 pub use correlation::{
     correlate, expire_unmatched, AiAttribution, CorrelationOutcome, EditorObservation,
 };
+pub use cursor::CursorFamilyParser;
 pub use diagnostics::{
     build_report as build_ai_diagnostics_report, AdapterFreshness, AdapterFreshnessV2,
     AiDiagnosticsReport, AiDiagnosticsReportV2, AttributionMode, BrokerHealth, BrokerHealthV2,
@@ -132,6 +143,7 @@ pub use revision::{
     ATTRIBUTION_REVISION_RETENTION_SECONDS, EVENT_ALIAS_RETENTION_SECONDS,
     LATE_RECONCILIATION_GRACE_SECONDS, PENDING_OBSERVATION_RETENTION_SECONDS,
 };
+pub use sqlite_apps::SqliteAppParser;
 pub use source::{DbFingerprint, FileFingerprint, SourceCheckpoint, SourceKind};
 pub use state::{AiAttributionState, PendingUsage};
 pub use topology::{

@@ -12,6 +12,7 @@
 ## แนวทาง — ลำดับงานเดียวที่ต้องทำตาม
 
 ทำทีละขั้นตามลำดับนี้ ห้ามข้ามขั้น ทุกขั้นที่แก้โค้ดต้องส่ง [คำขออนุมัติ](approval-gate-template.md) และรอคำตอบก่อน
+(**ขั้น 7–9 ได้รับอนุมัติแบบรวมแล้ว 2026-10-26** ตามเงื่อนไขที่บันทึกใน `.context/heartbeat-safety.md`)
 
 **การทดสอบ (ตัดสิน 2026-10-26):** พัฒนาให้ครบก่อนแล้วทดสอบกับเครื่องมือจริงครั้งเดียวตอนท้าย —
 ระหว่างพัฒนาแต่ละขั้นยังรัน test อัตโนมัติ (unit/integration/clippy) ตาม approval gate แต่ **live certification,
@@ -23,11 +24,11 @@ campaign, การล็อกอิน Claude/Codex, SQL ฝั่ง server �
 | 2 | **แก้ Claude นับบรรทัดซ้ำ** | [phase-02](phase-02-cross-source-dedupe-and-agent-ids.md) | ✅ แก้ใน worktree แล้ว (ยังไม่ commit): จับคู่ด้วย ID เท่านั้น + hook 1.0.3 ส่ง tool-call ID จริง | duplicate ของข้อมูลใหม่ = 0 (รอยืนยันฝั่ง server) |
 | 3 | ~~ต่ออายุใบรับรอง Claude Code + Codex~~ → **ย้ายไปขั้นทดสอบรวม** | [phase-11](phase-11-certification-and-rollout.md) | lab ใน worktree build ไว้แล้ว (manifest จะเก่าเมื่อโค้ดเปลี่ยน ต้อง build ใหม่ตอนทดสอบ) | — |
 | 4 | โครงพื้นฐาน parser | [phase-01](phase-01-source-cursors-and-engine.md) | ✅ แก้ใน worktree แล้ว (ยังไม่ commit) — ดูผลใน phase-01 | parser เดิมผลเท่าเดิมทุก byte |
-| 5 | GitHub Copilot (VS Code ก่อน, CLI ทีหลัง) | [phase-05](phase-05-github-copilot.md) | เครื่องเจ้าของมีข้อมูลจริงแล้ว → certify ได้ทันที | Copilot ได้ token/model + dry-run edit |
-| 6 | Cursor + Windsurf + cursor-agent | [phase-04](phase-04-cursor-windsurf-statevscdb.md) | เจ้าของติดตั้ง Cursor/Windsurf | certify macOS แล้วตาม OS อื่น |
-| 7 | Gemini CLI + Antigravity | [phase-03](phase-03-claude-codex-gemini-antigravity.md) | เจ้าของเปิด session Gemini จริง | fixture จริง + certify |
-| 8 | Tier 2 แบบ "สำรวจ storage ก่อน" | [phase-06](phase-06-vscode-extension-family.md), [phase-07](phase-07-jsonl-cli-family.md), [phase-08](phase-08-sqlite-app-family.md) | ทำเฉพาะ tool ที่ log มีหลักฐาน edit ชัด (ตาม ROADMAP P3 ข้อ 4–5); ที่เหลือบันทึก Unsupported | ทุก tool มีสถานะ |
-| 9 | Doctor / consent / dashboard | [phase-10](phase-10-doctor-dashboard-onboarding.md) | ทำคู่กับขั้น 5–8 ได้ทีละส่วน | ผู้ใช้เห็นและปิดเปิดได้ |
+| 5 | GitHub Copilot (VS Code ก่อน, CLI ทีหลัง) | [phase-05](phase-05-github-copilot.md) | ✅ แก้ใน worktree แล้ว (ยังไม่ commit) — agent ID `copilot` + `producer_surface`; ดูผลใน phase-05 | Copilot ได้ token/model + dry-run edit |
+| 6 | Cursor IDE + Windsurf (cursor-agent ย้ายไปขั้น 8) | [phase-04](phase-04-cursor-windsurf-statevscdb.md) | ✅ แก้ใน worktree แล้ว (ยังไม่ commit) — ดูผลใน phase-04 | certify macOS แล้วตาม OS อื่น |
+| 7 | Gemini CLI + Antigravity | [phase-03](phase-03-claude-codex-gemini-antigravity.md) | ✅ ทำแล้ว — Antigravity (JSONL) + แยก edit extraction ของ Gemini; ไม่มี session จริงให้ยืนยัน | fixture จริง + certify |
+| 8 | Tier 2 แบบ "สำรวจ storage ก่อน" + cursor-agent CLI | [phase-06](phase-06-vscode-extension-family.md), [phase-07](phase-07-jsonl-cli-family.md), [phase-08](phase-08-sqlite-app-family.md) | ✅ 8a ✅ Cline/Roo/Kilo/IBM Bob (Cody Unsupported); 8b ✅ Qwen/Pi/Kiro/Droid/Kimi (Grok/Amp/Continue Unsupported ชั่วคราว); 8c ✅ OpenCode/Qoder (Goose/Zed/Warp/cursor-agent Unsupported ชั่วคราว) | ทุก tool มีสถานะ |
+| 9 | Doctor / consent / dashboard | [phase-10](phase-10-doctor-dashboard-onboarding.md) | ✅ CLI (`ai sources`, ฟิลด์ใหม่ + ตัวนับ 24 ชม. ใน `ai status`); agent ID ฝั่ง server (อนุมัติแยก); คำสั่ง Manage AI Log Sources ใน VS Code (2026-10-27); ยังเหลือ lag เป็นแถว | ผู้ใช้เห็นและปิดเปิดได้ |
 | 10 | **ขั้นทดสอบรวม**: ปิด Phase 00 (SQL + ยอด 7 วัน), build lab ใหม่, campaign + ใบรับรองทุก tool ทุก OS | [phase-00](phase-00-baseline-and-contract.md), [phase-11](phase-11-certification-and-rollout.md) | เจ้าของ: Docker, ล็อกอิน tool, สิทธิ์ ClickHouse, ยอด WakaTime, ติดตั้ง tool | ใบรับรองครบ, duplicate = 0 ฝั่ง server |
 | 11 | เปิดส่ง edit heartbeat ทีละ adapter | [phase-11](phase-11-certification-and-rollout.md) | คำขอแยกต่อ adapter พร้อมหลักฐาน 7 วัน ≤ 1% | ตาม DoD |
 | — | Tier 3 (long tail) | [phase-09](phase-09-generic-configurable-parser.md) | **ทำเมื่อมีผู้ใช้ขอเท่านั้น** ไม่อยู่ในลำดับหลัก | — |
@@ -167,9 +168,9 @@ AtoAxis มี parser แบบนี้อยู่แล้ว 3 ตัว (Cl
 | Q1 | ใช้ ID แยกหรือรวม: `kimi`/`kimi-code`, `copilot`/`copilot-cli`, `cursor`/`cursor-agent` ในรายงาน | P02 |
 | Q2 | แก้ค่า `ai_confidence="explicit"` ใน `cli/src/capture_service.rs` เมื่อไร | P00 ผลออก |
 | Q3 | Backfill duplicate เก่าหรือไม่ (ตามตัวเลขจาก P00) | หลัง P00 |
-| Q4 | Antigravity SQLite เก็บ protobuf: decode เอง (clean-room) หรือใช้แค่ JSONL | P03 |
-| Q5 | Tool ที่ให้ได้แค่ token ไม่มี edit (Goose, Continue บางเวอร์ชัน) แสดงใน dashboard อย่างไร | P07/P08 |
-| Q6 | Tool ที่ไม่มี hook ต้องขอ consent แยกต่อ tool หรือไม่ (ตอนนี้ sync ผูกกับ hook consent) | P10 |
+| ~~Q4~~ | ~~Antigravity protobuf~~ → **ตอบแล้ว 2026-10-26**: อ่านแค่ JSONL | — |
+| ~~Q5~~ | ~~tool ที่มีแค่ token~~ → **ตอบแล้ว 2026-10-26**: แสดงในหน้า usage/cost ไม่อยู่ในกราฟบรรทัด | — |
+| ~~Q6~~ | ~~consent ของ tool ไม่มี hook~~ → **ตอบแล้ว 2026-10-26**: อ่านอัตโนมัติ + ปิดรายเครื่องมือได้ | — |
 | Q7 | รอบต่ออายุใบรับรอง 30 วัน: อัตโนมัติด้วย campaign script หรือทำมือ | P11 |
 | ~~Q8~~ | ~~เครื่อง Windows/Linux สำหรับ certify~~ → **ตอบแล้ว 2026-10-26**: Windows ใช้เครื่องจริง, Linux ใช้ VM (ดู [Phase 11](phase-11-certification-and-rollout.md)) | — |
 | ~~Q9~~ | ~~ถ้า time-neutral ทำให้ยอดขยับ~~ → **ตอบแล้ว 2026-10-26**: ก่อน certify ส่งแค่ usage; edit heartbeat เปิดทีละ adapter หลัง certify | — |

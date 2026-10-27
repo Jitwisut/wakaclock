@@ -1,6 +1,6 @@
 # Phase 10 — Doctor, status, consent และ dashboard
 
-สถานะ: **รอ Phase 09 + approval** (ต้องได้คำตอบ Q5, Q6 ก่อน)
+สถานะ: **ขั้น 9 ส่วน CLI ✅ และ agent ID ฝั่ง server ✅ (2026-10-26); onboarding ใน VS Code ยังไม่ทำ** ดู "ผลการทำ" ท้ายไฟล์
 ขึ้นกับ: Phase 01–09 · ส่วน diagnostics บางข้อทำคู่ไปกับแต่ละ phase ได้
 
 ## เป้าหมาย
@@ -109,3 +109,96 @@
 | ผู้ใช้ตกใจที่ tool อ่าน log ในเครื่อง | อธิบายชัด + ค่าเริ่มปิดสำหรับ tool ไม่มี hook |
 | dashboard ทำให้ดูเหมือนเวลาเพิ่ม | ป้าย time-neutral และไม่รวมในยอดเวลา |
 | status JSON เปลี่ยนแล้ว extension พัง | versioned schema + test |
+
+## ผลการทำ (ขั้น 9, 2026-10-26)
+
+ทำภายใต้การอนุมัติรวมขั้น 7–9 · Q6 = อ่านอัตโนมัติ เปิดไว้เป็นค่าเริ่ม ปิดรายเครื่องมือได้
+(แทนค่าเริ่ม "ปิด" ที่เขียนไว้ใน 10.2)
+
+**ทำแล้ว (CLI เท่านั้น)**
+- `wakaclock ai sources list [--json]`: ทุก parser พร้อม `enabled`, `source_kind`, `sources` (จำนวน),
+  `time_mode` (`time_neutral` / `counted`) และยอด dry-run edit (`count`, `lines_added`,
+  `lines_deleted`, `latest_at`) ไม่มี path, prompt หรือชื่อไฟล์
+- `wakaclock ai sources disable|enable <agent> [--json]`: เก็บใน state DB ในเครื่อง
+  (`~/.wakaclock/ai-attribution.sqlite3` ตาราง `ai_source_preferences`) ไม่ใช่ไฟล์ TOML เพื่อไม่เขียนทับ
+  config ที่ผู้ใช้แก้เอง ปิดแล้ว sync, identity repair และ measurement-repair preview จะไม่อ่าน tool นั้นเลย
+  (รวม usage และ dry-run) cursor เก็บไว้; เปิดใหม่จะ seed ทุก source ที่ปลายไฟล์ จึงไม่อ่านช่วงที่ปิดย้อนหลัง
+- `ai sync --agent <ปิดอยู่>` ล้มพร้อมข้อความให้เปิดก่อน (ไม่ใช่ "not supported")
+- `ai status --json` เพิ่มฟิลด์เดียวกัน (เพิ่มอย่างเดียว ไม่เปลี่ยนชื่อ/ไม่ลบฟิลด์เดิม) และรวมสถานะ hook ของ
+  Kilo/Kimi เข้าแถว parser ของมัน (เดิมขึ้น 2 แถว) — 18 agent ไม่ซ้ำ
+- ไม่แตะ `collect_ai_diagnostics_v2` / `ai doctor --upload` (schema ที่ส่งขึ้น server คงเดิม)
+
+**แก้เพิ่มระหว่างทาง (จากการรีวิว)**: source ที่เป็น database เดียว (Cursor, Windsurf, OpenCode, Qoder)
+เดิมจะส่ง usage ย้อนหลังทั้งประวัติเมื่ออ่านครั้งแรก ตอนนี้มี `history_floor_ms` ใน `ParserContext`:
+ครั้งแรกย้อนแค่ 24 ชม. (เท่ากับกติกา JSONL) และ seed = เริ่มจากตอนนี้; OpenCode/Qoder ได้โควตาแถวเพิ่ม
+สำหรับช่วงอ่านซ้ำ 500 แถว เพื่อให้ checkpoint ขยับเสมอ (commit `f35b98c3`)
+
+**ยังไม่ทำ / ต้องถามเจ้าของ**
+- Dashboard (10.4): server แสดง agent ที่ไม่อยู่ใน `KNOWN_AGENT_IDS` (`core/src/ai/event.rs`) เป็น
+  `unknown` (`handlers/v2/work_sessions.rs` `public_agent`) และใช้รายการเดียวกันใน SQL จัดประเภท actor
+  (`services/ai_stats.rs`) จึงต้องเพิ่ม ID แบบ server-first: `qwen-code`, `pi`, `kiro`, `factory-droid`,
+  `ibm-bob`, `qoder` (ID อื่นมีอยู่แล้ว) ซึ่งอยู่นอกเงื่อนไขการอนุมัติรวม (ห้ามแตะ server)
+  → **อนุมัติแยกแล้ว 2026-10-26** และเพิ่มแล้ว (ไม่เพิ่ม alias) พร้อม test ว่า parser ทุกตัวใน registry
+  เป็น ID ที่ server รู้จัก; ต้อง deploy server ก่อน client รุ่นที่ส่ง ID เหล่านี้ dashboard ไม่มีรายการ
+  agent ของตัวเอง (แสดงชื่อ ID ตามที่ server ส่งมา) จึงไม่ต้องแก้ frontend
+  ส่วนยอด token รวมในหน้า AI แสดงอยู่แล้วโดยไม่ต้องแก้ (usage endpoint รับ agent ใดก็ได้)
+- Onboarding ใน VS Code extension (10.3): ทำแล้ว 2026-10-27 (อนุมัติแยก กลุ่ม C) — ดูหัวข้อท้ายไฟล์
+- ตัวนับ budget/lock skip/panic ต่อ 24 ชม.: ทำแล้ว 2026-10-27 (กลุ่ม B); lag เป็นแถว: ยังไม่ทำ
+- tests: core 481 passed, cli 109+7+8+44, clippy สะอาด; smoke test ใน HOME ชั่วคราวผ่าน
+
+## ผลการทำ: auto sync ทุกเครื่องมือ (2026-10-26, อนุมัติแยก, consent แบบ A)
+
+- `run_bounded_ai_sync` (`cli/src/main.rs`): Codex → Claude Code → Gemini CLI ลำดับและงบ 2 วินาทีเดิม;
+  parser อื่นที่เปิดอยู่ใช้งบรวม 2 วินาที เรียงตามตัวที่ไม่ได้อ่านนานสุด (`auto_sync_rotation`)
+  ข้ามตัวที่อ่านภายใน 60 วินาที ไม่เริ่มตัวใหม่ถ้างบเหลือ < 300 ms; บันทึกเวลาก่อนอ่านทุกตัว
+  (ตาราง `auto_sync_schedule`) ตัวที่หมดเวลาจึงไปต่อท้าย; ถือ `AiSyncLock` ครั้งเดียวทั้งรอบ
+  (ถ้ามีคนถืออยู่ = ข้ามทั้งรอบ); ตัวที่ผู้ใช้ปิดถูกกรองออกก่อนเรียก (รวม 3 ตัวเดิม)
+- งบเวลาส่งเข้า parser จริง: `ParseContext.time_budget` = เวลาที่เหลือ และ `parse_usage_within`
+  (ค่าเริ่มเรียก `parse_usage` เดิม; Cursor/Windsurf/OpenCode/Qoder ใช้งบนี้) — parser JSONL ไม่ใช้
+  `time_budget` จึงไม่เปลี่ยน; การข้าม usage เมื่องบ < 300 ms ใช้เฉพาะ source แบบ SQLite
+  (อ่านซ้ำทุกรอบอยู่แล้ว) เพื่อไม่ให้ usage ของ JSONL หาย — แคบกว่าคำขอเดิมเพื่อความปลอดภัย
+- consent ไม่เปลี่ยน: ต้องมี observer + hook consent อย่างน้อย 1 ตัวเหมือนเดิม
+- หลักฐาน: test `auto_sync_rotation_takes_the_longest_waiting_turned_on_parsers`,
+  `usage_reads_stop_within_their_budget` (20,000 แถว, งบ 1 ms หยุดภายใน 1 วินาที), state test ของตาราง;
+  core 483, cli 110+7+8+44 ผ่าน, clippy สะอาด, integration 7 ok + 2 Cursor scaffold เดิม
+- วัดเวลา `wakaclock heartbeat` ใน HOME ชั่วคราว (Cursor 20,000 bubble + OpenCode 20,000 message
+  สังเคราะห์, server ปิด): ปิด rotation (= ขอบเขตเดิม) 0.02–0.03 วินาที; เปิด rotation ครั้งแรก
+  0.47 วินาที (queue usage 7,000 แถว), ครั้งต่อมา 0.03 วินาที (ยังไม่ครบ 60 วินาที); heartbeat ของ
+  editor เข้า queue ทุกครั้ง (ห่างจากเส้นตาย 45 วินาทีของ extension มาก)
+- ข้อสังเกต: ตอน offline แต่ละ tool ที่ถึงคิวพิมพ์ warning "sync skipped: HTTP error" หนึ่งครั้ง
+  (เหมือนพฤติกรรม 3 ตัวเดิม) usage ยังอยู่ใน queue; รอบถัดไปเงียบเพราะ backoff ของ pending usage
+
+## ผลการทำ: กลุ่ม A1 / B / C (2026-10-27, อนุมัติแยก)
+
+- **A1 (Cursor/Windsurf usage)**: `parse_usage_within` ตัด fingerprint ออกจาก checkpoint ก่อนอ่าน
+  (`core/src/ai/cursor.rs`) จึงอ่านหน้าต่าง 500 แถวล่าสุดซ้ำทุกรอบแบบเดียวกับ OpenCode/Qoder; usage ที่ยัง
+  ไม่ครบ 120 วินาทีจะถูกส่งในรอบถัดไปแม้ DB ไม่เปลี่ยน; ID usage คงที่ จึงอ่านซ้ำได้โดยไม่ซ้ำ
+  test `usage_is_read_again_when_the_database_has_not_changed`; วัดเวลา `ai sync --agent cursor`
+  (debug build, 500 bubble × ~100 KB, DB ไม่เปลี่ยน): 0.15 วินาทีต่อรอบ และ queue usage ได้ครบ 500 แถวทุกรอบ;
+  `wakaclock heartbeat` (consent A, server ปิด): 500 × 100 KB ครั้งแรก 1.49 วินาที, 4,000 × 50 KB 0.96 วินาที,
+  ครั้งต่อมา 0.02–0.03 วินาที; heartbeat เข้า queue ทุกครั้ง ไม่มี budget hit
+- **B (ตัวนับ 24 ชม.)**: ตาราง `ai_sync_events(parser_id, kind, at)` ลบแถวเกิน 24 ชม. ทุกครั้งที่เขียน
+  - `sqlite_source.rs` นับผลการอ่านต่อ thread (`take_read_outcomes`): หมดงบเวลา (ไม่นับการชนเพดานแถว),
+    DB ถูก lock, query ล้ม (= schema ไม่รู้จัก); `run_ai_sync` เอาค่าไปบันทึกให้ parser ที่เพิ่งรัน (ชนิดละ 1 ครั้งต่อรอบ)
+  - `parser_panic` จาก `catch_parser_panic`; `sync_lock_skip` (parser `*`) เมื่อ `AiSyncLock` ถูกถือ;
+    parser แบบไฟล์ที่ใช้ช่องเวลาอัตโนมัติหมด = `budget_hit` (รวมเวลาที่รอ network ตอนส่ง usage ด้วย);
+    parser แบบ DB นับจากการอ่าน และบันทึกก่อนเช็กเส้นตายของช่อง จึงไม่หายเมื่อช่องหมดเวลาพร้อมกัน
+    (เส้นทางนี้ตรวจจากการอ่านโค้ด ยังไม่มี test ที่ทำให้ช่องหมดเวลากลางการอ่าน DB)
+  - การเขียนเป็น best-effort ไม่ทำให้ sync หรือ heartbeat ล้ม; ไม่บันทึกตอน `--dry-run`
+  - แสดงใน `ai status` (ข้อความ + `last_24h` ใน JSON + `sync_lock_skips_24h`) และ `ai sources list`
+    **ไม่ใส่** ใน `AiDiagnosticsReportV2` (ถูก upload โดย `ai doctor --upload`) จึงไม่เปลี่ยน wire
+- **C (VS Code)**: คำสั่ง "AtoAxis: Manage AI Log Sources" (`wakaclock.manageAiSources`) แสดงเครื่องมือ
+  (ที่พบในเครื่องก่อน), เปิด/ปิด, counted หรือ usage only, จำนวน source, dry-run edit, ปัญหา 24 ชม. (ถ้า CLI มี)
+  เลือกแล้วสลับเปิด/ปิดผ่าน `ai sources enable|disable --json`; ข้อความบอกว่าอ่านแค่ metadata/จำนวน และ
+  เปิดแล้วเริ่มจากตอนนี้ไม่ upload ย้อนหลัง; CLI รุ่นเก่า → `AiSourcesUnsupportedError` ให้อัปเดต;
+  logic อยู่ใน `src/aiSources.ts` (ไม่ import vscode), `cli.ts` เพิ่มแค่ 2 method ที่ใช้ `runCli` เดิม;
+  ไม่รวมการ build/publish VSIX
+- end-to-end ของ B: ถือ lock แบบ EXCLUSIVE บน DB ของ Cursor ระหว่าง heartbeat แรก → `ai_sync_events` ได้
+  `('cursor','source_busy',1)` และ `ai sources list` แสดง `· 24h: busy 1`; heartbeat ยังเข้า queue (0.61 วินาที)
+- tests: core 486 (2 ignored), cli 111+7+8+44, server lib 503, clippy สะอาด; extension 242 (vitest) + `tsc --noEmit` ผ่าน
+  (extension ใน worktree ใช้ `node_modules` แบบ symlink ไปยัง checkout หลัก ซึ่ง lockfile ตรงกัน)
+- `main.rs` แก้เฉพาะ `print_ai_status`, `ai_source_summary`/`run_ai_sources`, `catch_parser_panic`,
+  `run_ai_sync` (จุดบันทึกตัวนับ), `run_bounded_ai_sync`/`bounded_ai_sync_pass` และ test; ไม่แตะการสร้าง
+  heartbeat, queue หรือ timeline
+- คำสั่ง C ใช้ได้เมื่อ CLI ที่มากับ extension มี `ai sources` แล้ว (ต้อง release CLI ก่อน) ก่อนหน้านั้นผู้ใช้เห็นข้อความให้อัปเดต
+- ยังไม่ทำ: lag เป็นแถว, ค่า `explicit` (รอ query Phase 00 0.7), ทดสอบกับเครื่องมือจริง (ขั้น 10)

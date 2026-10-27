@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { AiSourcesUnsupportedError, parseAiSources } from "./aiSources";
+import type { AiSourceSummary } from "./aiSources";
 import type {
     ApiKeySyncResult,
     ActivitySegment,
@@ -718,6 +720,25 @@ export class WakaclockCliService {
             throw new Error("wakaclock ai doctor returned an unsupported diagnostics snapshot");
         }
         return snapshot;
+    }
+
+    /** The local AI tools whose logs the CLI reads (`wakaclock ai sources list`). */
+    public async listAiSources(): Promise<AiSourceSummary[]> {
+        try {
+            const result = await this.runCli(["ai", "sources", "list", "--json"]);
+            return parseAiSources(result.stdout);
+        } catch (error) {
+            throw isUnsupportedArgument(error) ? new AiSourcesUnsupportedError() : error;
+        }
+    }
+
+    /** Turn reading one tool's local logs on or off. */
+    public async setAiSourceEnabled(agent: string, enabled: boolean): Promise<void> {
+        try {
+            await this.runCli(["ai", "sources", enabled ? "enable" : "disable", agent, "--json"]);
+        } catch (error) {
+            throw isUnsupportedArgument(error) ? new AiSourcesUnsupportedError() : error;
+        }
     }
 
     /** Retained for API compatibility with older extension callers. */

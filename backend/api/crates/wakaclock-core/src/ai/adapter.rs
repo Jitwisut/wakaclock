@@ -715,7 +715,12 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 shell_mutation: true,
                 ..Default::default()
             },
-            transcript_roots: vec![],
+            // Read by CursorFamilyParser (usage only; edits stay dry-run until certified).
+            transcript_roots: vec![
+                "Library/Application Support/Cursor/User/globalStorage/state.vscdb".to_string(),
+                ".config/Cursor/User/globalStorage/state.vscdb".to_string(),
+                "AppData/Roaming/Cursor/User/globalStorage/state.vscdb".to_string(),
+            ],
             payload_schema_versions: vec!["afterFileEdit-v1".to_string()],
             supported_change_kinds: file_kinds.clone(),
             verification: Verification::scaffold(
@@ -829,7 +834,12 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 instruction: "no documented AtoAxis integration point yet".to_string(),
             },
             native_hooks: no_hooks(),
-            transcript_roots: vec![],
+            // Read by AntigravityParser (JSONL only; usage-only, edits stay dry-run).
+            transcript_roots: vec![
+                ".gemini/antigravity/brain".to_string(),
+                ".gemini/antigravity-ide/brain".to_string(),
+                ".gemini/antigravity-cli/brain".to_string(),
+            ],
             payload_schema_versions: vec![],
             supported_change_kinds: file_kinds.clone(),
             verification: Verification::unverified(),
@@ -846,7 +856,13 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 instruction: "Copilot CLI/IDE hook surface not yet inspected".to_string(),
             },
             native_hooks: no_hooks(),
-            transcript_roots: vec![],
+            // Read by CopilotParser; edits stay dry-run until certified.
+            transcript_roots: vec![
+                "Library/Application Support/Code/User/workspaceStorage/*/GitHub.copilot-chat/transcripts".to_string(),
+                ".config/Code/User/workspaceStorage/*/GitHub.copilot-chat/transcripts".to_string(),
+                "AppData/Roaming/Code/User/workspaceStorage/*/GitHub.copilot-chat/transcripts".to_string(),
+                ".copilot/session-state".to_string(),
+            ],
             payload_schema_versions: vec![],
             supported_change_kinds: file_kinds.clone(),
             verification: Verification::unverified(),
@@ -863,7 +879,12 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 instruction: "Windsurf hook surface not yet inspected".to_string(),
             },
             native_hooks: no_hooks(),
-            transcript_roots: vec![],
+            // Read by CursorFamilyParser (usage only; edits stay dry-run until certified).
+            transcript_roots: vec![
+                "Library/Application Support/Windsurf/User/globalStorage/state.vscdb".to_string(),
+                ".config/Windsurf/User/globalStorage/state.vscdb".to_string(),
+                "AppData/Roaming/Windsurf/User/globalStorage/state.vscdb".to_string(),
+            ],
             payload_schema_versions: vec![],
             supported_change_kinds: file_kinds.clone(),
             verification: Verification::unverified(),
@@ -913,9 +934,111 @@ fn rollout_scaffold_manifests() -> Vec<AdapterManifest> {
                 command_names: vec!["opencode".to_string()],
                 version_arg: Some("--version".to_string()),
             },
+            // Session database read by SqliteAppParser; usage only, edits dry-run.
             install: InstallStrategy::TranscriptOnly,
             native_hooks: no_hooks(),
-            transcript_roots: vec![],
+            transcript_roots: vec![".local/share/opencode".to_string()],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "qwen-code".to_string(),
+            provider: "alibaba".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["qwen".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            // Transcript-only: read by JsonlFamilyParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![".qwen/projects".to_string()],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "pi".to_string(),
+            provider: "pi".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["pi".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            // Transcript-only: read by JsonlFamilyParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![".pi/agent/sessions".to_string()],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "kiro".to_string(),
+            provider: "aws".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["kiro-cli".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            // Transcript-only: read by JsonlFamilyParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![".kiro/sessions".to_string()],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "factory-droid".to_string(),
+            provider: "factory".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec!["droid".to_string()],
+                version_arg: Some("--version".to_string()),
+            },
+            // Transcript-only: read by JsonlFamilyParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![".factory/sessions".to_string()],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "ibm-bob".to_string(),
+            provider: "ibm".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec![],
+                version_arg: None,
+            },
+            // Transcript-only: task logs read by UiMessagesParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![
+                "Library/Application Support/IBM Bob/User/globalStorage/ibm.bob-code/tasks".to_string(),
+                "Library/Application Support/Bob-IDE/User/globalStorage/ibm.bob-code/tasks".to_string(),
+            ],
+            payload_schema_versions: vec![],
+            supported_change_kinds: file_kinds.clone(),
+            verification: Verification::unverified(),
+            health_probe: HealthProbe::None,
+        },
+        AdapterManifest {
+            id: "qoder".to_string(),
+            provider: "qoder".to_string(),
+            executable: ExecutableDetection {
+                command_names: vec![],
+                version_arg: None,
+            },
+            // Transcript-only: local.db read by SqliteAppParser; usage only, edits dry-run.
+            install: InstallStrategy::TranscriptOnly,
+            native_hooks: no_hooks(),
+            transcript_roots: vec![
+                "Library/Application Support/Qoder/SharedClientCache/cache/db".to_string(),
+            ],
             payload_schema_versions: vec![],
             supported_change_kinds: file_kinds.clone(),
             verification: Verification::unverified(),

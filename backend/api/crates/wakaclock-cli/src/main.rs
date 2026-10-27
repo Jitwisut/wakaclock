@@ -31,6 +31,7 @@ mod team_context_capture;
 mod tool_snapshot;
 use tool_snapshot::{AiToolInput, ToolSnapshot, WorkspaceChange};
 use wakaclock_ast::detect_file;
+use wakaclock_core::ai::state::{SyncEventKind, SYNC_EVENT_ALL_PARSERS};
 use wakaclock_core::ai::topology_handoff::{
     CloudJobEvidence, CollectorCapabilities, CollectorRegistration, HandoffEvent,
     HandoffEventIdentity, HandoffIngestOutcome, HandoffLedger,
@@ -597,6 +598,27 @@ enum AgentAction {
 }
 
 #[derive(Subcommand)]
+enum AiSourcesAction {
+    /// Show each tool, whether it is read, and the local dry-run edit totals.
+    List {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Stop reading this tool's local logs.
+    Disable {
+        agent: String,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Read this tool's local logs again, starting from now (the gap is not backfilled).
+    Enable {
+        agent: String,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum AiAction {
     /// Commit metadata records before returning per-ID/hash durable acknowledgements.
     ProducerBatch {
@@ -638,6 +660,12 @@ enum AiAction {
     Status {
         #[arg(long, default_value_t = false)]
         json: bool,
+    },
+    /// List the local AI tools whose logs AtoAxis reads, or turn one off or back on.
+    /// Every tool is on by default; turning one off stops reading its logs entirely.
+    Sources {
+        #[command(subcommand)]
+        action: AiSourcesAction,
     },
     /// Print the local topology identity used by remote/container collector setup.
     /// The output contains only opaque IDs; local paths and repository URLs stay
@@ -730,8 +758,8 @@ enum AiAction {
     /// extension) — plan.md 8.2 requires attribution to keep working "when an agent
     /// edits files outside VS Code," which is exactly this path.
     Sync {
-        /// Only sync this agent (`claude-code`, `codex`, or `gemini-cli`); default is all supported
-        /// agents.
+        /// Only sync this agent (see `wakaclock ai sources list`); default is every
+        /// agent whose logs are turned on.
         #[arg(long)]
         agent: Option<String>,
         /// Parse and print what would be sent without contacting the server or
@@ -2673,6 +2701,7 @@ async fn run_command(
                 }
             }
             AiAction::Status { json } => print_ai_status(json)?,
+            AiAction::Sources { action } => run_ai_sources(action)?,
             AiAction::Topology { root, json } => print_ai_topology(root.as_deref(), json)?,
             AiAction::Capabilities { json } => print_ai_capabilities(json)?,
             AiAction::Setup {
@@ -3239,6 +3268,7 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
     // unavailable broker or parser probe.
     let diagnostics = collect_ai_diagnostics_v2(false)?;
     let context = ai_discovery_context()?;
+    let preferences = AiAttributionState::open().ok();
     let mut reports = Vec::new();
     for (id, parser) in supported_ai_parsers() {
         let discoveries = parser.discover_sources(&context);
@@ -3290,8 +3320,20 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
             .adapters
             .iter()
             .find(|adapter| adapter.agent == id);
+        let source = ai_source_summary(id, parser.as_ref(), paths.len(), preferences.as_ref());
+        let description = if source["enabled"].as_bool() == Some(false) {
+            format!("turned off ({description})")
+        } else {
+            description
+        };
         reports.push(serde_json::json!({
             "agent": id,
+            "enabled": source["enabled"],
+            "source_kind": source["source_kind"],
+            "sources": source["sources"],
+            "time_mode": source["time_mode"],
+            "dry_run_edits": source["dry_run_edits"],
+            "last_24h": source["last_24h"],
             "status": description.clone(),
             "detected": freshness.and_then(|adapter| adapter.detected.value),
             "installed": freshness.and_then(|adapter| adapter.enabled.value),
@@ -3304,9 +3346,9 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
             "blocker": freshness.and_then(|adapter| adapter.diagnostic_code.clone()),
         }));
     }
-    // Kilo and Kimi are native-hook adapters rather than transcript parsers. Keep
-    // them on the same status surface so an installed hook is not mistaken for an
-    // unsupported adapter merely because there is no parser implementation.
+    // Kilo and Kimi have native hooks. When their logs are also parsed, the hook state
+    // joins the parser's row so each agent appears once; otherwise they get their own
+    // row so an installed hook is not mistaken for an unsupported adapter.
     for native in native_adapter_doctor_entries(&context.home_dir) {
         let agent = native
             .get("agent")
@@ -3316,6 +3358,17 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
             .get("installed")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
+        if let Some(report) = reports
+            .iter_mut()
+            .find(|report| report["agent"].as_str() == Some(agent))
+        {
+            report["hook_state"] = serde_json::json!(if installed {
+                "installed"
+            } else {
+                "not_installed"
+            });
+            continue;
+        }
         let detected = native
             .get("native_executable")
             .is_some_and(|value| !value.is_null());
@@ -3344,12 +3397,22 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
             "blocker": freshness.and_then(|adapter| adapter.diagnostic_code.clone()),
         }));
     }
+    // Sync-lock skips belong to a whole pass, not to one agent.
+    let sync_lock_skips = preferences
+        .as_ref()
+        .and_then(|state| {
+            state
+                .sync_event_counts(SYNC_EVENT_ALL_PARSERS, Utc::now().timestamp())
+                .ok()
+        })
+        .map_or(0, |counts| counts.sync_lock_skips);
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "diagnostics": diagnostics,
                 "agents": reports,
+                "sync_lock_skips_24h": sync_lock_skips,
             }))?
         );
     } else {
@@ -3361,9 +3424,15 @@ fn print_ai_status(json: bool) -> Result<(), Box<dyn Error>> {
         );
         for report in reports {
             println!(
-                "{}: {}",
+                "{}: {}{}",
                 report["agent"].as_str().unwrap_or("unknown"),
-                report["status"].as_str().unwrap_or("unknown")
+                report["status"].as_str().unwrap_or("unknown"),
+                sync_event_suffix(&report["last_24h"])
+            );
+        }
+        if sync_lock_skips > 0 {
+            println!(
+                "AI sync passes skipped because another sync was running (24h): {sync_lock_skips}"
             );
         }
     }
@@ -4802,6 +4871,204 @@ fn supported_ai_parsers() -> Vec<(&'static str, Box<dyn AiActivityParser>)> {
         .collect()
 }
 
+/// Whether the user left reading this tool's logs on. An unreadable preference store
+/// keeps the default (on), matching a fresh installation.
+fn source_turned_on(state: Option<&AiAttributionState>, parser_id: &str) -> bool {
+    state.is_none_or(|state| state.source_enabled(parser_id).unwrap_or(true))
+}
+
+/// `time_neutral` while a parser may only send usage; `counted` once its edits are sent.
+fn ai_time_mode(parser_id: &str) -> &'static str {
+    if wakaclock_core::ai::emits_edit_heartbeats(parser_id) {
+        "counted"
+    } else {
+        "time_neutral"
+    }
+}
+
+/// Paths of every source a parser currently finds.
+fn discovered_source_paths(
+    parser: &dyn AiActivityParser,
+    context: &DiscoveryContext,
+) -> Vec<PathBuf> {
+    parser
+        .discover_sources(context)
+        .into_iter()
+        .filter_map(|result| match result.state {
+            DiscoveryState::TranscriptFound { path } => Some(path),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Metadata-only description of one parser for `ai status` and `ai sources list`:
+/// no paths, prompts or file names, only kinds, counts and times.
+fn ai_source_summary(
+    id: &str,
+    parser: &dyn AiActivityParser,
+    sources: usize,
+    state: Option<&AiAttributionState>,
+) -> serde_json::Value {
+    let dry_run = state
+        .and_then(|state| state.dry_run_edit_summary(id).ok())
+        .unwrap_or((0, 0, 0, None));
+    let last_24h = state
+        .and_then(|state| state.sync_event_counts(id, Utc::now().timestamp()).ok())
+        .unwrap_or_default();
+    serde_json::json!({
+        "agent": id,
+        "enabled": source_turned_on(state, id),
+        "source_kind": parser.source_kind(),
+        "sources": sources,
+        "time_mode": ai_time_mode(id),
+        "dry_run_edits": {
+            "count": dry_run.0,
+            "lines_added": dry_run.1,
+            "lines_deleted": dry_run.2,
+            "latest_at": dry_run.3
+                .and_then(|seconds| chrono::DateTime::<Utc>::from_timestamp(seconds, 0)),
+        },
+        "last_24h": last_24h,
+    })
+}
+
+/// " · 24h: budget 2, busy 1" for a summary's non-zero sync event counts, else "".
+fn sync_event_suffix(counts: &serde_json::Value) -> String {
+    let parts: Vec<String> = [
+        ("budget_hits", "budget"),
+        ("source_busy", "busy"),
+        ("sync_lock_skips", "lock skips"),
+        ("parser_panics", "panics"),
+        ("schema_unknown", "schema"),
+    ]
+    .iter()
+    .filter_map(|(key, label)| {
+        let count = counts[*key].as_u64().unwrap_or(0);
+        (count > 0).then(|| format!("{label} {count}"))
+    })
+    .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" · 24h: {}", parts.join(", "))
+    }
+}
+
+/// Count what stopped this thread's database reads short for `parser_id`. Best effort:
+/// a counter that cannot be written never fails the sync.
+fn record_read_outcomes(state: &AiAttributionState, parser_id: &str) {
+    let outcomes = wakaclock_core::ai::sqlite_source::take_read_outcomes();
+    let now = Utc::now().timestamp();
+    for (count, kind) in [
+        (outcomes.budget_hits, SyncEventKind::BudgetHit),
+        (outcomes.busy, SyncEventKind::SourceBusy),
+        (outcomes.failures, SyncEventKind::SchemaUnknown),
+    ] {
+        // One pass that hit the same limit twice (edits, then usage) counts once.
+        if count > 0 {
+            let _ = state.record_sync_event(parser_id, kind, now);
+        }
+    }
+}
+
+/// Best-effort record of one sync event in the local state database.
+fn record_sync_event(parser_id: &str, kind: SyncEventKind) {
+    if let Ok(state) = AiAttributionState::open() {
+        let _ = state.record_sync_event(parser_id, kind, Utc::now().timestamp());
+    }
+}
+
+fn run_ai_sources(action: AiSourcesAction) -> Result<(), Box<dyn Error>> {
+    let state = AiAttributionState::open()?;
+    let context = ai_discovery_context()?;
+    let (agent, enable, json) = match action {
+        AiSourcesAction::List { json } => {
+            let summaries: Vec<serde_json::Value> = supported_ai_parsers()
+                .iter()
+                .map(|(id, parser)| {
+                    let sources = discovered_source_paths(parser.as_ref(), &context).len();
+                    ai_source_summary(id, parser.as_ref(), sources, Some(&state))
+                })
+                .collect();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({ "sources": summaries }))?
+                );
+            } else {
+                println!("Local AI logs are read for metadata and counts only (no prompts, code or diffs).");
+                for summary in &summaries {
+                    println!(
+                        "{:<16} {:<4} {:<13} {:<13} sources={} dry-run edits={} (+{} -{}){}",
+                        summary["agent"].as_str().unwrap_or("unknown"),
+                        if summary["enabled"].as_bool() == Some(true) {
+                            "on"
+                        } else {
+                            "off"
+                        },
+                        summary["source_kind"].as_str().unwrap_or("unknown"),
+                        summary["time_mode"].as_str().unwrap_or("unknown"),
+                        summary["sources"],
+                        summary["dry_run_edits"]["count"],
+                        summary["dry_run_edits"]["lines_added"],
+                        summary["dry_run_edits"]["lines_deleted"],
+                        sync_event_suffix(&summary["last_24h"]),
+                    );
+                }
+            }
+            return Ok(());
+        }
+        AiSourcesAction::Disable { agent, json } => (agent, false, json),
+        AiSourcesAction::Enable { agent, json } => (agent, true, json),
+    };
+    let agent = normalize_agent_id(&agent);
+    let parsers = supported_ai_parsers();
+    let Some((id, parser)) = parsers.iter().find(|(id, _)| *id == agent) else {
+        return Err(
+            format!("no local log reader for `{agent}`; see `wakaclock ai sources list`").into(),
+        );
+    };
+    let was_enabled = state.source_enabled(id)?;
+    let mut seeded = 0usize;
+    if enable && !was_enabled {
+        // Start from the current end of every source so the time it was turned off
+        // is not read back.
+        for path in discovered_source_paths(parser.as_ref(), &context) {
+            let source_path = path.to_string_lossy().into_owned();
+            let cursor_key = format!("{id}:{source_path}");
+            let file_identity = transcript_identity(&path);
+            let file_len = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+            let cursor = match state.load_cursor(&cursor_key)? {
+                Some(cursor) if cursor.file_identity == file_identity => cursor,
+                _ => ParserCursor {
+                    source_path,
+                    file_identity,
+                    byte_offset: 0,
+                    last_record_id: None,
+                    last_record_time: None,
+                    context: None,
+                },
+            };
+            state.save_cursor(&cursor_key, &parser.seed_at_head(&cursor, file_len))?;
+            seeded += 1;
+        }
+    }
+    state.set_source_enabled(id, enable)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "agent": id, "enabled": enable, "sources_seeded": seeded })
+        );
+    } else if enable {
+        println!("Reading {id} logs again from now on.");
+    } else {
+        println!(
+            "Stopped reading {id} logs. Turn it back on with `wakaclock ai sources enable {id}`."
+        );
+    }
+    Ok(())
+}
+
 /// Keep edits a parser may not send yet as local dry-run evidence (counts and hashes).
 fn keep_edits_as_dry_run(
     state: &AiAttributionState,
@@ -4829,9 +5096,11 @@ fn catch_parser_panic<T, E: std::fmt::Display>(
 ) -> Result<T, String> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
         Ok(result) => result.map_err(|error| error.to_string()),
-        Err(_) => Err("parser panicked".to_string()),
+        Err(_) => Err(PARSER_PANICKED.to_string()),
     }
 }
+
+const PARSER_PANICKED: &str = "parser panicked";
 
 fn certification_tuple_for_agent(agent_id: &str) -> Option<CertificationTuple> {
     let registry = wakaclock_core::ai::AdapterRegistry::builtin();
@@ -5184,8 +5453,12 @@ async fn run_ai_identity_repair(
     let mut transcripts_scanned = Vec::new();
     let mut warnings = Vec::new();
 
+    let preferences = AiAttributionState::open().ok();
     for (id, parser) in supported_ai_parsers() {
         if normalized_agent.as_deref().is_some_and(|agent| agent != id) {
+            continue;
+        }
+        if !source_turned_on(preferences.as_ref(), id) {
             continue;
         }
         parser_versions.push(format!("{id}@{}", env!("CARGO_PKG_VERSION")));
@@ -5503,8 +5776,12 @@ async fn run_ai_measurement_repair_preview(
     let mut parser_versions = Vec::new();
     let mut transcripts_scanned = 0usize;
     let mut warning_count = 0usize;
+    let preferences = AiAttributionState::open().ok();
     for (id, parser) in supported_ai_parsers() {
         if normalized_agent.as_deref().is_some_and(|agent| agent != id) {
+            continue;
+        }
+        if !source_turned_on(preferences.as_ref(), id) {
             continue;
         }
         parser_versions.push(format!("{id}@{}", env!("CARGO_PKG_VERSION")));
@@ -5799,6 +6076,12 @@ async fn run_ai_sync(
                 format!("AI transcript sync is not supported for adapter `{agent}`").into(),
             );
         }
+        if !AiAttributionState::open()?.source_enabled(agent)? {
+            return Err(format!(
+                "reading `{agent}` logs is turned off; run `wakaclock ai sources enable {agent}`"
+            )
+            .into());
+        }
     }
     let _sync_lock = if dry_run || lease_already_held {
         None
@@ -5806,6 +6089,7 @@ async fn run_ai_sync(
         match AiSyncLock::acquire()? {
             Some(lock) => Some(lock),
             None => {
+                record_sync_event(SYNC_EVENT_ALL_PARSERS, SyncEventKind::SyncLockSkip);
                 return Err("already_running".into());
             }
         }
@@ -5834,6 +6118,13 @@ async fn run_ai_sync(
     for (id, parser) in supported_ai_parsers() {
         check_deadline()?;
         if agent_filter.is_some_and(|filter| filter != id) {
+            continue;
+        }
+        // The user turned this tool off: read nothing, keep its cursors.
+        if !state.source_enabled(id)? {
+            if verbose {
+                println!("== {id} ==\n  turned off (wakaclock ai sources enable {id}), skipping");
+            }
             continue;
         }
         if verbose {
@@ -5943,31 +6234,81 @@ async fn run_ai_sync(
             // sync for the others (the `AiActivityParser` contract says callers treat
             // `Err` as "skip this agent this cycle"). Record it and move to the next
             // agent instead of `?`-ing out of the whole run.
-            let batch = match catch_parser_panic(|| {
-                parser.parse_since(&ParseContext::default(), Some(&cursor))
-            }) {
-                Ok(batch) => batch,
-                Err(error) => {
-                    eprintln!(
+            // The bounded automatic pass gives each parser only what is left of its
+            // slot; a database parser stops reading when that runs out.
+            let remaining =
+                || deadline.map(|limit| limit.saturating_duration_since(Instant::now()));
+            let parse_context = ParseContext {
+                time_budget: remaining().map_or(ParseContext::default().time_budget, |left| {
+                    left.min(ParseContext::default().time_budget)
+                }),
+                ..ParseContext::default()
+            };
+            // Start this parser's read outcomes from zero (see `record_read_outcomes`).
+            wakaclock_core::ai::sqlite_source::take_read_outcomes();
+            let batch =
+                match catch_parser_panic(|| parser.parse_since(&parse_context, Some(&cursor))) {
+                    Ok(batch) => batch,
+                    Err(error) => {
+                        eprintln!(
                         "  {id}: transcript parse failed — skipping this agent this cycle ({error})"
                     );
-                    agent_service::record_scan(false, None, Some(&format!("{id}: {error}")));
-                    break;
-                }
-            };
+                        agent_service::record_scan(false, None, Some(&format!("{id}: {error}")));
+                        if !dry_run {
+                            if error == PARSER_PANICKED {
+                                let _ = state.record_sync_event(
+                                    id,
+                                    SyncEventKind::ParserPanic,
+                                    Utc::now().timestamp(),
+                                );
+                            }
+                            record_read_outcomes(&state, id);
+                        }
+                        break;
+                    }
+                };
+            // A database read cut short by this slot's deadline is still counted.
+            if !dry_run && deadline.is_some_and(|limit| Instant::now() >= limit) {
+                record_read_outcomes(&state, id);
+            }
             check_deadline()?;
             // Usage is parsed independently from file-edit events: one model response may edit
             // several files, and copying its token count to each file would inflate totals. A
             // usage-parse failure is non-fatal — keep the file-edit events, drop token counts.
-            let usage_records = if usage_scan_needed(cursor_reused, cursor.byte_offset, file_len) {
-                catch_parser_panic(|| parser.parse_usage(&transcript_path, Some(&cursor)))
-            } else {
-                Ok(Vec::new())
+            let usage_budget = remaining();
+            let usage_records =
+                if !usage_scan_needed(cursor_reused, cursor.byte_offset, file_len) {
+                    Ok(Vec::new())
+                } else if parser.source_kind() == wakaclock_core::ai::SourceKind::Sqlite
+                    && usage_budget.is_some_and(|left| left < AUTO_SYNC_MIN_SLICE)
+                {
+                    // Database usage is re-read from a recent window every pass, so a pass
+                    // with no time left can skip it without losing records.
+                    Ok(Vec::new())
+                } else {
+                    catch_parser_panic(|| match usage_budget {
+                        Some(budget) => {
+                            parser.parse_usage_within(&transcript_path, Some(&cursor), budget)
+                        }
+                        None => parser.parse_usage(&transcript_path, Some(&cursor)),
+                    })
+                }
+                .unwrap_or_else(|error| {
+                    eprintln!(
+                        "  {id}: usage parse failed, continuing without token counts ({error})"
+                    );
+                    if !dry_run && error == PARSER_PANICKED {
+                        let _ = state.record_sync_event(
+                            id,
+                            SyncEventKind::ParserPanic,
+                            Utc::now().timestamp(),
+                        );
+                    }
+                    Vec::new()
+                });
+            if !dry_run {
+                record_read_outcomes(&state, id);
             }
-            .unwrap_or_else(|error| {
-                eprintln!("  {id}: usage parse failed, continuing without token counts ({error})");
-                Vec::new()
-            });
             if verbose {
                 for warning in &batch.warnings {
                     eprintln!("  warning: {}", warning.message);
@@ -7561,45 +7902,128 @@ fn prepare_handoff(
     })
 }
 
-/// Ordinary editor heartbeats opportunistically drain transcript events, so AI edits
-/// do not depend on a user remembering to run `wakaclock sync`. Each agent gets its
-/// own bounded pass: a large or malformed Claude history must not consume the whole
-/// budget before Codex gets a chance to scan its current session. A timeout/error leaves
-/// the ordinary heartbeat path untouched and the transcript cursor replayable on the
-/// next event-triggered call.
-pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
-    const AUTO_SYNC_AGENT_BUDGET: Duration = Duration::from_secs(2);
+/// Parsers whose edits are counted keep a fixed slot each, in this order, with the
+/// low-latency active-session parser first.
+const AUTO_SYNC_COUNTED: [&str; 3] = ["codex", "claude-code", "gemini-cli"];
+const AUTO_SYNC_AGENT_BUDGET: Duration = Duration::from_secs(2);
+/// Shared by every other parser in one automatic pass.
+const AUTO_SYNC_ROTATION_BUDGET: Duration = Duration::from_secs(2);
+/// A parser read this recently waits for a later pass.
+const AUTO_SYNC_MIN_INTERVAL_SECONDS: i64 = 60;
+/// Less time than this is not worth starting a parser (or a database usage read) for.
+const AUTO_SYNC_MIN_SLICE: Duration = Duration::from_millis(300);
 
-    // Keep this order stable and put the low-latency active-session parser first. The
-    // calls remain sequential because AiSyncLock protects the shared attribution state;
-    // the independent timeout is what prevents one parser from starving the others.
-    for agent in ["codex", "claude-code", "gemini-cli"] {
-        match tokio::time::timeout(
-            AUTO_SYNC_AGENT_BUDGET,
-            run_ai_sync(
-                config,
-                api_client,
-                Some(agent),
-                None,
-                AiSyncOptions {
-                    dry_run: false,
-                    verbose: false,
-                    from_start: false,
-                    lease_already_held: false,
-                    deadline: Some(Instant::now() + AUTO_SYNC_AGENT_BUDGET),
-                },
-            ),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                eprintln!("Warning: automatic {agent} sync skipped: {error}")
-            }
-            Err(_) => {
-                eprintln!("Warning: automatic {agent} sync exceeded 2 seconds; will retry later")
-            }
+/// The other parsers to try in this pass: turned on, not tried within the minimum
+/// interval, longest-waiting first (never tried counts as longest), ties by id.
+fn auto_sync_rotation(
+    candidates: &[(&'static str, bool)],
+    attempts: &std::collections::HashMap<String, i64>,
+    now: i64,
+) -> Vec<&'static str> {
+    let mut due: Vec<(Option<i64>, &'static str)> = candidates
+        .iter()
+        .filter(|(id, enabled)| *enabled && !AUTO_SYNC_COUNTED.contains(id))
+        .map(|(id, _)| (attempts.get(*id).copied(), *id))
+        .filter(|(last, _)| last.is_none_or(|at| now - at >= AUTO_SYNC_MIN_INTERVAL_SECONDS))
+        .collect();
+    due.sort();
+    due.into_iter().map(|(_, id)| id).collect()
+}
+
+/// Ordinary editor heartbeats opportunistically drain transcript events, so AI edits
+/// do not depend on a user remembering to run `wakaclock sync`. The counted parsers
+/// each get their own bounded slot as before; every other turned-on parser shares one
+/// more slot, taken in rotation so each is read at least once a minute while heartbeats
+/// arrive. A timeout/error leaves the ordinary heartbeat path untouched and the
+/// transcript cursor replayable on the next event-triggered call.
+pub(crate) async fn run_bounded_ai_sync(config: &Config, api_client: &ApiClient) {
+    // One lock for the whole pass: if another sync holds it, this pass has nothing to do.
+    let _lock = match AiSyncLock::acquire() {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            record_sync_event(SYNC_EVENT_ALL_PARSERS, SyncEventKind::SyncLockSkip);
+            return;
         }
+        Err(error) => {
+            eprintln!("Warning: automatic AI sync skipped: {error}");
+            return;
+        }
+    };
+    let state = AiAttributionState::open().ok();
+    for agent in AUTO_SYNC_COUNTED {
+        if source_turned_on(state.as_ref(), agent) {
+            bounded_ai_sync_pass(config, api_client, agent, AUTO_SYNC_AGENT_BUDGET).await;
+        }
+    }
+    let Some(state) = state else {
+        return;
+    };
+    let candidates: Vec<(&'static str, bool)> = supported_ai_parsers()
+        .iter()
+        .map(|(id, _)| (*id, source_turned_on(Some(&state), id)))
+        .collect();
+    let attempts = state.auto_sync_attempts().unwrap_or_default();
+    let rotation_deadline = Instant::now() + AUTO_SYNC_ROTATION_BUDGET;
+    for agent in auto_sync_rotation(&candidates, &attempts, Utc::now().timestamp()) {
+        let remaining = rotation_deadline.saturating_duration_since(Instant::now());
+        if remaining < AUTO_SYNC_MIN_SLICE {
+            break;
+        }
+        // Recorded before reading, so a parser that times out still moves to the back.
+        let _ = state.record_auto_sync_attempt(agent, Utc::now().timestamp());
+        bounded_ai_sync_pass(config, api_client, agent, remaining).await;
+    }
+}
+
+async fn bounded_ai_sync_pass(
+    config: &Config,
+    api_client: &ApiClient,
+    agent: &str,
+    budget: Duration,
+) {
+    match tokio::time::timeout(
+        budget,
+        run_ai_sync(
+            config,
+            api_client,
+            Some(agent),
+            None,
+            AiSyncOptions {
+                dry_run: false,
+                verbose: false,
+                from_start: false,
+                lease_already_held: true,
+                deadline: Some(Instant::now() + budget),
+            },
+        ),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            if error.to_string() == "deadline_exceeded" {
+                record_slot_budget_hit(agent);
+            }
+            eprintln!("Warning: automatic {agent} sync skipped: {error}")
+        }
+        Err(_) => {
+            record_slot_budget_hit(agent);
+            eprintln!(
+                "Warning: automatic {agent} sync exceeded {:.1} seconds; will retry later",
+                budget.as_secs_f32()
+            )
+        }
+    }
+}
+
+/// A file parser that used up its automatic slot. Database parsers are left out: they
+/// stop on their own budget and that read already counted it.
+fn record_slot_budget_hit(agent: &str) {
+    let reads_a_database = supported_ai_parsers().iter().any(|(id, parser)| {
+        *id == agent && parser.source_kind() == wakaclock_core::ai::SourceKind::Sqlite
+    });
+    if !reads_a_database {
+        record_sync_event(agent, SyncEventKind::BudgetHit);
     }
 }
 
@@ -8835,6 +9259,125 @@ mod generic_ai_ingress_tests {
         keep_edits_as_dry_run(&state, "cursor", &[&first, &second]).unwrap();
         keep_edits_as_dry_run(&state, "cursor", &[&first]).unwrap();
         assert_eq!(state.dry_run_edit_count("cursor").unwrap(), 2);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn auto_sync_rotation_takes_the_longest_waiting_turned_on_parsers() {
+        let candidates = [
+            ("codex", true),
+            ("claude-code", true),
+            ("cursor", true),
+            ("qoder", false),
+            ("pi", true),
+            ("kiro", true),
+            ("opencode", true),
+        ];
+        let now = 10_000;
+        let attempts: std::collections::HashMap<String, i64> = [
+            ("cursor".to_string(), now - 30), // read within the minute: waits
+            ("pi".to_string(), now - 600),    // waited longest of those tried
+            ("kiro".to_string(), now - 120),
+            ("codex".to_string(), now - 5_000), // counted: never in the rotation
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            auto_sync_rotation(&candidates, &attempts, now),
+            vec!["opencode", "pi", "kiro"]
+        );
+        // Once tried (even if it timed out), a parser moves behind the others.
+        let mut attempts = attempts;
+        attempts.insert("opencode".to_string(), now);
+        attempts.insert("cursor".to_string(), now - 61);
+        assert_eq!(
+            auto_sync_rotation(&candidates, &attempts, now + 1),
+            vec!["pi", "kiro", "cursor"]
+        );
+    }
+
+    #[test]
+    fn database_read_outcomes_are_counted_for_the_parser_that_ran() {
+        let dir = std::env::temp_dir().join(format!(
+            "wakaclock-cli-outcomes-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let state = AiAttributionState::open_at(&dir.join("state.sqlite3")).unwrap();
+        let tool_db = dir.join("tool.db");
+        rusqlite::Connection::open(&tool_db)
+            .unwrap()
+            .execute_batch("CREATE TABLE t (value TEXT);")
+            .unwrap();
+        wakaclock_core::ai::sqlite_source::take_read_outcomes();
+        let read = wakaclock_core::ai::sqlite_source::read_rows_after(
+            &tool_db,
+            0,
+            None,
+            "SELECT rowid, value FROM renamed WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+            |row| row.get::<_, String>(1),
+            &wakaclock_core::ai::sqlite_source::SqliteReadOptions::default(),
+        );
+        assert!(read.is_err());
+        record_read_outcomes(&state, "opencode");
+        let counts = state
+            .sync_event_counts("opencode", Utc::now().timestamp())
+            .unwrap();
+        assert_eq!((counts.schema_unknown, counts.budget_hits), (1, 0));
+        // Taken once: the next parser starts from zero.
+        record_read_outcomes(&state, "qoder");
+        assert_eq!(
+            state
+                .sync_event_counts("qoder", Utc::now().timestamp())
+                .unwrap(),
+            Default::default()
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn source_summaries_carry_counts_and_modes_but_no_paths() {
+        let path = std::env::temp_dir().join(format!(
+            "wakaclock-cli-sources-{}.sqlite3",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let state = AiAttributionState::open_at(&path).unwrap();
+        let edit = ai_event_for("qoder", PathBuf::from("/secret-repo/a.rs"), None);
+        keep_edits_as_dry_run(&state, "qoder", &[&edit]).unwrap();
+        state.set_source_enabled("qoder", false).unwrap();
+        let now = Utc::now().timestamp();
+        for kind in [SyncEventKind::SourceBusy, SyncEventKind::SourceBusy] {
+            state.record_sync_event("qoder", kind, now).unwrap();
+        }
+        state
+            .record_sync_event("qoder", SyncEventKind::SchemaUnknown, now)
+            .unwrap();
+        let parsers = supported_ai_parsers();
+        let summary_for = |id: &str| {
+            let (_, parser) = parsers
+                .iter()
+                .find(|(parser_id, _)| *parser_id == id)
+                .unwrap();
+            ai_source_summary(id, parser.as_ref(), 2, Some(&state))
+        };
+        let qoder = summary_for("qoder");
+        assert_eq!(qoder["enabled"], false);
+        assert_eq!(qoder["source_kind"], "sqlite");
+        assert_eq!(qoder["time_mode"], "time_neutral");
+        assert_eq!(qoder["sources"], 2);
+        assert_eq!(qoder["dry_run_edits"]["count"], 1);
+        assert_eq!(qoder["last_24h"]["source_busy"], 2);
+        assert_eq!(
+            sync_event_suffix(&qoder["last_24h"]),
+            " · 24h: busy 2, schema 1"
+        );
+        assert!(!qoder.to_string().contains("secret-repo"));
+        let claude = summary_for("claude-code");
+        assert_eq!(claude["enabled"], true);
+        assert_eq!(claude["source_kind"], "jsonl");
+        assert_eq!(claude["time_mode"], "counted");
+        assert_eq!(sync_event_suffix(&claude["last_24h"]), "");
+        assert!(source_turned_on(None, "qoder"));
         let _ = fs::remove_file(path);
     }
 }

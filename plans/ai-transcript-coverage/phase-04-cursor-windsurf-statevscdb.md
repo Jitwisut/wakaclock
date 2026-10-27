@@ -1,7 +1,33 @@
-# Phase 04 — Cursor IDE, Windsurf, cursor-agent CLI
+# Phase 04 — Cursor IDE, Windsurf
 
-สถานะ: **ขั้น 6 ใน README — รอ Phase 05 + approval** (เจ้าของต้องติดตั้ง Cursor และ Windsurf ตาม D4)
-Tier: 1 · ขึ้นกับ: Phase 01 (SQLite reader), Phase 02 (claims)
+สถานะ: **ทำแล้วใน worktree (2026-10-26) ยังไม่ commit** — ขั้น 6 ใน README
+`cursor-agent` CLI **ย้ายไปขั้น 8** (Tier 2 สำรวจ storage ก่อน) ตามที่เจ้าของอนุมัติ
+
+## ผลการทำ (2026-10-26)
+
+ที่ทำ:
+- `core/src/ai/vscdb_kv.rs`: อ่านเฉพาะ key `bubbleId:%` ของ `cursorDiskKV` ผ่าน `sqlite_source` (read-only, lock → ข้าม,
+  งบเวลา, fingerprint) + อ่านย้อน 500 rowid ทุกรอบเพราะ bubble ถูกอัปเดตทับที่เดิม; checkpoint ที่ถูกตัดกลางคัน
+  ไม่บันทึก fingerprint (ไม่งั้นรอบหน้าจะข้ามแถวที่ยังไม่อ่าน)
+- `core/src/ai/cursor.rs`: `CursorFamilyParser::cursor()` / `::windsurf()` (`Cursor`, `Windsurf`, `Windsurf - Next`;
+  macOS/Windows/Linux); edit = bubble assistant + `toolFormerData` เครื่องมือแก้ไฟล์ + `status = completed`;
+  usage = `tokenCount` ของ bubble ที่อายุ ≥ 2 นาที; `seed_at_head` = MAX(rowid) ของ bubble
+- registry เลือกด้วย id (`None` runtime → usage only); `adapter.rs` เพิ่มแค่ `transcript_roots`; `CAPABILITIES.md`
+
+ต่างจากคำขอโดยตั้งใจ (ไฟล์ชุดเดิม):
+- ไม่ใช้ `source_record_hashes`: parser ไม่ได้รับ state DB และถ้าเปิด `~/.wakaclock` เองจะทำให้ test เขียนลง home จริง →
+  ใช้ event/usage ID ที่คงที่ต่อ bubble แทน แล้วให้ปลายทางที่ idempotent อยู่แล้วกันซ้ำ
+- `provider` เป็นค่าว่าง (editor ส่งต่อไปหลายผู้ให้บริการ model; ชื่อ editor ไม่ใช่ผู้ให้บริการ model)
+- ยังไม่นับ prompt สำหรับ Cursor/Windsurf: การผูก prompt กับ usage ขึ้นกับช่วงที่อ่านย้อน → ค่าไม่คงที่ระหว่างรอบ
+  และ usage ID เดิมที่ค่าเปลี่ยนจะถูกเก็บเป็น conflict
+
+หลักฐาน: core 453 + 12 + 1 ผ่าน (`vscdb_kv` 5, `cursor` 7: completed/pending/read/create, อัปเดตภายหลังได้ ID เดิม,
+Windsurf, usage เฉพาะ bubble ที่นิ่งแล้ว/ข้ามค่า 0, seed, marker ลับไม่หลุด, discovery); cli 108 + 7 + 8 + 44 ผ่าน;
+clippy, rustfmt ผ่าน; integration ผ่าน (Cursor **hook** scaffold 2 ตัวล้มตั้งแต่ก่อนแก้ ไม่เกี่ยวกับ parser)
+
+ยังไม่ได้ทำ: ยืนยัน schema กับ db จริง (ขั้นทดสอบรวม: ติดตั้ง Cursor + Windsurf และใช้ agent แก้ไฟล์จริง);
+แปลง path แบบ relative เป็น absolute; ตอนเปิดส่ง edit (ขั้น 11) ต้องจับคู่กับ hook `afterFileEdit` ของ Cursor
+(`conversation_id`/`generation_id`)
 
 ## เป้าหมาย
 

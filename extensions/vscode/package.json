@@ -48,6 +48,7 @@
     "onCommand:wakaclock.showToday",
     "onCommand:wakaclock.setupAiTracking",
     "onCommand:wakaclock.showAiTrackingStatus",
+    "onCommand:wakaclock.manageAiSources",
     "onCommand:wakaclock.showBrokerStatus",
     "onCommand:wakaclock.repairAiIntegrations",
     "onCommand:wakaclock.testAiDetection",
@@ -86,6 +87,10 @@
       {
         "command": "wakaclock.showAiTrackingStatus",
         "title": "AtoAxis: Show AI Tracking Status"
+      },
+      {
+        "command": "wakaclock.manageAiSources",
+        "title": "AtoAxis: Manage AI Log Sources"
       },
       {
         "command": "wakaclock.showBrokerStatus",

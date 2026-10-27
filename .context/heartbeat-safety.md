@@ -56,6 +56,20 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ## Approval gate — ต้องถามก่อนแก้
 
+การอนุมัติ 2026-10-27 (AI transcript coverage, กลุ่ม A1/B/C): ผู้ใช้อนุมัติคำขอ 5 ส่วนรวม 3 กลุ่ม — A1: Cursor/Windsurf อ่าน usage ซ้ำโดยตัด fingerprint ออก (`core/src/ai/cursor.rs`, แบบเดียวกับ OpenCode); B: ตัวนับ 24 ชม. `budget_hit`/`source_busy`/`sync_lock_skip`/`parser_panic`/`schema_unknown` ในตาราง `ai_sync_events` (`core/src/ai/state.rs`, `core/src/ai/sqlite_source.rs`, `cli/src/main.rs`) แสดงเฉพาะ `ai status`/`ai sources list` ไม่ใส่ใน diagnostics ที่ upload; C: คำสั่ง `wakaclock.manageAiSources` ใน VS Code extension (`extensions/vscode/src/aiSources.ts`, `cli.ts` เพิ่ม 2 method, `commands.ts`, `package.json`) ไม่แตะ heartbeat/scheduler/queue; ไม่แตะ server/wire/timeline/locked baseline; ค่า `explicit` ใน `capture_service.rs` **ไม่รวม** (รอผล query Phase 00 0.7); ไม่รวม commit/push
+
+การอนุมัติ 2026-10-26 (AI transcript coverage, auto sync ทุกเครื่องมือ): ผู้ใช้อนุมัติคำขอ 5 ส่วนให้แก้ `run_bounded_ai_sync` (`cli/src/main.rs`) ให้อ่านทุก parser ที่เปิดอยู่: Codex/Claude Code/Gemini CLI ลำดับและงบ 2 วินาทีเดิม, ตัวอื่นงบรวม ≤ 2 วินาทีต่อ heartbeat เรียงตามตัวที่ไม่ได้อ่านนานสุด ข้ามตัวที่อ่านภายใน 60 วินาทีและตัวที่ปิด, ส่งงบเวลาที่เหลือเข้า parser (`ParseContext.time_budget`, `parse_usage_within` ใน `core/src/ai/parser.rs`, `cursor.rs`, `sqlite_apps.rs`), ตาราง `auto_sync_schedule` ใน `core/src/ai/state.rs`, เช็ก lock ครั้งเดียว; consent แบบ A (คงเงื่อนไขเดิม); ไม่แตะ server/wire/timeline/locked baseline/extension; ไม่รวม commit/push
+
+การอนุมัติ 2026-10-26 (AI transcript coverage, agent ID): ผู้ใช้อนุมัติแยกให้เพิ่ม `qwen-code`, `pi`, `kiro`, `factory-droid`, `ibm-bob`, `qoder` ใน `KNOWN_AGENT_IDS` (`core/src/ai/event.rs`, server-first) และ commit/push ขึ้น `claude/ai-transcript-coverage`; ไม่แตะ `main`, ไม่เพิ่ม alias
+
+การอนุมัติ 2026-10-26 (AI transcript coverage ขั้น 7–9): ผู้ใช้อนุมัติแบบรวมตาม
+`plans/ai-transcript-coverage/` (ขั้น 7 Gemini CLI + Antigravity, ขั้น 8 Tier 2 + cursor-agent, ขั้น 9 doctor/consent/
+dashboard) บน `claude/ai-transcript-coverage`: parser ใหม่ส่งได้แค่ usage และเก็บ edit เป็น dry-run
+(`AdapterRuntime::emits_edit_heartbeats`); ห้ามแตะ locked baseline, heartbeat wire format, server, timeline หรือ `main`;
+commit/push ขึ้น branch นี้ได้หลังแต่ละขั้นผ่าน test; ต้องหยุดถามเมื่อต้องแตะไฟล์หรือพฤติกรรมนอกเงื่อนไข.
+คำตอบประกอบ: Q4 Antigravity อ่านแค่ JSONL, Q5 tool ที่มีแค่ token แสดงในหน้า usage/cost, Q6 อ่าน log อัตโนมัติ
+และปิดรายเครื่องมือได้. ไม่ครอบคลุมขั้น 10–11 (ทดสอบรวม, เปิดส่ง edit) และไม่ใช่การรับรอง release.
+
 การอนุมัติ 2026-10-10 (Heartbeat → Capture AI → Client Release): ผู้ใช้สั่ง
 “PLEASE IMPLEMENT THIS PLAN” ให้ทำ H1–H5, C1–C4 และ R1–R3 บน
 `codex/heartbeat-capture-release` จาก `90774c9`: editor metadata journal,

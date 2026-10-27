@@ -99,6 +99,10 @@ pub enum SourceCheckpoint {
     JsonSnapshot {
         #[serde(default)]
         fingerprint: Option<FileFingerprint>,
+        /// Records at or before this time (Unix milliseconds) were already seen, for
+        /// example when existing history was skipped on first discovery.
+        #[serde(default)]
+        seen_through_ms: Option<i64>,
     },
 }
 

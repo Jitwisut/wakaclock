@@ -5,8 +5,13 @@
 //! parser means adding its [`AdapterRuntime`] arm here.
 
 use crate::ai::adapter::{AdapterRegistry, AdapterRuntime};
+use crate::ai::jsonl_family::{self, JsonlFamilyParser};
 use crate::ai::parser::AiActivityParser;
-use crate::ai::{ClaudeCodeParser, CodexParser, GeminiCliParser};
+use crate::ai::ui_messages::{self, UiMessagesParser};
+use crate::ai::{
+    AntigravityParser, ClaudeCodeParser, CodexParser, CopilotParser, CursorFamilyParser,
+    GeminiCliParser, SqliteAppParser,
+};
 
 /// One runnable parser and the runtime that owns its policy.
 pub struct RegisteredParser {
@@ -15,11 +20,48 @@ pub struct RegisteredParser {
     pub parser: Box<dyn AiActivityParser>,
 }
 
-fn parser_for(runtime: AdapterRuntime) -> Option<Box<dyn AiActivityParser>> {
-    match runtime {
-        AdapterRuntime::ClaudeCode => Some(Box::new(ClaudeCodeParser::new())),
-        AdapterRuntime::Codex => Some(Box::new(CodexParser::new())),
-        AdapterRuntime::GeminiCli => Some(Box::new(GeminiCliParser::new())),
+fn parser_for(runtime: AdapterRuntime, id: &str) -> Option<Box<dyn AiActivityParser>> {
+    match (runtime, id) {
+        (AdapterRuntime::ClaudeCode, _) => Some(Box::new(ClaudeCodeParser::new())),
+        (AdapterRuntime::Codex, _) => Some(Box::new(CodexParser::new())),
+        (AdapterRuntime::GeminiCli, _) => Some(Box::new(GeminiCliParser::new())),
+        // Transcript-only adapters have no installer runtime, so their catalog runtime
+        // stays `None` (setup and install are unaffected) and the parser is chosen by
+        // id. `None` never sends edits, which keeps them usage-only.
+        (AdapterRuntime::None, "copilot") => Some(Box::new(CopilotParser::new())),
+        (AdapterRuntime::None, "antigravity") => Some(Box::new(AntigravityParser::new())),
+        (AdapterRuntime::None, "cursor") => Some(Box::new(CursorFamilyParser::cursor())),
+        (AdapterRuntime::None, "windsurf") => Some(Box::new(CursorFamilyParser::windsurf())),
+        (AdapterRuntime::None, "cline") => {
+            Some(Box::new(UiMessagesParser::new(&ui_messages::CLINE)))
+        }
+        (AdapterRuntime::None, "roo-code") => {
+            Some(Box::new(UiMessagesParser::new(&ui_messages::ROO_CODE)))
+        }
+        // Kilo Code keeps its plugin's installer runtime; its task logs are read as well.
+        // Only Claude Code, Codex and Gemini CLI send edits, so this stays usage-only.
+        (AdapterRuntime::KiloCode, "kilo-code") => {
+            Some(Box::new(UiMessagesParser::new(&ui_messages::KILO_CODE)))
+        }
+        (AdapterRuntime::None, "ibm-bob") => {
+            Some(Box::new(UiMessagesParser::new(&ui_messages::IBM_BOB)))
+        }
+        (AdapterRuntime::None, "qwen-code") => {
+            Some(Box::new(JsonlFamilyParser::new(&jsonl_family::QWEN_CODE)))
+        }
+        (AdapterRuntime::None, "pi") => Some(Box::new(JsonlFamilyParser::new(&jsonl_family::PI))),
+        (AdapterRuntime::None, "kiro") => {
+            Some(Box::new(JsonlFamilyParser::new(&jsonl_family::KIRO)))
+        }
+        (AdapterRuntime::None, "factory-droid") => Some(Box::new(JsonlFamilyParser::new(
+            &jsonl_family::FACTORY_DROID,
+        ))),
+        (AdapterRuntime::None, "opencode") => Some(Box::new(SqliteAppParser::opencode())),
+        (AdapterRuntime::None, "qoder") => Some(Box::new(SqliteAppParser::qoder())),
+        // Kimi keeps its hook installer runtime; its session logs are read as well.
+        (AdapterRuntime::KimiCodeCli, "kimi-code-cli") => {
+            Some(Box::new(JsonlFamilyParser::new(&jsonl_family::KIMI)))
+        }
         _ => None,
     }
 }
@@ -32,7 +74,7 @@ pub fn builtin_parsers() -> Vec<RegisteredParser> {
         .adapters
         .into_iter()
         .filter_map(|entry| {
-            let parser = parser_for(entry.runtime)?;
+            let parser = parser_for(entry.runtime, &entry.manifest.id)?;
             let id = parser.id();
             (entry.manifest.id == id).then_some(RegisteredParser {
                 id,
@@ -57,10 +99,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_parsers_are_the_three_transcript_adapters() {
+    fn builtin_parsers_cover_every_transcript_adapter() {
         let ids: Vec<&str> = builtin_parsers().iter().map(|entry| entry.id).collect();
-        assert_eq!(ids.len(), 3);
-        for id in ["claude-code", "codex", "gemini-cli"] {
+        assert_eq!(ids.len(), 18);
+        for id in [
+            "antigravity",
+            "claude-code",
+            "codex",
+            "gemini-cli",
+            "copilot",
+            "cursor",
+            "windsurf",
+            "cline",
+            "roo-code",
+            "kilo-code",
+            "qwen-code",
+            "pi",
+            "kiro",
+            "factory-droid",
+            "kimi-code-cli",
+            "ibm-bob",
+            "opencode",
+            "qoder",
+        ] {
             assert!(ids.contains(&id), "{id} missing from {ids:?}");
         }
     }
@@ -71,6 +132,24 @@ mod tests {
             assert!(emits_edit_heartbeats(id), "{id}");
         }
         assert!(!emits_edit_heartbeats("cursor"));
+        assert!(!emits_edit_heartbeats("windsurf"));
+        assert!(!emits_edit_heartbeats("antigravity"));
+        for id in [
+            "cline",
+            "roo-code",
+            "kilo-code",
+            "qwen-code",
+            "pi",
+            "kiro",
+            "factory-droid",
+            "kimi-code-cli",
+            "opencode",
+            "qoder",
+        ] {
+            assert!(!emits_edit_heartbeats(id), "{id}");
+        }
+        // Copilot is parsed, but its edits stay dry-run until certified.
+        assert!(!emits_edit_heartbeats("copilot"));
         assert!(!AdapterRuntime::KiloCode.emits_edit_heartbeats());
         assert!(!AdapterRuntime::None.emits_edit_heartbeats());
     }

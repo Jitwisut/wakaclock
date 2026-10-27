@@ -1,6 +1,6 @@
 # Phase 08 — SQLite app family (OpenCode, Goose, Zed, Qoder, Warp)
 
-สถานะ: **ขั้น 8 ใน README — รอขั้น 7 (Phase 03) + approval; สำรวจ storage ก่อนตาม ROADMAP P3** (ต้องได้คำตอบ Q5 ก่อน)
+สถานะ: **ขั้น 8c ✅ (2026-10-26) — OpenCode + Qoder ทำแล้ว (usage only, edit เป็น dry-run); Goose/Zed/Warp/cursor-agent Unsupported ชั่วคราว** ดู "ผลการทำ" ท้ายไฟล์
 Tier: 2 · ขึ้นกับ: Phase 01 (`sqlite_source.rs`), Phase 02 · ทำขนานกับ Phase 06/07 ได้
 
 ## เป้าหมาย
@@ -119,3 +119,28 @@ struct SqliteProfile {
 | แอปเปิดอยู่และเขียน db ตลอด | `mode=ro`, busy_timeout สั้น, ข้ามรอบ |
 | query ช้าบน db ใหญ่ | `ORDER BY rowid LIMIT` + progress handler + งบรวม |
 | เดาความหมายของตารางผิด (Zed/Warp) | ต้องยืนยันด้วย live run ก่อนเปิดใช้; ไม่ผ่าน = ไม่ทำ |
+
+## ผลการทำ (ขั้น 8c, 2026-10-26)
+
+ทำภายใต้การอนุมัติรวมขั้น 7–9 (บันทึกใน `.context/heartbeat-safety.md`)
+
+- เพิ่ม `core/src/ai/sqlite_apps.rs` (`SqliteAppParser::opencode()` / `::qoder()`) แทน
+  `sqlite_family.rs` + `sqlite_profiles/` ที่วางไว้ เพราะมีแค่ 2 ตัวที่ schema ชัดพอ แต่ละตัวคือ
+  query + mapping บน `sqlite_source.rs`
+- OpenCode: อ่าน `part.data` เฉพาะ tool ที่ `state.status = "completed"` มี `filePath` และนับบรรทัดจาก
+  `metadata.filediff.{additions,deletions}`; usage จาก `message.data.tokens` ของ assistant
+- Qoder: `chat_message.tool_result.results[].diffInfo.{add,delete}` และ `token_info`
+- ทุกรอบอ่านย้อน 500 แถวล่าสุด (แถวถูก update ระหว่าง stream), ID คงที่ต่อแถว, usage รอ 120 วินาที
+  และอ่าน usage โดยไม่ข้ามด้วย fingerprint เพื่อไม่ให้แถวที่ยังไม่ settle หายไป
+- schema ไม่รู้จัก (ไม่มีตาราง/คอลัมน์) → warning `schema not recognised` และไม่อ่าน
+- manifest: OpenCode ได้ `transcript_roots`, เพิ่ม manifest `qoder` (TranscriptOnly) — catalog 20 ตัว,
+  registry 18 parser
+- ยังไม่ทำ: OpenCode legacy JSON storage และ schema v2 (`session_message`); dedupe กับ plugin
+  OpenCode ไม่จำเป็นตอนนี้เพราะ edit เป็น dry-run
+- Unsupported ชั่วคราว: Goose (token สะสมต่อ session ในแถวเดิม ต้องมี usage แบบ delta/revision ซึ่ง
+  usage ID แบบ first-write-wins ยังทำไม่ได้), Zed และ Warp (ไม่มีตาราง edit/token ที่ยืนยันได้),
+  cursor-agent (`agent-transcripts`/`ai-code-tracking.db` ไม่มี record ต่อ edit ที่ยืนยันได้)
+- ไม่มี db ของทั้งสองตัวบนเครื่อง → ทดสอบด้วย db สังเคราะห์ใน temp dir (6 tests รวม marker ลับ,
+  schema ไม่รู้จัก, seed ที่หัว db); live test รวมไว้ขั้น 10
+- ผล: core 477 passed, cli 108+7+8+44, clippy สะอาด, integration 7 ok + 2 Cursor scaffold เดิม,
+  `verify_inventory.py certifications/ai-adapters` ผ่าน

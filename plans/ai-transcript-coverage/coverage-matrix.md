@@ -59,7 +59,7 @@
 | Gemini CLI | `~/.gemini/tmp/<slug>/chats/session-*.json(l)`, `logs.json` | N/J (`$set`/`$rewindTo`) | ✔ `toolCalls` | ✔ | ✔ | ✔ | ? | 03 |
 | Antigravity | `~/.gemini/{antigravity,antigravity-ide,antigravity-cli}/brain/<s>/.system_generated/logs/transcript.jsonl`; `*.db` (protobuf) | J (+S) | ✔ | ? | ✔ | ✔ | ? | 03 |
 | Cursor IDE | `AppSup/Cursor/User/globalStorage/state.vscdb` ตาราง `cursorDiskKV` key `bubbleId:<composer>:<bubble>` | S | ✔ `toolFormerData` | ✔ `tokenCount` | ✔ | ✔ | bubbleId+toolCall | 04 |
-| cursor-agent CLI | `~/.cursor/projects/*/agent-transcripts/**.jsonl`, `~/.cursor/ai-tracking/ai-code-tracking.db` | J+S | ✔ | ? | ? | ✔ | ? | 04 |
+| cursor-agent CLI | `~/.cursor/projects/*/agent-transcripts/**.jsonl`, `~/.cursor/ai-tracking/ai-code-tracking.db` | J+S | ✔ | ? | ? | ✔ | ? | 04→08 (Unsupported ชั่วคราว) |
 | Windsurf | `AppSup/Windsurf/User/globalStorage/state.vscdb` (schema เดียวกับ Cursor) | S | ✔ | ✔ | ✔ | ✔ | bubbleId | 04 |
 | Copilot (VS Code) | `AppSup/Code/User/workspaceStorage/<hash>/chatSessions/*.json(l)`, `…/chatEditingSessions/<id>/state.json`; `globalStorage/github.copilot-chat/agent-traces.db` | N+S | ✔ | ✔ | ✔ | ✔ | requestId? | 05 |
 | Copilot CLI | `~/.copilot/session-state/<id>/events.jsonl`; store ที่พบจริงบน macOS (P00): `AppSup/Code/User/globalStorage/github.copilot-chat/session-store.db` (`sessions`, `turns`, `session_files`, `checkpoints`) | J+S | ✔ telemetry lines / `session_files` | ✔ | ✔ | ✔ | ? | 05 |
@@ -82,11 +82,11 @@
 | Amp | `~/Library/Caches/amp/logs/threads/**/*.log` (JSON lines) | J | ✔ | ✘ | ✘ | ✘ | 07 |
 | Continue | `~/.continue/dev_data/<ver>/{chatInteraction,toolUsage,editOutcome,tokensGenerated}.jsonl` | J | ✔ `editOutcome` | ✔ | ✔ | ✔ | 07 |
 | Pi | `~/.pi/agent/sessions/**/*.jsonl` | J | ✔ | ✔ | ✔ | ✔ | 07 |
-| OpenCode | `~/.local/share/opencode/opencode*.db` (`session`,`message`,`part`); legacy `storage/**/*.json` | S+N | ✔ | ✔ | ✔ | ✔ | 08 |
-| Goose | `~/.local/share/goose/sessions/sessions.db` | S | ✘ | ✔ | ✔ | ✔ | 08 |
-| Zed | `AppSup/Zed/threads/threads.db` | S | ? | ? | ? | ? | 08 |
-| Qoder | `AppSup/Qoder/SharedClientCache/cache/db/local.db` ตาราง `chat_message` | S | ✔ `diffInfo` | ✔ | ? | ✔ | 08 |
-| Warp | `AppSup/dev.warp.Warp-Stable/warp.sqlite` | S | ? | ? | ? | ? | 08 |
+| OpenCode | `~/.local/share/opencode/opencode*.db` (`session`,`message`,`part`); legacy `storage/**/*.json` | S+N | ✔ (8c ✅ db v1) | ✔ | ✔ | ✔ | 08 |
+| Goose | `~/.local/share/goose/sessions/sessions.db` | S | ✘ | ✔ (Unsupported ชั่วคราว: token สะสมต่อ session) | ✔ | ✔ | 08 |
+| Zed | `AppSup/Zed/threads/threads.db` | S | ? | ? | ? | ? | 08 (Unsupported ชั่วคราว) |
+| Qoder | `AppSup/Qoder/SharedClientCache/cache/db/local.db` ตาราง `chat_message` | S | ✔ `diffInfo` (8c ✅) | ✔ | ? | ✔ | 08 |
+| Warp | `AppSup/dev.warp.Warp-Stable/warp.sqlite` | S | ? | ? | ? | ? | 08 (Unsupported ชั่วคราว) |
 
 ### Tier 3 (generic descriptor, Phase 09)
 

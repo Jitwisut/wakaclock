@@ -1,8 +1,24 @@
 # Phase 06 — VS Code extension family (Cline, Roo, Kilo, IBM Bob, Cody)
 
-สถานะ: **ขั้น 8 ใน README — รอขั้น 7 (Phase 03) + approval; สำรวจ storage ก่อนตาม ROADMAP P3** (เจ้าของต้องติดตั้ง extension ตาม D4)
-Tier: 2 · ขึ้นกับ: Phase 01, 02, `vscode_storage.rs` จาก Phase 05
-ทำขนานกับ Phase 07/08 ได้
+สถานะ: **ขั้น 8a ทำแล้ว (2026-10-26)** ภายใต้การอนุมัติแบบรวมขั้น 7–9
+
+## ผลการทำ (2026-10-26)
+
+| Tool | ผล |
+|---|---|
+| Cline, Roo Code, Kilo Code | ✅ parser ร่วม `ui_messages.rs` ลงทะเบียนแล้ว (Kilo ยังใช้ runtime `KiloCode` ของ plugin; usage only) |
+| IBM Bob | ✅ ลงทะเบียนในขั้น 8b (manifest transcript-only) — ข้อสันนิษฐานเดิมว่าจะกระทบ verifier ผิด |
+| Cody | ✘ Unsupported — ไม่มี record การแก้ไฟล์ราย edit (ต้องเดาจาก diff ของ context file ซึ่งขัดหลัก accuracy-first) |
+
+ที่ทำ: `fields.rs` (helper อ่าน JSON แบบยืดหยุ่น), `ui_messages.rs`, `SourceCheckpoint::JsonSnapshot.seen_through_ms`
+(ใช้ข้ามประวัติเก่าตอนค้นพบครั้งแรกสำหรับไฟล์ที่ถูกเขียนทับ), registry, `CAPABILITIES.md`
+ไม่มีข้อมูลจริงในเครื่อง (ไม่ได้ติดตั้ง extension ตัวใด) — schema จากข้อเท็จจริงสาธารณะ, test ใช้ไฟล์สังเคราะห์
+
+หลักฐาน: core 464 + 12 + 1 ผ่าน (ui_messages 7: edit + บรรทัด SEARCH/REPLACE/unified/content, read ไม่นับ,
+rewrite แล้ว ID เดิม, seed ข้ามประวัติ, usage เฉพาะที่นิ่งแล้ว, ค้นหาโฟลเดอร์แบบไม่สนตัวพิมพ์, marker ลับไม่หลุด);
+cli 108 + 7 + 8 + 44 ผ่าน; clippy, rustfmt ผ่าน; integration ผ่าน (ยกเว้น Cursor hook scaffold 2 ตัวเดิม)
+
+ยังไม่ได้ทำ: ตรวจว่า edit ที่ผู้ใช้ปฏิเสธถูกบันทึกอย่างไร; model/prompt count; แปลง path relative
 
 ## เป้าหมาย
 

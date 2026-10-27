@@ -1,7 +1,26 @@
 # Phase 03 — Claude Code, Codex, Gemini CLI, Antigravity
 
-สถานะ: **ขั้น 7 ใน README (ต่ออายุใบรับรอง Claude/Codex ทำก่อนในขั้น 3) — รอ approval** (ต้องได้คำตอบ Q4 ก่อน; Q8 ตอบแล้ว)
-Tier: 1 · ขึ้นกับ: Phase 01, 02
+สถานะ: **ขั้น 7 ทำแล้ว (2026-10-26)** ภายใต้การอนุมัติแบบรวมขั้น 7–9 · Q4 ตอบแล้ว: Antigravity อ่านแค่ JSONL
+การต่ออายุใบรับรอง Claude/Codex ย้ายไปขั้นทดสอบรวม (ขั้น 10)
+
+## ผลการทำ (2026-10-26)
+
+สิ่งที่พบในเครื่อง: Gemini CLI 0.58.0 ติดตั้งอยู่แต่ไม่มี session ที่บันทึกไว้ (`~/.gemini/tmp/*` และ `history/*` มีแค่
+`.project_root`); Antigravity ไม่ได้ติดตั้ง → ไม่มีข้อมูลจริงให้ยืนยันทั้งสองตัว
+
+ที่ทำ:
+- `gemini.rs`: แยก `edit_from_record(value, offset, identity)` ให้รับ agent/provider/prefix ของ ID/surface;
+  `parse_edit` ของ Gemini ยังเรียกด้วย identity เดิม (test เดิมผ่านโดยไม่แก้)
+- `antigravity.rs`: อ่าน `transcript.jsonl` ของทั้ง 3 surface, `producer_surface` = desktop/ide/cli, provider ว่าง,
+  ไม่อ่าน SQLite/protobuf (ไม่มี usage); registry เลือกด้วย id (runtime `None` → usage only, edit เป็น dry-run)
+- `adapter.rs`: เพิ่ม `transcript_roots` ของ antigravity; `CAPABILITIES.md`
+- Codex (A2): ยืนยันจากโค้ดว่า `codex.rs` รองรับ `exec` ที่ห่อ `apply_patch` แล้ว (มี test ใน `codex.rs`)
+
+ไม่ได้ทำ (ไม่มีข้อมูลจริง ไม่เดา): patch `$set`/`$rewindTo` และ `logs.json` ของ Gemini — ทำเมื่อได้ session จริง
+ในขั้นทดสอบรวม
+
+หลักฐาน: core 456 + 12 + 1 ผ่าน (antigravity 3: edit+surface, discovery 3 surface, marker ลับไม่หลุด); cli 108 + 7 + 8 +
+44 ผ่าน; clippy, rustfmt ผ่าน; integration ผ่าน (ยกเว้น Cursor hook scaffold 2 ตัวเดิม)
 
 ## เป้าหมาย
 

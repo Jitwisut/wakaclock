@@ -563,6 +563,7 @@ impl AiActivityParser for ClaudeCodeParser {
                     turns: Vec::new(),
                     pending_calls,
                     source: None,
+                    history_floor_ms: None,
                 }),
             },
             warnings,
