@@ -10,7 +10,7 @@ export function BrandMark({ preload = false }: { preload?: boolean }) {
       height={36}
       {...(preload ? { preload: true } : {})}
       sizes="36px"
-      src="/atoaxis-symbol-v2.png"
+      src="/atoaxis-mark.svg"
       width={36}
     />
   );
