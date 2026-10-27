@@ -14,8 +14,7 @@ import { localizedPath, type SiteLocale } from '@/lib/seo/site';
 const COPY = {
   en: {
     heading: 'Three steps to your first heartbeat',
-    subtitle:
-      'Roughly five minutes, most of it waiting for the extension to install. Nothing to deploy and nothing to configure on a server.',
+    subtitle: 'Roughly five minutes. Nothing to deploy and nothing to configure on a server.',
     cta: 'Read the full setup guide',
     note: 'API keys are issued to Early Access members. Join the list and we will email yours.',
     steps: [
@@ -26,7 +25,7 @@ const COPY = {
       },
       {
         title: 'Point your editor at it',
-        body: 'Install the VS Code extension and run AtoAxis: Set API Key. In any editor that already has a WakaTime plugin, change one line in ~/.wakatime.cfg instead.',
+        body: 'Already use a WakaTime plugin? Change one line in ~/.wakatime.cfg and it reports to AtoAxis today. The AtoAxis VS Code extension is coming to the Marketplace as a Preview, and Early Access members get it first.',
         command: 'api_url = https://api.atoaxis.com/api/v1',
       },
       {
@@ -38,8 +37,7 @@ const COPY = {
   },
   th: {
     heading: 'สามขั้นตอนสู่ heartbeat แรกของคุณ',
-    subtitle:
-      'ใช้เวลาราวห้านาที ซึ่งส่วนใหญ่คือรอ extension ติดตั้งเสร็จ ไม่ต้อง deploy อะไร และไม่ต้องตั้งค่าอะไรบน server',
+    subtitle: 'ใช้เวลาราวห้านาที ไม่ต้อง deploy อะไร และไม่ต้องตั้งค่าอะไรบน server',
     cta: 'อ่านคู่มือการติดตั้งฉบับเต็ม',
     note: 'API key ออกให้สมาชิก Early Access เข้าร่วมรายชื่อแล้วเราจะส่ง key ให้ทางอีเมล',
     steps: [
@@ -50,7 +48,7 @@ const COPY = {
       },
       {
         title: 'ชี้ editor มาที่ AtoAxis',
-        body: 'ติดตั้ง extension บน VS Code แล้วรัน AtoAxis: Set API Key หรือถ้า editor ของคุณมี WakaTime plugin อยู่แล้ว แก้เพียงบรรทัดเดียวใน ~/.wakatime.cfg',
+        body: 'ใช้ WakaTime plugin อยู่แล้ว? แก้บรรทัดเดียวใน ~/.wakatime.cfg ก็ส่งข้อมูลเข้า AtoAxis ได้ทันที ส่วน VS Code extension ของ AtoAxis กำลังจะเปิดใน Marketplace แบบ Preview สมาชิก Early Access จะได้ใช้ก่อน',
         command: 'api_url = https://api.atoaxis.com/api/v1',
       },
       {

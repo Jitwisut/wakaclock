@@ -1117,7 +1117,7 @@ page(
       ]),
       section('Getting started', 'getting-started', [
         p(
-          'Join Early Access, create an account, generate an API key, then install the VS Code extension or repoint an existing WakaTime plugin.'
+          'Join Early Access, create an account and generate an API key, then repoint your existing WakaTime plugin. The first-party VS Code extension follows as a Marketplace Preview.'
         ),
       ]),
     ],
@@ -1137,7 +1137,7 @@ page(
         {
           href: '/integrations/vscode',
           label: 'VS Code time tracking',
-          description: 'Install and configure the first-party extension',
+          description: 'The first-party extension, coming as a Marketplace Preview',
         },
         {
           href: '/pricing',
@@ -1226,7 +1226,7 @@ page(
       ]),
       section('เริ่มต้นใช้งาน', 'getting-started', [
         p(
-          'ลงทะเบียน Early Access สร้างบัญชีและ API key จากนั้นติดตั้ง VS Code extension หรือเปลี่ยนปลายทางของ WakaTime plugin เดิม'
+          'ลงทะเบียน Early Access สร้างบัญชีและ API key แล้วเปลี่ยนปลายทางของ WakaTime plugin เดิม ส่วน VS Code extension ของ AtoAxis จะตามมาใน Marketplace แบบ Preview'
         ),
       ]),
     ],
@@ -1246,7 +1246,7 @@ page(
         {
           href: '/integrations/vscode',
           label: 'ติดตามเวลาบน VS Code',
-          description: 'ติดตั้งและตั้งค่า extension',
+          description: 'Extension ของเราเอง กำลังจะเปิดใน Marketplace แบบ Preview',
         },
         {
           href: '/pricing',
@@ -2033,6 +2033,11 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
   [
     '/integrations/vscode#2',
     (en) => [
+      p(
+        en
+          ? 'The extension is coming to the Marketplace as a Preview, and Early Access members get it first. Until then, any editor with a WakaTime plugin can report to AtoAxis by changing ~/.wakatime.cfg.'
+          : 'Extension นี้กำลังจะเปิดใน Marketplace แบบ Preview สมาชิก Early Access จะได้ใช้ก่อน ระหว่างนี้ editor ที่มี WakaTime plugin ส่งข้อมูลเข้า AtoAxis ได้เลยโดยแก้ ~/.wakatime.cfg'
+      ),
       code(
         'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
         'VS Code'
@@ -2107,6 +2112,11 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
     '/docs/getting-started#2',
     (en) => [
       sub(en ? 'VS Code, the first-party extension' : 'VS Code กับ extension ของเราเอง'),
+      p(
+        en
+          ? 'The extension is coming to the Marketplace as a Preview, and Early Access members get it first. Until then, any editor with a WakaTime plugin can report to AtoAxis by changing ~/.wakatime.cfg.'
+          : 'Extension นี้กำลังจะเปิดใน Marketplace แบบ Preview สมาชิก Early Access จะได้ใช้ก่อน ระหว่างนี้ editor ที่มี WakaTime plugin ส่งข้อมูลเข้า AtoAxis ได้เลยโดยแก้ ~/.wakatime.cfg'
+      ),
       code(
         'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
         'VS Code'
@@ -3024,7 +3034,7 @@ generic(
   {
     title: 'VS Code time tracker extension',
     description:
-      'A coding time tracker for VS Code: install the AtoAxis extension, add your API key and confirm your first heartbeat. Tracks project, language and branch.',
+      'A coding time tracker for VS Code, coming to the Marketplace as a Preview. Use your WakaTime plugin today or join Early Access to get the extension first.',
     lead: 'The first-party extension buffers metadata-only editor activity and sends heartbeats through wakaclock-cli.',
     headings: [
       'What it tracks',
@@ -3070,7 +3080,7 @@ generic(
   {
     title: 'โปรแกรมจับเวลาเขียนโค้ดสำหรับ VS Code',
     description:
-      'ส่วนขยาย AtoAxis สำหรับ VS Code ช่วยวัดเวลาเขียนโปรแกรม ใส่ API key แล้วตรวจ heartbeat แรก แยกเวลาตามโปรเจกต์ ภาษา และ branch โดยไม่ส่ง source code',
+      'ส่วนขยาย AtoAxis สำหรับ VS Code ช่วยวัดเวลาเขียนโปรแกรม กำลังจะเปิดใน Marketplace แบบ Preview ระหว่างนี้ใช้ WakaTime plugin ได้เลย หรือสมัคร Early Access เพื่อใช้ก่อน',
     lead: 'extension ของเราจะ buffer editor activity แบบ metadata แล้วส่ง heartbeat ผ่าน wakaclock-cli',
     headings: [
       'ข้อมูลที่ติดตาม',
