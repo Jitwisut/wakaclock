@@ -20,6 +20,7 @@ apps/desktop/src-tauri/gen/
 /output/heartbeat-recovery-2026-10-07/
 /output/team-github-staging/
 /output/team-github-certification/
+/output/copilot-reports-local/
 
 # Local/tool artifacts
 .DS_Store
