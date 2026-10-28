@@ -8364,6 +8364,12 @@ fn build_heartbeat_with_observation(
             heartbeat.dependencies = ast.dependencies;
         }
     }
+    // Journal replay never inspects the file, so it used to leave `language` empty and
+    // the dashboard grouped those seconds as "Unknown". The extension alone is enough
+    // to label a file; it needs no read, and a domain such as `docs.rs` is not a path.
+    if heartbeat.language.is_none() && heartbeat.entity_type == EntityType::File {
+        heartbeat.language = infer_language_from_path(&entity_path);
+    }
 
     if let Some(extra) = extra {
         let has_ai_metadata = extra

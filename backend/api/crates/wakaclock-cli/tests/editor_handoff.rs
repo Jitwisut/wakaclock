@@ -232,6 +232,41 @@ fn durable_ack_replays_original_ids_after_lost_response_and_isolates_bad_sibling
     assert_eq!(home.queue().len().unwrap(), 0);
 }
 #[test]
+fn journal_replay_labels_files_by_extension_without_changing_time_or_ids() {
+    let home = Home::new();
+    let scope: Value =
+        serde_json::from_slice(&home.command(&["journal-scope"], None).stdout).unwrap();
+    let batch = json!({"schema_version":1,"scope_id":scope["scope_id"],"items":[
+        {"heartbeat_id":"rust","time":1000.0,"entity":"/nonexistent/historical.rs","active_seconds":2.0},
+        {"heartbeat_id":"log","time":1001.0,"entity":"/nonexistent/output.log","active_seconds":3.0}]});
+    let accepted = home.command(&["heartbeat-batch"], Some(&batch));
+    assert!(accepted.status.success());
+    let accepted: Value = serde_json::from_slice(&accepted.stdout).unwrap();
+    assert_eq!(accepted["results"][0]["status"], "accepted");
+    assert_eq!(accepted["results"][1]["status"], "accepted");
+    let queue = home.queue();
+    let rows = queue.pop_all().unwrap();
+    let row = |id: &str| {
+        rows.iter()
+            .find(|r| r.1["heartbeat_id"] == id)
+            .unwrap()
+            .1
+            .clone()
+    };
+    let (rust, log) = (row("rust"), row("log"));
+    assert_eq!(rust["language"], "Rust");
+    // Not a programming language: stays unlabelled rather than being guessed.
+    assert!(log["language"].is_null());
+    assert_eq!(
+        (rust["time"].as_f64(), rust["active_seconds"].as_f64()),
+        (Some(1000.0), Some(2.0))
+    );
+    assert_eq!(
+        (log["time"].as_f64(), log["active_seconds"].as_f64()),
+        (Some(1001.0), Some(3.0))
+    );
+}
+#[test]
 fn native_hook_ack_is_local_private_idempotent_and_pause_survives_a_new_process() {
     let home = Home::new();
     let input = json!({"hook_event_name":"PreToolUse","session_id":"fixture-session","cwd":home.0,"tool_use_id":"operation","tool_input":{"command":"SENSITIVE"},"tool_response":"SENSITIVE"});
