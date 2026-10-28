@@ -28,6 +28,7 @@ import { SingleFlight } from "./singleFlight";
 import { RooBridge, cachedRooProfile, rooProfileOwner, type RooSpool, type RooPublicApi } from "./rooBridge";
 import { registerJournalRecoveryCommands } from "./journalRecoveryCommands";
 import { maybePromptForApiKey } from "./apiKeyPrompt";
+import { maybeOfferAiSetup } from "./aiSetupPrompt";
 
 let activeBufferManager: HeartbeatBufferManager | undefined;
 
@@ -486,70 +487,6 @@ function createPresenceHeartbeatPing(
     lastSentAt = now;
     void cliService.sendPresenceHeartbeat();
   };
-}
-
-async function maybeOfferAiSetup(
-  context: vscode.ExtensionContext,
-  aiIntegrations: AiIntegrationController,
-  logger: Logger
-): Promise<void> {
-  if (!vscode.workspace.getConfiguration("wakaclock").get<boolean>("autoInstallAgentHooks", true)) {
-    return;
-  }
-  const lastPromptedAt = context.globalState.get<number>("atoaxis.aiSetupPromptedAt");
-  const promptSnoozeMs = 7 * 24 * 60 * 60 * 1000;
-  if (lastPromptedAt && Date.now() - lastPromptedAt < promptSnoozeMs) {
-    return;
-  }
-
-  try {
-    const statuses = await aiIntegrations.getStatus();
-    const eligible = statuses.some((status) => {
-      if (!status.detected || status.enabled) {
-        return false;
-      }
-      const consent = context.globalState.get<{ state?: string; updatedAt?: number }>(
-        `atoaxis.aiConsent.${status.id}`
-      );
-      if (consent?.state === "denied") {
-        return false;
-      }
-      if (
-        consent?.state === "deferred" &&
-        consent.updatedAt &&
-        Date.now() - consent.updatedAt < promptSnoozeMs
-      ) {
-        return false;
-      }
-      return true;
-    });
-    if (!eligible) {
-      return;
-    }
-    const choice = await vscode.window.showInformationMessage(
-      "AtoAxis detected a supported AI coding tool. Enable AI attribution tracking?",
-      "Set up now",
-      "Later"
-    );
-    if (choice === "Set up now") {
-      const configured = await vscode.commands.executeCommand<boolean>(
-        "wakaclock.setupAiTracking"
-      );
-      if (!configured) {
-        // A failed/partial setup remains eligible on the next activation. The command
-        // already showed the actionable error, so do not immediately show another prompt.
-        return;
-      }
-    } else {
-      // "Later" means later, not never. Keep the seven-day snooze separate from the
-      // per-agent consent records written by the multi-select command.
-      await context.globalState.update("atoaxis.aiSetupPromptedAt", Date.now());
-    }
-  } catch (error) {
-    logger.warn("AI setup detection failed", {
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
 }
 
 let finalJournalPublication: (() => Promise<void>) | undefined;
