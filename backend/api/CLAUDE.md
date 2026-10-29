@@ -1,8 +1,8 @@
 # AtoAxis backend contributor guide
 
 `backend/api` is the live Rust workspace for the AtoAxis developer-time
-tracking API. The old e-commerce tree under `src_ecommerce_backup/` is
-historical and is not part of the build.
+tracking API. The old e-commerce template code was removed from the tree
+(2026-10-29); it survives only in Git history.
 
 ## Commands
 
@@ -40,8 +40,8 @@ CLICKHOUSE_TEST_URL=http://localhost:8123 \
 - `crates/wakaclock-ast` — language/dependency detection.
 - `crates/wakaclock-cli` and `crates/wakaclock-ls` — CLI and LSP clients.
 
-`src_ecommerce_backup/` and its interfaces are not imported by `main.rs` and
-must not be used for new AtoAxis features. New infrastructure dependencies
+Do not restore the removed e-commerce template code (`src_ecommerce_backup/`,
+`src/interfaces/`) or use it for new AtoAxis features. New infrastructure dependencies
 belong under `src/infrastructure/contracts.rs` and should receive an adapter
 and an integration test before production rollout.
 

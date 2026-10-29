@@ -66,8 +66,7 @@ Makefile                      repository quality/development commands
 ```
 
 The live Rust workspace is `backend/api`; there is intentionally no repository
-root `Cargo.toml`. The old e-commerce template remains under
-`backend/api/src_ecommerce_backup/` and is not part of the build.
+root `Cargo.toml`.
 
 ## Prerequisites
 

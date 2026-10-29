@@ -98,7 +98,7 @@ must not be overridden on authenticated routes. Secrets never enter tracked
 files — [environment.md](environment.md).
 
 **Bilingual comments.** Some inherited files carry Thai-language doc comments
-(mostly in the dead template tree, a few in live repositories). Write new
+(mostly in the removed template tree, a few in live repositories). Write new
 comments in English; do not mass-translate existing ones as a side effect of
 another change.
 
@@ -116,8 +116,9 @@ established practice. **Do not apply these unless the user asks.**
 3. **Codegen for the API contract** (utoipa → OpenAPI → TS types) instead of
    hand-mirroring Rust `model/` structs in `lib/wakaclock/types.ts`.
 4. **Deleting the dead template tree** (`src/interfaces/`, `src/docs/`,
-   `src/model/v1/`, `src/helpers/*`) remains a future cleanup; the live build
-   no longer references it, and `backend/api/credentials/` plus the invalid root
+   `src/model/v1/`, `src/helpers/*`, `src_ecommerce_backup/`) is complete
+   (2026-10-29); the live build never referenced it, and
+   `backend/api/credentials/` plus the invalid root
    Cargo manifest have already been removed — [dead-code.md](dead-code.md).
 5. **Choosing one package manager** is complete: npm and `package-lock.json` are
    authoritative; the old pnpm lockfile is gone — [commands.md](commands.md).
