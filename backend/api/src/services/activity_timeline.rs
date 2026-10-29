@@ -1539,12 +1539,19 @@ pub const AI_SESSION_LANGUAGE_LABEL: &str = "AI session (no file)";
 /// "Unknown". Same intervals and same seconds, so the rows still sum to the total;
 /// only the label differs. Kept apart from `Dimension::value_of` on purpose: the v1
 /// stats, goals and insights surfaces share that and must keep their current names.
+///
+/// "File-less" means the entity is not a path (a Codex app session reports the bare
+/// name `codex`). An AI edit to a real file whose extension has no language, such as
+/// `part.dxf`, keeps "Unknown": it did touch a file, so "no file" would be wrong.
 pub fn totals_by_language_labelling_ai_sessions(
     intervals: &[CanonicalInterval],
 ) -> Vec<(String, f64, u64)> {
     totals_grouped(intervals, |interval| {
         let name = Dimension::Language.value_of(interval);
-        if name == "Unknown" && matches!(interval.source.as_str(), "ai" | "ai_tool_v1") {
+        if name == "Unknown"
+            && matches!(interval.source.as_str(), "ai" | "ai_tool_v1")
+            && !interval.entity.contains(['/', '\\'])
+        {
             AI_SESSION_LANGUAGE_LABEL.to_string()
         } else {
             name
@@ -2394,7 +2401,14 @@ mod tests {
             },
             ActivityInterval {
                 language: None,
+                entity: "codex".to_string(),
                 ..interval("c", "ai_tool_v1", 900.0, 960.0)
+            },
+            // An AI edit to a real file with no known language did touch a file.
+            ActivityInterval {
+                language: None,
+                entity: "/work/robot/part.dxf".to_string(),
+                ..interval("d", "ai_tool_v1", 1500.0, 1560.0)
             },
         ];
         let canonical = canonicalize_bridged(&intervals, 900.0);
@@ -2402,6 +2416,11 @@ mod tests {
 
         let plain = totals_by(&canonical, Dimension::Language);
         let labelled = totals_by_language_labelling_ai_sessions(&canonical);
+        let seconds_of = |rows: &[(String, f64, u64)], name: &str| {
+            rows.iter()
+                .find(|(n, _, _)| n == name)
+                .map_or(0.0, |(_, seconds, _)| *seconds)
+        };
         for rows in [&plain, &labelled] {
             let summed: f64 = rows.iter().map(|(_, seconds, _)| seconds).sum();
             assert!(
@@ -2417,8 +2436,31 @@ mod tests {
         assert!(names(&plain).contains(&"Unknown".to_string()));
         assert!(!names(&plain).contains(&AI_SESSION_LANGUAGE_LABEL.to_string()));
         assert!(names(&labelled).contains(&AI_SESSION_LANGUAGE_LABEL.to_string()));
-        // The human editor interval with no language is still a plain Unknown.
+        // Only the file-less session moves; the editor interval and the AI file edit
+        // both stay in "Unknown", and nothing is lost or invented by the relabel.
         assert!(names(&labelled).contains(&"Unknown".to_string()));
+        let session = seconds_of(&labelled, AI_SESSION_LANGUAGE_LABEL);
+        assert!(session > 0.0);
+        assert!(
+            (seconds_of(&plain, "Unknown") - (seconds_of(&labelled, "Unknown") + session)).abs()
+                < 1e-6,
+            "relabelling must only move seconds between the two buckets"
+        );
+        let heartbeats_of = |rows: &[(String, f64, u64)], name: &str| {
+            rows.iter()
+                .find(|(n, _, _)| n == name)
+                .map_or(0, |(_, _, count)| *count)
+        };
+        assert_eq!(
+            heartbeats_of(&labelled, AI_SESSION_LANGUAGE_LABEL),
+            1,
+            "only the codex session is file-less"
+        );
+        assert_eq!(
+            heartbeats_of(&labelled, "Unknown"),
+            2,
+            "the editor interval and the AI .dxf edit stay Unknown"
+        );
     }
 
     /// `attended + agent + other` is a second partition of the same total, alongside
