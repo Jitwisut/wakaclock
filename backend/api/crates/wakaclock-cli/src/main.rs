@@ -124,7 +124,11 @@ impl AiSyncLock {
 }
 
 #[derive(Parser)]
-#[command(name = "wakaclock", version, about = "AtoAxis CLI Hub — https://www.atoaxis.com")]
+#[command(
+    name = "wakaclock",
+    version,
+    about = "AtoAxis CLI Hub — https://www.atoaxis.com"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

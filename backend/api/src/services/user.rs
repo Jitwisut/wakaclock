@@ -698,7 +698,8 @@ impl UserService {
         username: &str,
         password_hash: &str,
     ) -> Result<()> {
-        crate::repository::user_identity_sync::sync(postgres, user_id, username, password_hash).await
+        crate::repository::user_identity_sync::sync(postgres, user_id, username, password_hash)
+            .await
     }
 
     async fn sync_postgres_api_key(

@@ -59,17 +59,26 @@ pub struct AuthorizationService {
 impl AuthorizationService {
     /// Locks the exact membership/user/organization rows until a billing mutation commits.
     pub(crate) async fn require_locked_billing_owner(
-        tx: &tokio_postgres::Transaction<'_>, actor: Uuid, org: Uuid,
+        tx: &tokio_postgres::Transaction<'_>,
+        actor: Uuid,
+        org: Uuid,
     ) -> Result<()> {
         Self::require_locked_action(tx, actor, org, OrganizationAction::ManageBilling).await
     }
     pub(crate) async fn require_locked_action(
-        tx: &tokio_postgres::Transaction<'_>, actor: Uuid, org: Uuid, action: OrganizationAction,
+        tx: &tokio_postgres::Transaction<'_>,
+        actor: Uuid,
+        org: Uuid,
+        action: OrganizationAction,
     ) -> Result<()> {
         let row = tx.query_opt("SELECT m.role FROM organization_members m JOIN organizations o ON o.id=m.organization_id JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND m.user_id=$2 AND m.deactivated_at IS NULL AND o.deleted_at IS NULL AND u.is_active AND u.deleted_at IS NULL FOR SHARE OF m,o,u", &[&org,&actor]).await?;
-        let role = row.map(|r| parse_role(r.get::<_,String>(0).as_str())).transpose()?;
+        let role = row
+            .map(|r| parse_role(r.get::<_, String>(0).as_str()))
+            .transpose()?;
         let decision = Self::decide(role, action, None, true);
-        if !decision.allowed { return Err(AuthorizationDenied(decision.reason).into()); }
+        if !decision.allowed {
+            return Err(AuthorizationDenied(decision.reason).into());
+        }
         Ok(())
     }
 

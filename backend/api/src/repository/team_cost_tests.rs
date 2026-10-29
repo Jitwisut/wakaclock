@@ -266,7 +266,8 @@ async fn team_cost_joint_canonical_correction_and_pg_source_races() {
     )
     .await
     .unwrap();
-    let read_guard = crate::infrastructure::team_financial_guard::TestLedger::enrolled(org, &entitlement);
+    let read_guard =
+        crate::infrastructure::team_financial_guard::TestLedger::enrolled(org, &entitlement);
     let _financial_environment = read_guard.environment();
     trust.export_registry(&path).await.unwrap();
     assert!(team_repo
@@ -471,32 +472,97 @@ async fn team_cost_joint_canonical_correction_and_pg_source_races() {
     // billing transition during read/render must still invalidate the response.
     trust.export_registry(&path).await.unwrap();
     let range = crate::model::date_range::ResolvedRange::parse(
-        &baseline.to_string(), &(baseline + Duration::days(6)).to_string(), Some("Asia/Bangkok")
-    ).unwrap();
+        &baseline.to_string(),
+        &(baseline + Duration::days(6)).to_string(),
+        Some("Asia/Bangkok"),
+    )
+    .unwrap();
     let captured = service.insights(actor, org, None, range).await.unwrap();
-    let receipt = service.receipt(actor, org, None, repository, 1).await.unwrap();
-    let own_receipt = service.receipt_page(actor, org, None, repository, 1, None, true).await.unwrap();
-    service.validate_financial_response(org, &receipt.financial_fence).await.unwrap();
-    service.validate_financial_response(org, &own_receipt.financial_fence).await.unwrap();
-    assert!(!serde_json::to_string(&receipt).unwrap().contains("financial_fence"));
+    let receipt = service
+        .receipt(actor, org, None, repository, 1)
+        .await
+        .unwrap();
+    let own_receipt = service
+        .receipt_page(actor, org, None, repository, 1, None, true)
+        .await
+        .unwrap();
+    service
+        .validate_financial_response(org, &receipt.financial_fence)
+        .await
+        .unwrap();
+    service
+        .validate_financial_response(org, &own_receipt.financial_fence)
+        .await
+        .unwrap();
+    assert!(!serde_json::to_string(&receipt)
+        .unwrap()
+        .contains("financial_fence"));
     let serialized = serde_json::to_string(&captured).unwrap();
     assert!(!serialized.contains("financial_fence"));
     assert!(!serialized.contains(&read_guard.guard.namespace().unwrap().to_string()));
-    service.validate_financial_response(org, &captured.financial_fence).await.unwrap();
+    service
+        .validate_financial_response(org, &captured.financial_fence)
+        .await
+        .unwrap();
     let generation = team_repo.generation(org).await.unwrap();
     let mut changed = entitlement.clone();
     changed.revision += 1;
     changed.observed_at = Utc::now();
     let transition = Uuid::now_v7();
-    read_guard.guard.prepare(org, crate::services::team_financial_guard::Head::Enrolled { state: Box::new(entitlement) }, crate::services::team_financial_guard::Pending { transition_id: transition, state: Box::new(changed.clone()) }).unwrap();
-    assert!(service.validate_financial_response(org, &captured.financial_fence).await.is_err());
-    pg.execute("UPDATE team_analytics_entitlements SET revision=$2,state=$3 WHERE organization_id=$1", &[&org,&changed.revision,&serde_json::to_value(&changed).unwrap()]).await.unwrap();
-    read_guard.guard.confirm_committed(org, transition, &changed).unwrap();
-    assert!(service.validate_financial_response(org, &receipt.financial_fence).await.is_err());
-    assert!(service.validate_financial_response(org, &own_receipt.financial_fence).await.is_err());
+    read_guard
+        .guard
+        .prepare(
+            org,
+            crate::services::team_financial_guard::Head::Enrolled {
+                state: Box::new(entitlement),
+            },
+            crate::services::team_financial_guard::Pending {
+                transition_id: transition,
+                state: Box::new(changed.clone()),
+            },
+        )
+        .unwrap();
+    assert!(service
+        .validate_financial_response(org, &captured.financial_fence)
+        .await
+        .is_err());
+    pg.execute(
+        "UPDATE team_analytics_entitlements SET revision=$2,state=$3 WHERE organization_id=$1",
+        &[
+            &org,
+            &changed.revision,
+            &serde_json::to_value(&changed).unwrap(),
+        ],
+    )
+    .await
+    .unwrap();
+    read_guard
+        .guard
+        .confirm_committed(org, transition, &changed)
+        .unwrap();
+    assert!(service
+        .validate_financial_response(org, &receipt.financial_fence)
+        .await
+        .is_err());
+    assert!(service
+        .validate_financial_response(org, &own_receipt.financial_fence)
+        .await
+        .is_err());
     assert_eq!(team_repo.generation(org).await.unwrap(), generation);
-    assert!(service.validate_financial_response(org, &captured.financial_fence).await.is_err(), "current agreement alone must not approve an older response");
-    assert!(service.weekly_summary(actor, org, summary_request).await.is_ok(), "fresh read may retain expired/historical receipts under a newly matching proof");
+    assert!(
+        service
+            .validate_financial_response(org, &captured.financial_fence)
+            .await
+            .is_err(),
+        "current agreement alone must not approve an older response"
+    );
+    assert!(
+        service
+            .weekly_summary(actor, org, summary_request)
+            .await
+            .is_ok(),
+        "fresh read may retain expired/historical receipts under a newly matching proof"
+    );
     proxy.abort();
     std::env::remove_var("ATOAXIS_TEAM_WORKFLOW_ENABLED");
     std::fs::remove_file(path).unwrap();
