@@ -27,6 +27,9 @@ PRODUCTION_ROOTS = (
 # are the only production locations allowed to mention the legacy field.
 ALLOWED_FILES = {
     "backend/api/crates/wakaclock-cli/src/broker.rs",
+    # Codex transcript capture sets the deprecated boolean next to an explicit
+    # actor_type = AiVerified so older clients and servers still read the row.
+    "backend/api/crates/wakaclock-cli/src/capture_service.rs",
     "backend/api/crates/wakaclock-cli/src/main.rs",
     "backend/api/crates/wakaclock-core/src/api_client.rs",
     "backend/api/crates/wakaclock-core/src/heartbeat.rs",
@@ -59,6 +62,7 @@ FORBIDDEN_HUMAN_RE = re.compile(r"\bNOT\s+is_ai_generated\b", re.IGNORECASE)
 IGNORED_FILES = {
     # These are public documentation examples, not attribution decisions.
     "frontend/app/components/marketing/marketing-copy.ts",
+    "frontend/app/components/marketing/answer-guide-more.ts",
 }
 
 
