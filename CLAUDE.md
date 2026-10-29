@@ -61,10 +61,11 @@ Full list and known-broken targets: [.context/commands.md](.context/commands.md)
    or the root Makefile so Cargo resolves the `backend/api/crates/*` paths.
 2. **Never run `npm`/`pnpm` from `frontend/`.** There is no `package.json`
    there. Use `frontend/app/`.
-3. **Do not copy patterns from the dead e-commerce/gateway module tree.** Large
-   parts of `backend/api/src` are unreachable template leftovers. Check
-   [.context/dead-code.md](.context/dead-code.md) before treating any backend
-   directory as a reference implementation.
+3. **Do not restore or copy patterns from the removed e-commerce/gateway
+   template code.** It was deleted on 2026-10-29 but still exists in Git history.
+   Check [.context/dead-code.md](.context/dead-code.md), and confirm a backend
+   directory is reachable via the `mod` chain before treating it as a reference
+   implementation.
 4. **Handlers never touch the database.** Handler → service → repository. See
    [.context/backend/overview.md](.context/backend/overview.md).
 5. **Never trust a client-supplied `user_id`.** Identity comes only from
@@ -109,9 +110,9 @@ from verified repository state.
 ### Always, before the first edit of a session
 
 - Touching **anything** under `backend/api/src/` →
-  [.context/dead-code.md](.context/dead-code.md) first. Roughly a fifth of that
-  tree does not compile. Do not use a directory as a reference implementation
-  until you have confirmed it is live.
+  [.context/dead-code.md](.context/dead-code.md) first. The old uncompiled
+  template trees were removed, but do not use a directory as a reference
+  implementation until you have confirmed it is live.
 - A task mentioning **heartbeat, duration, timing, activity, ingest, queue,
   timeline, active time, or WakaTime-compatible counting** → read
   [.context/heartbeat-safety.md](.context/heartbeat-safety.md) first. Its

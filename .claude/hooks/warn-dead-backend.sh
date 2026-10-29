@@ -2,14 +2,18 @@
 # PreToolUse guard: Write|Edit into a backend module tree that main.rs never
 # compiles. See .context/dead-code.md for why these are unreachable.
 #
+# These trees were removed on 2026-10-29; the guard stays so that restoring or
+# recreating one (for example from old Git history) is confirmed, not silent.
+#
 # Emits an "ask" permission decision so the edit is confirmed rather than
-# blocked — deleting or cleaning up this tree is legitimate work.
+# blocked.
 set -uo pipefail
 
 path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null) || exit 0
 [ -n "$path" ] || exit 0
 
 case "$path" in
+  */backend/api/src_ecommerce_backup/*) why="src_ecommerce_backup/ — removed e-commerce template backup, not part of the build" ;;
   */backend/api/src/interfaces/*)     why="src/interfaces/ — no 'mod interfaces;' in main.rs" ;;
   */backend/api/src/docs/*)           why="src/docs/ — no 'mod docs;' in main.rs" ;;
   */backend/api/src/model/v1/*)       why="src/model/v1/ — model/mod.rs does not declare 'pub mod v1;'" ;;
