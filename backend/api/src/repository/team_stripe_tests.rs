@@ -173,24 +173,38 @@ async fn stripe_durable_ingress_lease_ordering_retry_and_scope() {
         .unwrap());
     // The billing lock can outlive a lease. Transaction-start now() must not
     // authorize a completion that was already expired when the lock was acquired.
-    let mut lock_db=pg.transaction_client().await.unwrap();
-    let lock_tx=lock_db.transaction().await.unwrap();
-    super::team_seats::lock(&lock_tx,org).await.unwrap();
-    let waiting_repo=repo.clone(); let waiting_claim=replacement.clone();
-    let waiting=tokio::spawn(async move {waiting_repo.complete(&waiting_claim,&observed()).await});
-    let mut queued=false;
+    let mut lock_db = pg.transaction_client().await.unwrap();
+    let lock_tx = lock_db.transaction().await.unwrap();
+    super::team_seats::lock(&lock_tx, org).await.unwrap();
+    let waiting_repo = repo.clone();
+    let waiting_claim = replacement.clone();
+    let waiting =
+        tokio::spawn(async move { waiting_repo.complete(&waiting_claim, &observed()).await });
+    let mut queued = false;
     for _ in 0..100 {
         let n:i64=pg.query_one("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event='advisory'",&[]).await.unwrap().get(0);
-        if n>0 {queued=true;break;}
+        if n > 0 {
+            queued = true;
+            break;
+        }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert!(queued,"completion must be waiting behind the billing lock");
+    assert!(queued, "completion must be waiting behind the billing lock");
     pg.execute("UPDATE team_stripe_reconcile_jobs SET lease_until=clock_timestamp() WHERE account_id='acct_fixture'",&[]).await.unwrap();
     lock_tx.commit().await.unwrap();
     assert!(!waiting.await.unwrap().unwrap());
-    let replacement=repo.claim("acct_fixture",false).await.unwrap().unwrap();
+    let replacement = repo.claim("acct_fixture", false).await.unwrap().unwrap();
     assert!(repo.complete(&replacement, &observed()).await.unwrap());
-    assert_eq!(pg.query_one("SELECT count(*) FROM team_analytics_entitlements WHERE organization_id=$1",&[&org]).await.unwrap().get::<_,i64>(0),0); // Webhooks/readback cannot activate a trial.
+    assert_eq!(
+        pg.query_one(
+            "SELECT count(*) FROM team_analytics_entitlements WHERE organization_id=$1",
+            &[&org]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        0
+    ); // Webhooks/readback cannot activate a trial.
 
     let row=pg.query_one("SELECT first_payment_failure_at,amount_minor FROM team_stripe_snapshots WHERE organization_id=$1",&[&org]).await.unwrap();
     let failure: chrono::DateTime<Utc> = row.get(0);
@@ -998,46 +1012,157 @@ async fn stripe_checkout_confirmation_durability_and_owner_fences() {
     assert_eq!(a.operation_id, b.unwrap().operation_id);
     assert!(!a.checkout_available && !a.payment_verified);
     // Exercise actual member and invite service writes with an accepted 10-seat package.
-    let members = crate::services::organizations::OrganizationsService::new(Some(pg.clone()),Arc::new(crate::services::authorization::AuthorizationService::new(Some(pg.clone()))),None);
-    let mut candidates=Vec::new();
+    let members = crate::services::organizations::OrganizationsService::new(
+        Some(pg.clone()),
+        Arc::new(crate::services::authorization::AuthorizationService::new(
+            Some(pg.clone()),
+        )),
+        None,
+    );
+    let mut candidates = Vec::new();
     for _ in 0..11 {
-        let id=Uuid::now_v7(); pg.execute("INSERT INTO users(id,username) VALUES($1,$2)",&[&id,&id.to_string()]).await.unwrap(); candidates.push(id);
+        let id = Uuid::now_v7();
+        pg.execute(
+            "INSERT INTO users(id,username) VALUES($1,$2)",
+            &[&id, &id.to_string()],
+        )
+        .await
+        .unwrap();
+        candidates.push(id);
     }
-    let request=|id| crate::model::organization::AddOrganizationMemberRequest {user_id:id,role:Some("member".into()),seat_type:Some("developer".into())};
+    let request = |id| crate::model::organization::AddOrganizationMemberRequest {
+        user_id: id,
+        role: Some("member".into()),
+        seat_type: Some("developer".into()),
+    };
     pg.execute("ALTER TABLE audit_logs ADD CONSTRAINT fixture_member_audit_failure CHECK(action<>'organization.member_upserted') NOT VALID",&[]).await.unwrap();
-    assert!(members.add_member(owner,org,request(candidates[0])).await.is_err());
-    assert!(pg.query_opt("SELECT 1 FROM organization_members WHERE organization_id=$1 AND user_id=$2",&[&org,&candidates[0]]).await.unwrap().is_none(),"audit failure must rollback membership");
-    pg.execute("ALTER TABLE audit_logs DROP CONSTRAINT fixture_member_audit_failure",&[]).await.unwrap();
-    for id in &candidates[..8] { members.add_member(owner,org,request(*id)).await.unwrap(); }
-    let (one,two)=tokio::join!(members.add_member(owner,org,request(candidates[8])),members.add_member(owner,org,request(candidates[9])));
-    assert_ne!(one.is_ok(),two.is_ok());
-    let winner=if one.is_ok(){candidates[8]}else{candidates[9]};
-    members.add_member(owner,org,request(winner)).await.unwrap(); // Idempotent existing developer.
-    pg.execute("UPDATE users SET is_active=false WHERE id=$1",&[&winner]).await.unwrap();
-    assert!(members.add_member(owner,org,request(candidates[10])).await.is_err());
-    let invite=Uuid::now_v7();
+    assert!(members
+        .add_member(owner, org, request(candidates[0]))
+        .await
+        .is_err());
+    assert!(
+        pg.query_opt(
+            "SELECT 1 FROM organization_members WHERE organization_id=$1 AND user_id=$2",
+            &[&org, &candidates[0]]
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "audit failure must rollback membership"
+    );
+    pg.execute(
+        "ALTER TABLE audit_logs DROP CONSTRAINT fixture_member_audit_failure",
+        &[],
+    )
+    .await
+    .unwrap();
+    for id in &candidates[..8] {
+        members.add_member(owner, org, request(*id)).await.unwrap();
+    }
+    let (one, two) = tokio::join!(
+        members.add_member(owner, org, request(candidates[8])),
+        members.add_member(owner, org, request(candidates[9]))
+    );
+    assert_ne!(one.is_ok(), two.is_ok());
+    let winner = if one.is_ok() {
+        candidates[8]
+    } else {
+        candidates[9]
+    };
+    members
+        .add_member(owner, org, request(winner))
+        .await
+        .unwrap(); // Idempotent existing developer.
+    pg.execute("UPDATE users SET is_active=false WHERE id=$1", &[&winner])
+        .await
+        .unwrap();
+    assert!(members
+        .add_member(owner, org, request(candidates[10]))
+        .await
+        .is_err());
+    let invite = Uuid::now_v7();
     pg.execute("INSERT INTO organization_user_invites(id,organization_id,invitee_user_id,invited_by,role,seat_type,expires_at) VALUES($1,$2,$3,$4,'member','developer',now()+interval '1 day')",&[&invite,&org,&candidates[10],&owner]).await.unwrap();
-    assert!(members.accept_invite(candidates[10],invite).await.is_err());
-    assert_eq!(pg.query_one("SELECT status FROM organization_user_invites WHERE id=$1",&[&invite]).await.unwrap().get::<_,String>(0),"pending");
-    members.add_member(owner,org,crate::model::organization::AddOrganizationMemberRequest{user_id:candidates[0],role:Some("viewer".into()),seat_type:Some("viewer".into())}).await.unwrap();
+    assert!(members.accept_invite(candidates[10], invite).await.is_err());
+    assert_eq!(
+        pg.query_one(
+            "SELECT status FROM organization_user_invites WHERE id=$1",
+            &[&invite]
+        )
+        .await
+        .unwrap()
+        .get::<_, String>(0),
+        "pending"
+    );
+    members
+        .add_member(
+            owner,
+            org,
+            crate::model::organization::AddOrganizationMemberRequest {
+                user_id: candidates[0],
+                role: Some("viewer".into()),
+                seat_type: Some("viewer".into()),
+            },
+        )
+        .await
+        .unwrap();
     pg.execute("ALTER TABLE audit_logs ADD CONSTRAINT fixture_invite_audit_failure CHECK(action<>'organization.member_invite_accepted') NOT VALID",&[]).await.unwrap();
-    assert!(members.accept_invite(candidates[10],invite).await.is_err());
-    assert_eq!(pg.query_one("SELECT status FROM organization_user_invites WHERE id=$1",&[&invite]).await.unwrap().get::<_,String>(0),"pending");
-    assert!(pg.query_opt("SELECT 1 FROM organization_members WHERE organization_id=$1 AND user_id=$2",&[&org,&candidates[10]]).await.unwrap().is_none());
-    pg.execute("ALTER TABLE audit_logs DROP CONSTRAINT fixture_invite_audit_failure",&[]).await.unwrap();
-    members.accept_invite(candidates[10],invite).await.unwrap();
+    assert!(members.accept_invite(candidates[10], invite).await.is_err());
+    assert_eq!(
+        pg.query_one(
+            "SELECT status FROM organization_user_invites WHERE id=$1",
+            &[&invite]
+        )
+        .await
+        .unwrap()
+        .get::<_, String>(0),
+        "pending"
+    );
+    assert!(pg
+        .query_opt(
+            "SELECT 1 FROM organization_members WHERE organization_id=$1 AND user_id=$2",
+            &[&org, &candidates[10]]
+        )
+        .await
+        .unwrap()
+        .is_none());
+    pg.execute(
+        "ALTER TABLE audit_logs DROP CONSTRAINT fixture_invite_audit_failure",
+        &[],
+    )
+    .await
+    .unwrap();
+    members.accept_invite(candidates[10], invite).await.unwrap();
     let count:i64=pg.query_one("SELECT count(*) FROM organization_members WHERE organization_id=$1 AND deactivated_at IS NULL AND role<>'viewer' AND seat_type='developer'",&[&org]).await.unwrap().get(0);
-    assert_eq!(count,10);
+    assert_eq!(count, 10);
     pg.execute("ALTER TABLE audit_logs ADD CONSTRAINT fixture_remove_audit_failure CHECK(action<>'organization.member_deactivated') NOT VALID",&[]).await.unwrap();
-    assert!(members.remove_member(owner,org,candidates[10]).await.is_err());
+    assert!(members
+        .remove_member(owner, org, candidates[10])
+        .await
+        .is_err());
     assert!(pg.query_one("SELECT deactivated_at IS NULL FROM organization_members WHERE organization_id=$1 AND user_id=$2",&[&org,&candidates[10]]).await.unwrap().get::<_,bool>(0));
-    pg.execute("ALTER TABLE audit_logs DROP CONSTRAINT fixture_remove_audit_failure",&[]).await.unwrap();
-    assert!(members.remove_member(owner,org,candidates[10]).await.unwrap());
-    assert!(!members.remove_member(owner,org,candidates[10]).await.unwrap());
+    pg.execute(
+        "ALTER TABLE audit_logs DROP CONSTRAINT fixture_remove_audit_failure",
+        &[],
+    )
+    .await
+    .unwrap();
+    assert!(members
+        .remove_member(owner, org, candidates[10])
+        .await
+        .unwrap());
+    assert!(!members
+        .remove_member(owner, org, candidates[10])
+        .await
+        .unwrap());
     assert_eq!(pg.query_one("SELECT count(*) FROM audit_logs WHERE organization_id=$1 AND resource_id=$2 AND action='organization.member_deactivated'",&[&org,&candidates[10]]).await.unwrap().get::<_,i64>(0),1);
 
     // Test-only cleanup keeps the pre-existing Checkout fault scenarios independent.
-    pg.execute("DELETE FROM organization_members WHERE organization_id=$1 AND user_id<>$2",&[&org,&owner]).await.unwrap();
+    pg.execute(
+        "DELETE FROM organization_members WHERE organization_id=$1 AND user_id<>$2",
+        &[&org, &owner],
+    )
+    .await
+    .unwrap();
 
     assert!(repo
         .request(&proof, other_q, &digest, true, &policy)
@@ -1461,35 +1586,135 @@ async fn stripe_checkout_confirmation_durability_and_owner_fences() {
     assert!(!bound.payment_verified);
     // A bound Checkout is not a paid package: independently observed invoice + accepted terms.
     let payments = TeamStripeRepository::new(pg.clone());
-    let payment_claim = payments.claim("acct_checkout", false).await.unwrap().unwrap();
-    let (mut current, mut invoice, _) = crate::services::team_stripe_payment::tests::fixture(Utc::now());
-    current.subscription_id="sub_checkout".into(); current.customer_id="cus_checkout".into();
-    current.price_id=Some("price_checkout10".into()); current.amount_minor=Some(2500);
-    invoice.subscription_id=current.subscription_id.clone(); invoice.customer_id=current.customer_id.clone();
-    invoice.lines[0].subscription_id=Some(current.subscription_id.clone());
-    invoice.lines[0].price_id=current.price_id.clone();
-    invoice.lines[0].amount_minor=Some(2500); invoice.amount_due_minor=Some(2500); invoice.amount_paid_minor=Some(2500);
+    let payment_claim = payments
+        .claim("acct_checkout", false)
+        .await
+        .unwrap()
+        .unwrap();
+    let (mut current, mut invoice, _) =
+        crate::services::team_stripe_payment::tests::fixture(Utc::now());
+    current.subscription_id = "sub_checkout".into();
+    current.customer_id = "cus_checkout".into();
+    current.price_id = Some("price_checkout10".into());
+    current.amount_minor = Some(2500);
+    invoice.subscription_id = current.subscription_id.clone();
+    invoice.customer_id = current.customer_id.clone();
+    invoice.lines[0].subscription_id = Some(current.subscription_id.clone());
+    invoice.lines[0].price_id = current.price_id.clone();
+    invoice.lines[0].amount_minor = Some(2500);
+    invoice.amount_due_minor = Some(2500);
+    invoice.amount_paid_minor = Some(2500);
     pg.execute("ALTER TABLE team_stripe_snapshots ADD CONSTRAINT fixture_payment_atomic CHECK(payment_assessment IS NULL) NOT VALID",&[]).await.unwrap();
-    assert!(payments.complete_observation(&payment_claim,&current,Some(&invoice)).await.is_err());
-    assert!(pg.query_opt("SELECT 1 FROM team_stripe_snapshots WHERE organization_id=$1",&[&org]).await.unwrap().is_none());
-    pg.execute("ALTER TABLE team_stripe_snapshots DROP CONSTRAINT fixture_payment_atomic",&[]).await.unwrap();
-    assert!(payments.complete_observation(&payment_claim,&current,Some(&invoice)).await.unwrap());
-    assert!(!payments.complete_observation(&payment_claim,&current,Some(&invoice)).await.unwrap());
-    let paid=repo.latest(owner,org,"acct_checkout",false).await.unwrap().unwrap().invoice_assessment.unwrap();
-    assert_eq!(paid.state,"settled"); assert_eq!(paid.package_seats,Some(10)); assert!(!paid.access_granted);
-    assert!(repo.latest(owner,org,"acct_other",false).await.unwrap().is_none());
-    assert!(repo.latest(owner,org,"acct_checkout",true).await.unwrap().is_none());
-    pg.execute("UPDATE team_stripe_bindings SET enabled=false WHERE organization_id=$1",&[&org]).await.unwrap();
-    assert_eq!(repo.latest(owner,org,"acct_checkout",false).await.unwrap().unwrap().invoice_assessment.unwrap().state,"unconfirmed");
-    pg.execute("UPDATE team_stripe_bindings SET enabled=true WHERE organization_id=$1",&[&org]).await.unwrap();
-    let event=crate::services::team_stripe::Event {account_id:"acct_checkout".into(),livemode:false,event_id:"evt_payment_refresh".into(),kind:"invoice.paid".into(),created:Utc::now(),customer_id:Some("cus_checkout".into()),subscription_id:Some("sub_checkout".into()),invoice_id:Some(invoice.invoice_id.clone()),supported:true};
-    payments.accept(&event,&"b".repeat(64)).await.unwrap();
-    let pending=repo.latest(owner,org,"acct_checkout",false).await.unwrap().unwrap().invoice_assessment.unwrap();
-    assert_eq!(pending.reason,"reconciliation_pending"); assert_eq!(pending.package_seats,None);
-    let next=payments.claim("acct_checkout",false).await.unwrap().unwrap();
-    current.observed_at=Utc::now()-Duration::minutes(6); invoice.observed_at=current.observed_at;
-    assert!(payments.complete_observation(&next,&current,Some(&invoice)).await.unwrap());
-    assert_eq!(repo.latest(owner,org,"acct_checkout",false).await.unwrap().unwrap().invoice_assessment.unwrap().reason,"observation_stale");
+    assert!(payments
+        .complete_observation(&payment_claim, &current, Some(&invoice))
+        .await
+        .is_err());
+    assert!(pg
+        .query_opt(
+            "SELECT 1 FROM team_stripe_snapshots WHERE organization_id=$1",
+            &[&org]
+        )
+        .await
+        .unwrap()
+        .is_none());
+    pg.execute(
+        "ALTER TABLE team_stripe_snapshots DROP CONSTRAINT fixture_payment_atomic",
+        &[],
+    )
+    .await
+    .unwrap();
+    assert!(payments
+        .complete_observation(&payment_claim, &current, Some(&invoice))
+        .await
+        .unwrap());
+    assert!(!payments
+        .complete_observation(&payment_claim, &current, Some(&invoice))
+        .await
+        .unwrap());
+    let paid = repo
+        .latest(owner, org, "acct_checkout", false)
+        .await
+        .unwrap()
+        .unwrap()
+        .invoice_assessment
+        .unwrap();
+    assert_eq!(paid.state, "settled");
+    assert_eq!(paid.package_seats, Some(10));
+    assert!(!paid.access_granted);
+    assert!(repo
+        .latest(owner, org, "acct_other", false)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(repo
+        .latest(owner, org, "acct_checkout", true)
+        .await
+        .unwrap()
+        .is_none());
+    pg.execute(
+        "UPDATE team_stripe_bindings SET enabled=false WHERE organization_id=$1",
+        &[&org],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        repo.latest(owner, org, "acct_checkout", false)
+            .await
+            .unwrap()
+            .unwrap()
+            .invoice_assessment
+            .unwrap()
+            .state,
+        "unconfirmed"
+    );
+    pg.execute(
+        "UPDATE team_stripe_bindings SET enabled=true WHERE organization_id=$1",
+        &[&org],
+    )
+    .await
+    .unwrap();
+    let event = crate::services::team_stripe::Event {
+        account_id: "acct_checkout".into(),
+        livemode: false,
+        event_id: "evt_payment_refresh".into(),
+        kind: "invoice.paid".into(),
+        created: Utc::now(),
+        customer_id: Some("cus_checkout".into()),
+        subscription_id: Some("sub_checkout".into()),
+        invoice_id: Some(invoice.invoice_id.clone()),
+        supported: true,
+    };
+    payments.accept(&event, &"b".repeat(64)).await.unwrap();
+    let pending = repo
+        .latest(owner, org, "acct_checkout", false)
+        .await
+        .unwrap()
+        .unwrap()
+        .invoice_assessment
+        .unwrap();
+    assert_eq!(pending.reason, "reconciliation_pending");
+    assert_eq!(pending.package_seats, None);
+    let next = payments
+        .claim("acct_checkout", false)
+        .await
+        .unwrap()
+        .unwrap();
+    current.observed_at = Utc::now() - Duration::minutes(6);
+    invoice.observed_at = current.observed_at;
+    assert!(payments
+        .complete_observation(&next, &current, Some(&invoice))
+        .await
+        .unwrap());
+    assert_eq!(
+        repo.latest(owner, org, "acct_checkout", false)
+            .await
+            .unwrap()
+            .unwrap()
+            .invoice_assessment
+            .unwrap()
+            .reason,
+        "observation_stale"
+    );
 
     let job:i64=pg.query_one("SELECT count(*) FROM team_stripe_reconcile_jobs WHERE account_id='acct_checkout' AND subscription_id='sub_checkout'",&[]).await.unwrap().get(0);
     assert_eq!(job, 1);
@@ -1827,7 +2052,6 @@ async fn stripe_checkout_confirmation_durability_and_owner_fences() {
     assert_eq!(count, 0);
 }
 
-
 #[tokio::test]
 #[ignore = "requires isolated POSTGRES_TEST_URL"]
 async fn stripe_guarded_observation_commit_and_lost_confirmation_boundary() {
@@ -1877,7 +2101,16 @@ async fn stripe_guarded_observation_commit_and_lost_confirmation_boundary() {
         pg.execute("INSERT INTO team_stripe_bindings(organization_id,account_id,livemode,customer_id,subscription_id) VALUES($1,$2,false,$3,$4)", &[&org,&account,&customer,&subscription]).await.unwrap();
         pg.execute("INSERT INTO team_stripe_reconcile_jobs(account_id,livemode,subscription_id) VALUES($1,false,$2)", &[&account,&subscription]).await.unwrap();
         let repo = TeamStripeRepository::new_guarded(pg.clone(), file.deployment());
-        super::team_financial_ingress::seed_empty_fixture(&pg,guard,&crate::services::team_financial_ingress::Scope{account:account.clone(),live:false}).await.unwrap();
+        super::team_financial_ingress::seed_empty_fixture(
+            &pg,
+            guard,
+            &crate::services::team_financial_ingress::Scope {
+                account: account.clone(),
+                live: false,
+            },
+        )
+        .await
+        .unwrap();
         let claim = repo.claim(&account, false).await.unwrap().unwrap();
         let (mut snapshot, _, _) = crate::services::team_stripe_payment::tests::fixture(Utc::now());
         snapshot.subscription_id = subscription.clone();
@@ -1893,7 +2126,16 @@ async fn stripe_guarded_observation_commit_and_lost_confirmation_boundary() {
             std::env::set_var("ATOAXIS_TEAM_FINANCIAL_GUARD_REQUIRED", "false");
             let restored = TeamStripeRepository::new(pg.clone());
             assert!(restored.complete(&claim, &snapshot).await.is_err());
-            assert_eq!(pg.query_one("SELECT count(*) FROM team_stripe_snapshots WHERE organization_id=$1", &[&org]).await.unwrap().get::<_,i64>(0),0);
+            assert_eq!(
+                pg.query_one(
+                    "SELECT count(*) FROM team_stripe_snapshots WHERE organization_id=$1",
+                    &[&org]
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+                0
+            );
             assert_eq!(pg.query_one("SELECT applied_revision FROM team_stripe_reconcile_jobs WHERE account_id=$1 AND livemode=false AND subscription_id=$2", &[&account,&subscription]).await.unwrap().get::<_,i64>(0),0);
         }
         pg.execute("INSERT INTO team_analytics_entitlements(organization_id,revision,state,created_at,updated_at) VALUES($1,$2,$3,$4,$5)", &[&org,&saved.get::<_,i64>(0),&saved.get::<_,serde_json::Value>(1),&saved.get::<_,chrono::DateTime<Utc>>(2),&saved.get::<_,chrono::DateTime<Utc>>(3)]).await.unwrap();

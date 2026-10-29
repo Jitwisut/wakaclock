@@ -143,8 +143,8 @@ pub use revision::{
     ATTRIBUTION_REVISION_RETENTION_SECONDS, EVENT_ALIAS_RETENTION_SECONDS,
     LATE_RECONCILIATION_GRACE_SECONDS, PENDING_OBSERVATION_RETENTION_SECONDS,
 };
-pub use sqlite_apps::SqliteAppParser;
 pub use source::{DbFingerprint, FileFingerprint, SourceCheckpoint, SourceKind};
+pub use sqlite_apps::SqliteAppParser;
 pub use state::{AiAttributionState, PendingUsage};
 pub use topology::{
     from_local_root, EditorSurface, ExecutionSurface, TopologyContext, TopologyError,

@@ -270,11 +270,31 @@ impl OrganizationsService {
         let mut db = postgres.transaction_client().await?;
         let tx = db.transaction().await?;
         crate::repository::team_seats::lock(&tx, organization_id).await?;
-        AuthorizationService::require_locked_action(&tx, actor, organization_id, OrganizationAction::ManageMembers).await?;
-        if tx.query_opt("SELECT 1 FROM users WHERE id=$1 AND is_active AND deleted_at IS NULL FOR SHARE", &[&request.user_id]).await?.is_none() {
+        AuthorizationService::require_locked_action(
+            &tx,
+            actor,
+            organization_id,
+            OrganizationAction::ManageMembers,
+        )
+        .await?;
+        if tx
+            .query_opt(
+                "SELECT 1 FROM users WHERE id=$1 AND is_active AND deleted_at IS NULL FOR SHARE",
+                &[&request.user_id],
+            )
+            .await?
+            .is_none()
+        {
             return Err(OrganizationRequestError::Invalid("user not found or inactive").into());
         }
-        crate::repository::team_seats::admit(&tx, organization_id, request.user_id, &role, &seat_type).await?;
+        crate::repository::team_seats::admit(
+            &tx,
+            organization_id,
+            request.user_id,
+            &role,
+            &seat_type,
+        )
+        .await?;
         let row = tx
             .query_one(
                 "INSERT INTO organization_members
@@ -330,7 +350,13 @@ impl OrganizationsService {
         let mut db = postgres.transaction_client().await?;
         let tx = db.transaction().await?;
         crate::repository::team_seats::lock(&tx, organization_id).await?;
-        AuthorizationService::require_locked_action(&tx, actor, organization_id, OrganizationAction::ManageMembers).await?;
+        AuthorizationService::require_locked_action(
+            &tx,
+            actor,
+            organization_id,
+            OrganizationAction::ManageMembers,
+        )
+        .await?;
         let changed = tx
             .execute(
                 "UPDATE organization_members SET deactivated_at = now()
@@ -344,7 +370,9 @@ impl OrganizationsService {
             tx.execute("INSERT INTO audit_logs(id,organization_id,actor_user_id,action,resource_type,resource_id,metadata) VALUES($1,$2,$3,'organization.member_deactivated','user',$4,$5)", &[&Uuid::now_v7(),&organization_id,&actor,&member_user_id,&serde_json::json!({})]).await.context("failed to write member removal audit")?;
         }
         tx.commit().await?;
-        if changed == 1 { self.mirror_team_privacy().await?; }
+        if changed == 1 {
+            self.mirror_team_privacy().await?;
+        }
         Ok(changed == 1)
     }
 
@@ -618,8 +646,16 @@ impl OrganizationsService {
         crate::repository::team_seats::lock(&tx, org).await?;
         let invite = tx.query_opt("SELECT i.role,i.seat_type FROM organization_user_invites i JOIN organizations o ON o.id=i.organization_id JOIN users u ON u.id=i.invitee_user_id WHERE i.id=$1 AND i.invitee_user_id=$2 AND i.organization_id=$3 AND i.status='pending' AND i.expires_at>clock_timestamp() AND o.deleted_at IS NULL AND u.is_active AND u.deleted_at IS NULL FOR UPDATE OF i FOR SHARE OF o,u", &[&invite_id,&user_id,&org]).await?.ok_or(OrganizationRequestError::NotFound("invite not found or expired"))?;
         let old_owner = tx.query_opt("SELECT 1 FROM organization_members WHERE organization_id=$1 AND user_id=$2 AND role='owner'", &[&org,&user_id]).await?.is_some();
-        let role: String = invite.get(0); let seat: String = invite.get(1);
-        crate::repository::team_seats::admit(&tx, org, user_id, if old_owner {"owner"} else {&role}, &seat).await?;
+        let role: String = invite.get(0);
+        let seat: String = invite.get(1);
+        crate::repository::team_seats::admit(
+            &tx,
+            org,
+            user_id,
+            if old_owner { "owner" } else { &role },
+            &seat,
+        )
+        .await?;
         let Some(row) = tx
             .query_opt(
                 "WITH invite AS (

@@ -52,9 +52,9 @@ mod team_actions;
 mod team_comparison;
 mod team_github;
 mod team_insights;
+mod team_stripe;
 mod team_webhooks;
 mod team_weekly_summary;
-mod team_stripe;
 mod work_sessions;
 
 const WAKATIME_ROUTE_INVENTORY: &str = include_str!("../../../../wakatime-api-routes.json");
