@@ -83,7 +83,7 @@ pub async fn get(
     )))
 }
 
-fn clean_filter(
+pub(super) fn clean_filter(
     value: Option<String>,
     name: &str,
 ) -> Result<Option<String>, (StatusCode, Json<serde_json::Value>)> {
@@ -98,7 +98,7 @@ fn clean_filter(
     }
 }
 
-fn parse_source(
+pub(super) fn parse_source(
     value: Option<String>,
 ) -> Result<Option<String>, (StatusCode, Json<serde_json::Value>)> {
     let value = value
@@ -111,7 +111,7 @@ fn parse_source(
     }
 }
 
-fn parse_actor_type(
+pub(super) fn parse_actor_type(
     value: Option<String>,
 ) -> Result<Option<ActorType>, (StatusCode, Json<serde_json::Value>)> {
     let value = value
@@ -125,7 +125,7 @@ fn parse_actor_type(
     }
 }
 
-fn bad_request(message: impl ToString) -> (StatusCode, Json<serde_json::Value>) {
+pub(super) fn bad_request(message: impl ToString) -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::BAD_REQUEST,
         Json(serde_json::json!({ "error": message.to_string() })),

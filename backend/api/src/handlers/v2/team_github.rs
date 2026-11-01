@@ -250,6 +250,49 @@ pub async fn sessions(
     ))
 }
 
+pub async fn replay_events(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(org): Path<Uuid>,
+    Query(q): Query<crate::model::team_replay::ReplayEventsQuery>,
+) -> Result<(HeaderMap, Json<V2Envelope<Value>>), ApiError> {
+    let user = actor(&s, &h).await?;
+    if !s.config.time_machine_enabled {
+        return Err(ApiError::service_unavailable("time machine is disabled"));
+    }
+    let range =
+        crate::model::date_range::ResolvedRange::parse(&q.start, &q.end, q.timezone.as_deref())
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    if range.days_included() > crate::model::replay::REPLAY_MAX_RANGE_DAYS {
+        return Err(ApiError::bad_request(format!(
+            "replay range must be at most {} days",
+            crate::model::replay::REPLAY_MAX_RANGE_DAYS
+        )));
+    }
+    let (start, end) = range.unix_bounds();
+    let bound = |value: f64| {
+        chrono::DateTime::from_timestamp(value as i64, 0)
+            .ok_or_else(|| ApiError::bad_request("replay range is out of bounds"))
+    };
+    let response = s
+        .team_github_service
+        .own_replay_events(user, org, bound(start)?, bound(end)?)
+        .await
+        .map_err(error)?;
+    let data = serde_json::to_value(response).map_err(ApiError::internal)?;
+    Ok((
+        private_headers(),
+        Json(envelope(
+            data,
+            "UTC",
+            Some(serde_json::json!({
+                "ci": "latest_result_per_check",
+                "scope": "own_verified_pull_requests",
+            })),
+        )),
+    ))
+}
+
 pub async fn own_work_page(
     State(s): State<Arc<AppState>>,
     h: HeaderMap,

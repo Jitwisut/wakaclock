@@ -49,6 +49,7 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `ATOAXIS_JOB_RENEW_SECONDS` | no | Lease renewal interval; defaults to `60`. |
 | `ATOAXIS_JOB_SHUTDOWN_SECONDS` | no | Grace period for in-flight jobs during shutdown; defaults to `30`. |
 | `ATOAXIS_JOB_WORKER_HEALTH_HOST`, `ATOAXIS_JOB_WORKER_HEALTH_PORT` | no | Worker liveness/readiness listener; defaults to `0.0.0.0:8081`. |
+| `ATOAXIS_TIME_MACHINE_ENABLED` | no | Opt-in flag (off by default) for `GET /api/v1/dashboard/replay` and the `time_machine` capability that shows the dashboard page. Read-only; turning it off needs no data cleanup. |
 | `REDIS_URL` | Presence v2 | Redis (`redis://` or `rediss://`) used by Presence v2; required when `PRESENCE_V2_ENABLED=true`. `ATOAXIS_REDIS_URL` is not read by the server. |
 | `ATOAXIS_OBJECT_STORE_S3_ENDPOINT`, `ATOAXIS_OBJECT_STORE_S3_BUCKET` | no | Together enable the S3-compatible export artifact store; endpoint must be HTTPS in non-local deployments. A partial configuration refuses startup. |
 | `ATOAXIS_OBJECT_STORE_S3_REGION` | no | SigV4 region; defaults to `us-east-1` when the object store is configured. |

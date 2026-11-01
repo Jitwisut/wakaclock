@@ -1,6 +1,7 @@
 use crate::{
     infrastructure::{contracts::CredentialVault, github::*},
     model::team_github::*,
+    model::team_replay::*,
     repository::{team_github::GithubRepositoryStore, team_insights::TeamInsightsRepository},
     services::authorization::{AuthorizationService, OrganizationAction, OrganizationRole},
 };
@@ -530,6 +531,45 @@ impl TeamGithubService {
         );
         Ok(result)
     }
+    /// A member's own pull requests and CI results for a replay range. Identical guard to
+    /// `own_work_page`: no other member's time or authorship is read, so this is a
+    /// `ReadSelf` view and not a suppressed team aggregate.
+    pub async fn own_replay_events(
+        &self,
+        user: Uuid,
+        org: Uuid,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<ReplayEventsResponse> {
+        self.authorize(user, org, false).await?;
+        let generation = self.guard(org).await?;
+        let retained_from = Utc::now() - chrono::Months::new(12);
+        let work = self
+            .repo()?
+            .own_replay_work(org, user, start, end, retained_from)
+            .await?;
+        let response = match work {
+            None => ReplayEventsResponse {
+                events: Vec::new(),
+                status: ReplayEventsStatus::IdentityRequired,
+                unconfirmed_items: 0,
+            },
+            Some((items, facts)) => ReplayEventsResponse {
+                events: replay_events(&items, &facts, start.max(retained_from), end)?,
+                status: ReplayEventsStatus::Available,
+                unconfirmed_items: items
+                    .iter()
+                    .filter(|item| item.lifecycle_coverage != "observed")
+                    .count(),
+            },
+        };
+        self.authorize(user, org, false).await?;
+        ensure!(
+            self.guard(org).await? == generation,
+            "access changed during replay read"
+        );
+        Ok(response)
+    }
     async fn guard(&self, org: Uuid) -> Result<i64> {
         let insights = self
             .insights
@@ -799,6 +839,251 @@ pub fn validate_context(event: &SessionContext, now: DateTime<Utc>) -> Result<()
     );
     Ok(())
 }
+fn replay_event(
+    item: &ReplayWorkItem,
+    kind: ReplayEventKind,
+    at: DateTime<Utc>,
+    detail: &str,
+) -> ReplayEvent {
+    ReplayEvent {
+        id: format!(
+            "{}:{}:{:?}:{detail}",
+            item.repository_id, item.external_id, kind
+        ),
+        at: at.timestamp_millis() as f64 / 1000.0,
+        kind,
+        number: item.number,
+        project_ids: item.project_ids.clone(),
+        repository: item.repository.clone(),
+        url: format!(
+            "https://github.com/{}/pull/{}",
+            item.repository, item.number
+        ),
+    }
+}
+
+/// Turn observed timestamps into events. A missing timestamp yields no event, and a closed
+/// pull request that merged reports only the merge. CI is judged per head by `ci_state`,
+/// and only a finished result is an event: its time is the last check of that head.
+fn replay_events(
+    items: &[ReplayWorkItem],
+    facts: &[ReplayCheckFact],
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<Vec<ReplayEvent>> {
+    use std::collections::BTreeMap;
+
+    let mut events = Vec::new();
+    for item in items {
+        let closed = item.closed_at.filter(|_| item.merged_at.is_none());
+        for (kind, at) in [
+            (ReplayEventKind::PrOpened, Some(item.opened_at)),
+            (ReplayEventKind::PrReady, item.ready_at),
+            (ReplayEventKind::PrFirstReview, item.first_review_at),
+            (ReplayEventKind::PrMerged, item.merged_at),
+            (ReplayEventKind::PrClosed, closed),
+        ] {
+            if let Some(at) = at {
+                events.push(replay_event(item, kind, at, ""));
+            }
+        }
+        let mut heads: BTreeMap<&str, Vec<&ReplayCheckFact>> = BTreeMap::new();
+        for fact in facts.iter().filter(|fact| {
+            fact.repository_id == item.repository_id && fact.external_id == item.external_id
+        }) {
+            if let Some(head) = fact.metadata["head_sha"].as_str() {
+                heads.entry(head).or_default().push(fact);
+            }
+        }
+        for (head, checks) in heads {
+            let metadata = checks
+                .iter()
+                .map(|c| c.metadata.clone())
+                .collect::<Vec<_>>();
+            let kind = match crate::services::team_github_sync::ci_state(head, &metadata) {
+                "success" => ReplayEventKind::CiSuccess,
+                "failure" => ReplayEventKind::CiFailure,
+                "cancelled" => ReplayEventKind::CiCancelled,
+                _ => continue,
+            };
+            if let Some(at) = checks.iter().map(|check| check.occurred_at).max() {
+                events.push(replay_event(item, kind, at, head));
+            }
+        }
+    }
+    events.retain(|event| {
+        event.at >= start.timestamp_millis() as f64 / 1000.0
+            && event.at < end.timestamp_millis() as f64 / 1000.0
+    });
+    if events.len() > TEAM_REPLAY_MAX_EVENTS {
+        return Err(GithubInputError(
+            "replay range has too many GitHub events; choose a shorter range",
+        )
+        .into());
+    }
+    events.sort_by(|left, right| {
+        left.at
+            .total_cmp(&right.at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(events)
+}
+
+#[cfg(test)]
+mod replay_event_tests {
+    use super::*;
+    use chrono::{Duration, TimeZone};
+    use serde_json::json;
+
+    const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OLD_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn at(hours: i64) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap() + Duration::hours(hours)
+    }
+
+    fn item() -> ReplayWorkItem {
+        ReplayWorkItem {
+            repository_id: Uuid::from_u128(1),
+            external_id: 7,
+            number: 42,
+            head_sha: Some(SHA.into()),
+            opened_at: at(1),
+            ready_at: Some(at(2)),
+            first_review_at: Some(at(3)),
+            merged_at: Some(at(4)),
+            closed_at: Some(at(4)),
+            lifecycle_coverage: "observed".into(),
+            repository: "fixture/private".into(),
+            project_ids: vec![Uuid::from_u128(9)],
+        }
+    }
+
+    fn check(head: &str, name: &str, conclusion: &str, hours: i64) -> ReplayCheckFact {
+        ReplayCheckFact {
+            repository_id: Uuid::from_u128(1),
+            external_id: 7,
+            occurred_at: at(hours),
+            metadata: json!({
+                "head_sha": head,
+                "name": name,
+                "status": "completed",
+                "conclusion": conclusion,
+                "source_at": at(hours),
+            }),
+        }
+    }
+
+    fn kinds(events: &[ReplayEvent]) -> Vec<ReplayEventKind> {
+        events.iter().map(|event| event.kind).collect()
+    }
+
+    #[test]
+    fn reports_each_observed_step_in_time_order() {
+        let events = replay_events(&[item()], &[], at(0), at(24)).unwrap();
+        assert_eq!(
+            kinds(&events),
+            vec![
+                ReplayEventKind::PrOpened,
+                ReplayEventKind::PrReady,
+                ReplayEventKind::PrFirstReview,
+                ReplayEventKind::PrMerged,
+            ]
+        );
+        assert_eq!(events[0].url, "https://github.com/fixture/private/pull/42");
+    }
+
+    #[test]
+    fn never_invents_a_step_with_no_timestamp() {
+        let mut open = item();
+        open.ready_at = None;
+        open.first_review_at = None;
+        open.merged_at = None;
+        open.closed_at = None;
+        let events = replay_events(&[open.clone()], &[], at(0), at(24)).unwrap();
+        assert_eq!(kinds(&events), vec![ReplayEventKind::PrOpened]);
+
+        open.closed_at = Some(at(5));
+        let events = replay_events(&[open], &[], at(0), at(24)).unwrap();
+        assert_eq!(events.last().unwrap().kind, ReplayEventKind::PrClosed);
+    }
+
+    #[test]
+    fn keeps_only_events_inside_the_range() {
+        let events = replay_events(&[item()], &[], at(2), at(4)).unwrap();
+        assert_eq!(
+            kinds(&events),
+            vec![ReplayEventKind::PrReady, ReplayEventKind::PrFirstReview]
+        );
+    }
+
+    #[test]
+    fn ci_is_one_event_per_head_timed_by_its_last_check() {
+        let facts = [
+            check(SHA, "build", "success", 2),
+            check(SHA, "test", "success", 3),
+            check(OLD_SHA, "build", "failure", 1),
+        ];
+        let events = replay_events(&[item()], &facts, at(0), at(24)).unwrap();
+        let ci = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    ReplayEventKind::CiSuccess | ReplayEventKind::CiFailure
+                )
+            })
+            .map(|e| (e.kind, e.at))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ci,
+            vec![
+                (ReplayEventKind::CiFailure, at(1).timestamp() as f64),
+                (ReplayEventKind::CiSuccess, at(3).timestamp() as f64),
+            ]
+        );
+    }
+
+    #[test]
+    fn one_failed_check_fails_the_head_and_a_running_head_is_not_an_event() {
+        let failed = [
+            check(SHA, "build", "success", 2),
+            check(SHA, "test", "failure", 3),
+        ];
+        let events = replay_events(&[item()], &failed, at(0), at(24)).unwrap();
+        assert!(kinds(&events).contains(&ReplayEventKind::CiFailure));
+        assert!(!kinds(&events).contains(&ReplayEventKind::CiSuccess));
+
+        let mut running = check(SHA, "build", "success", 2);
+        running.metadata["status"] = json!("in_progress");
+        running.metadata["conclusion"] = json!(null);
+        let events = replay_events(&[item()], &[running], at(0), at(24)).unwrap();
+        assert_eq!(events.len(), 4);
+    }
+
+    #[test]
+    fn refuses_rather_than_truncates_past_the_event_limit() {
+        let items = (0..=TEAM_REPLAY_MAX_EVENTS / 4)
+            .map(|number| {
+                let mut work = item();
+                work.external_id = number as i64;
+                work
+            })
+            .collect::<Vec<_>>();
+        let error = replay_events(&items, &[], at(0), at(24)).unwrap_err();
+        assert!(error.downcast_ref::<GithubInputError>().is_some());
+    }
+
+    #[test]
+    fn wire_format_carries_no_reviewer_check_or_commit_identity() {
+        let facts = [check(SHA, "secret-pipeline", "success", 2)];
+        let events = replay_events(&[item()], &facts, at(0), at(24)).unwrap();
+        let json = serde_json::to_string(&events).unwrap();
+        assert!(!json.contains("secret-pipeline"));
+        assert!(json.contains("\"kind\":\"ci_success\""));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

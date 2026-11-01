@@ -1,7 +1,12 @@
 import { wakaclockClient } from './client';
 import { getCurrentToken } from './session';
 
-import type { AnalyticsExplorerParams, AnalyticsExplorerResponse } from './analytics';
+import type {
+  AnalyticsExplorerParams,
+  AnalyticsExplorerResponse,
+  ProjectCityResponse,
+  ReplayResponse,
+} from './analytics';
 import type {
   AiDiagnosticsResponse,
   AiDiagnosticsV2Response,
@@ -166,6 +171,20 @@ export async function getAiDiagnosticsV2(userId: string) {
 export async function getAnalyticsExplorer(params: AnalyticsExplorerParams) {
   const { data } = await wakaclockClient.get<AnalyticsExplorerResponse>('/dashboard/explorer', {
     params,
+  });
+  return data;
+}
+
+// GET /dashboard/replay — same query as /dashboard/explorer; 92 days at most.
+export async function getReplay(params: AnalyticsExplorerParams) {
+  const { data } = await wakaclockClient.get<ReplayResponse>('/dashboard/replay', { params });
+  return data;
+}
+
+// GET /dashboard/city?project_id=&timezone= — a project's full history, so it takes no range.
+export async function getProjectCity(projectId: string, timezone?: string) {
+  const { data } = await wakaclockClient.get<ProjectCityResponse>('/dashboard/city', {
+    params: { project_id: projectId, timezone },
   });
   return data;
 }
