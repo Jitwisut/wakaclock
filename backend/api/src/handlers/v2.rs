@@ -429,6 +429,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/organizations/:organization_id/me/github/work-items/:repository_id/:work_item_id/receipt", get(team_insights::own_receipt))
         .route("/organizations/:organization_id/me/github/sessions", get(team_github::sessions))
         .route("/organizations/:organization_id/me/github/work-items", get(team_github::own_work_page))
+        .route("/organizations/:organization_id/me/github/replay-events", get(team_github::replay_events))
         .route("/organizations/:organization_id/measurement-health", get(team_insights::measurement_health))
         .route("/organizations/:organization_id/launch-readiness", get(team_insights::readiness))
         .route("/organizations/:organization_id/work-items/:repository_id/:work_item_id/receipt", get(team_insights::receipt))
@@ -757,7 +758,7 @@ fn feature_available(
 
     match key {
         "ai_human_follow_up" | "organization_analytics" => false,
-        "ai_human_follow_up_events" | "work_session_receipts" => true,
+        "ai_human_follow_up_events" | "work_session_receipts" | "time_machine" => true,
         "data_exports" => export_available && postgres,
         "postgres_transactional_store"
         | "personal_organizations"
@@ -883,7 +884,8 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
                     let feature_enabled = (feature.key != "measurement_repair"
                         || state.config.measurement_repair_enabled)
                         && (feature.key != "work_session_receipts"
-                            || state.config.work_sessions_enabled);
+                            || state.config.work_sessions_enabled)
+                        && (feature.key != "time_machine" || state.config.time_machine_enabled);
                     FeatureCapability {
                         available: feature_enabled
                             && feature_available(

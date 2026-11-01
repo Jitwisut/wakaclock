@@ -26,7 +26,7 @@ export function TimelineStudio({ data }: { data: AnalyticsExplorerResponse }) {
       <div className={styles.hero}>
         <div>
           <span className={styles.kicker}>
-            <Radio size={14} /> THE TIME MACHINE / ACTIVITY ARCHIVE
+            <Radio size={14} /> ACTIVITY ARCHIVE
           </span>
           <h2>
             Every moment.

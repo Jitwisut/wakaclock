@@ -16,7 +16,10 @@ Grouped by concern (see `handlers/v1/mod.rs` for the authoritative list):
 
 - ingest — `/heartbeats`, `/heartbeats.bulk`, `/ai/usage`, `/external_durations`
 - read models — `/summaries`, `/durations`, `/stats`, `/status_bar`,
-  `/all_time_since_today`, `/insights/:type/:range`, `/projects`
+  `/all_time_since_today`, `/insights/:type/:range`, `/projects`,
+  `/dashboard/explorer`, `/dashboard/city`, `/dashboard/replay` (503 unless
+  `ATOAXIS_TIME_MACHINE_ENABLED`; 92 days at most, an over-limit range is refused
+  rather than truncated)
 - catalog — `/editors`, `/leaders`, `/meta`, `/program_languages`
 - identity/config — `/auth/register`, `/auth/login`, `/users`, `/api_key`
 - project hygiene — `/project_rules`, `/project_merges`, `/projects/analytics`
@@ -33,6 +36,15 @@ the `POST /api/v1/reprocess` that creates the jobs; not reachable by a
 third-party OAuth grant), `/profile`,
 `/share-links`, `/integrations/*`, `/ai/follow-up*`, and VCS routes delegating to
 [../../backend/api/src/handlers/vcs.rs](../../backend/api/src/handlers/vcs.rs).
+
+`GET /dashboard/city?project_id=&timezone=` draws one project as modules from daily
+file facts. It reads no time, covers the project's whole history, returns only paths
+relative to the project and refuses more than 200,000 file-days.
+
+`GET /organizations/:id/me/github/replay-events` serves Time Machine. It is a
+`ReadSelf` view of the caller's own pull requests and CI, matched on a verified
+GitHub identity, and needs the Team guard plus `ATOAXIS_TIME_MACHINE_ENABLED`.
+A range over 92 days, 1,000 pull requests or 2,000 events is refused, not truncated.
 
 ## Handler pattern — Existing Convention
 

@@ -154,3 +154,17 @@ Migration `036` adds an opt-in connector to the existing GitHub worker and crede
 Restore blocks restored facts, terminates accepted jobs with `restore_reauthorization_required`, clears staging and disables configuration before Team reads. This is a local projection/registry regression, not a new physical Cloud restore certificate. Withdrawal of consent or identity blocks self read immediately; cleanup proceeds separately.
 
 A safe weekly organization/team projection and CSV for these provider UTC-day counters are **not implemented in this adapter slice**. They must use Phase 2 consent/cohort/publication inference rules and an explicit provider-day versus organization-week policy; no unsuppressed cross-person aggregate is exposed. Live GitHub App delivery and provider/OS certification remain pending. See [adapter closure report](adapter-development-closure-2026-10-12.md).
+
+## Time Machine replay events
+
+`GET /api/v2/organizations/:id/me/github/replay-events` adds no table, column or retention
+class. It reads `team_work_items` and `team_github_facts` inside the existing 12-month window
+and returns only pull requests the caller authored, matched through a live verified GitHub
+identity, in enabled repositories the caller bound to a project. It is a `ReadSelf` view, so
+it reads no other member's time or authorship and needs no contributor suppression. A team-wide
+replay would not be covered by this path.
+
+CI is reported per head from the facts that exist. Check facts are upserted, so a re-run replaces
+the earlier result: replay shows the latest result of each check, not every attempt. Coverage
+is stated in `meta.coverage`. Verified against fixtures in an isolated database only; no live
+GitHub installation has exercised this path.

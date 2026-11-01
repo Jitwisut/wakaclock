@@ -37,7 +37,7 @@ admin UI kit. Two populations of code:
 | --- | --- |
 | `app/(account)/` | `login`, `register`, shared `layout.tsx` + `auth.css` |
 | `app/dashboard/(auth)/` | authenticated shell (`layout.tsx`, `error.tsx`) |
-| `app/dashboard/(auth)/wakaclock/` | the product dashboard: root `page.tsx` plus `ai/`, `heartbeats/`, `insights/`, `keystrokes/`, `presence/`, `projects/` (+ `[projectId]/`), `settings/` |
+| `app/dashboard/(auth)/wakaclock/` | the product dashboard: root `page.tsx` plus `ai/`, `heartbeats/`, `insights/`, `keystrokes/`, `presence/`, `projects/` (+ `[projectId]/`), `settings/`, `time-machine/` |
 | `app/(marketing)/` | pricing, docs, integrations, comparison and SEO pages |
 
 Page-local components live in a `components/` folder **beside the page**
@@ -68,6 +68,17 @@ contract from `use-analytics-filters.ts` and one canonical duration response fro
 `GET /api/v1/dashboard/explorer`. New analytics views should preserve those URL
 filters and derive duration from the canonical activity timeline rather than
 summing raw heartbeat `active_seconds` independently.
+
+`/dashboard/wakaclock/time-machine` reuses those URL filters but not
+`AnalyticsFrame`: it reads `GET /api/v1/dashboard/replay` alone, so one page load
+builds the canonical timeline once. All playback runs in the browser from
+`lib/wakaclock/replay.ts`. The sidebar entry needs the `time_machine` capability.
+GitHub events load separately from the replay, so their failure never affects it.
+The page opens on City, which reads `GET /api/v1/dashboard/city`. `?view=timeline` opens
+the replay. `components/wakaclock/analytics/city/city-scene.ts` is plain three.js behind
+a small interface, imported only after `chooseTimeQuality` allows 3D; otherwise the module
+table stands alone.
+Only a project filter can apply to them; any other filter hides them with a note.
 
 ## State management — Existing Convention
 
