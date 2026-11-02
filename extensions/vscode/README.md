@@ -1,5 +1,11 @@
 # AtoAxis — Developer Time Tracking for VS Code
 
+> **Invite-only Early Access.** This extension sends activity to the hosted AtoAxis
+> service and does nothing until you add an AtoAxis API key. Keys are issued to
+> Early Access members only. If you don't have one yet,
+> [join the Early Access list](https://www.atoaxis.com/join) first; joining is free
+> and takes no payment details.
+
 AtoAxis records how long you spend coding in VS Code and breaks it down by project,
 programming language, branch and editor. This extension captures editor activity,
 buffers it in memory, and delegates heartbeat delivery to the `wakaclock` binary, which sends
@@ -27,12 +33,14 @@ is required.
 ## Requirements
 
 - VS Code 1.90 or newer
-- An AtoAxis API key from your account
+- An AtoAxis API key from your account (Early Access members only;
+  [join the list](https://www.atoaxis.com/join))
 
 ## Installation
 
-Install the platform-specific AtoAxis extension from the VS Code Marketplace, then
-set your API key from the command palette:
+Install the extension from the VS Code Marketplace or Open VSX. Your editor picks the
+build for your operating system automatically. Then create an API key in the AtoAxis
+dashboard (Settings → API key) and set it from the command palette:
 
 ```
 > AtoAxis: Set API Key
@@ -104,8 +112,10 @@ extension does not guess their identity from typing speed or code shape.
 
 Heartbeats contain metadata only: file path, project, branch, detected language, line
 and character counts, editor and operating system. They never contain the contents of
-your files, anything you typed, or AI prompts and responses. Data is written to a
-ClickHouse database on infrastructure you control.
+your files, anything you typed, or AI prompts and responses. Data is sent to the
+hosted AtoAxis service at `https://api.atoaxis.com`. It is not sold, shared with
+advertisers, or used to train models. See the
+[privacy policy](https://www.atoaxis.com/privacy).
 
 ## Settings
 
@@ -145,22 +155,11 @@ ClickHouse database on infrastructure you control.
 - Native binaries are bundled per Marketplace target; unsupported platforms are
   rejected with a clear CLI-unavailable status rather than executing an unverified file
 
-## Local development
-
-Use Node.js 24 for build and packaging, matching CI. The development dependency
-`@vscode/vsce` 4 requires Node.js 22 or newer; this does not change the minimum
-VS Code version for installed extensions.
-
-```bash
-npm install
-npm run compile
-```
-
-Then press `F5` in VS Code to launch the extension host. If the extension is already
-running from the symlinked checkout, run **Developer: Reload Window** after compiling;
-the Extension Host keeps the previously loaded JavaScript until the window reloads.
-
 ## Links
 
-- [Getting started](https://github.com/Jitwisut/wakaclock#readme)
-- [Issues](https://github.com/Jitwisut/wakaclock/issues)
+- [Join Early Access](https://www.atoaxis.com/join)
+- [Getting started](https://www.atoaxis.com/docs/getting-started)
+- [How coding time is calculated](https://www.atoaxis.com/docs/how-coding-time-is-calculated)
+- [Migrate from WakaTime](https://www.atoaxis.com/docs/migrate-from-wakatime)
+- [Privacy](https://www.atoaxis.com/privacy) · [Terms](https://www.atoaxis.com/terms)
+- [Contact](https://www.atoaxis.com/contact)

@@ -1,5 +1,6 @@
 import { unwrapV2, wakaclockV2Client } from './client-v2';
 
+import type { ReplayEventsResponse } from './analytics';
 import type { WorkReceipt } from './team-types';
 import type { V2Envelope } from './types';
 
@@ -371,4 +372,17 @@ export async function exportCopilotWeeklyReport(org: string, weekStart: string, 
     }
   );
   return response.data;
+}
+
+// GET /organizations/:id/me/github/replay-events?start=&end=&timezone=
+export async function getReplayEvents(
+  organizationId: string,
+  params: { end: string; start: string; timezone?: string }
+) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<ReplayEventsResponse>>(
+      `/organizations/${organizationId}/me/github/replay-events`,
+      { params }
+    )
+  );
 }

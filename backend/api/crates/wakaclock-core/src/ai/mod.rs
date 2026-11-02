@@ -38,34 +38,47 @@
 
 pub mod activity;
 pub mod adapter;
+pub mod antigravity;
 pub mod canonical;
 pub mod certification;
 pub mod claude;
 pub mod codex;
+pub mod copilot;
 pub mod correlation;
+pub mod cursor;
 pub mod diagnostics;
 pub mod editor_capability;
 pub mod event;
+pub(crate) mod fields;
 pub mod follow_up;
 pub mod gemini;
 pub mod identity;
 mod jsonl;
+pub mod jsonl_family;
 pub mod native_activity;
 pub mod parser;
+pub mod parser_registry;
 pub mod patch;
 pub mod path;
 pub mod producer;
 pub mod provider;
 pub mod revision;
+pub mod snapshot_source;
+pub mod source;
+pub mod sqlite_apps;
+pub mod sqlite_source;
 pub mod state;
 pub mod topology;
 pub mod topology_handoff;
+pub mod ui_messages;
 pub mod usage;
+pub mod vscdb_kv;
 
 pub use adapter::{
     AdapterCatalogEntry, AdapterCatalogV1, AdapterManifest, AdapterRegistry, AdapterRuntime,
     InstallStrategy,
 };
+pub use antigravity::AntigravityParser;
 pub use canonical::{fingerprint_for_heartbeat, FINGERPRINT_SCHEME_V1};
 pub use certification::{
     CertificationCatalogEntry, CertificationCatalogV1, CertificationDecision,
@@ -74,9 +87,11 @@ pub use certification::{
 };
 pub use claude::ClaudeCodeParser;
 pub use codex::CodexParser;
+pub use copilot::CopilotParser;
 pub use correlation::{
     correlate, expire_unmatched, AiAttribution, CorrelationOutcome, EditorObservation,
 };
+pub use cursor::CursorFamilyParser;
 pub use diagnostics::{
     build_report as build_ai_diagnostics_report, AdapterFreshness, AdapterFreshnessV2,
     AiDiagnosticsReport, AiDiagnosticsReportV2, AttributionMode, BrokerHealth, BrokerHealthV2,
@@ -107,6 +122,7 @@ pub use parser::{
     ParseContext, ParseWarning, ParserContext, ParserCursor, ParserPendingCall, ParserTurnContext,
     TranscriptLag,
 };
+pub use parser_registry::{builtin_parsers, emits_edit_heartbeats, RegisteredParser};
 pub use patch::{
     count_content_lines, count_structured_patch_lines, count_unified_diff_lines, LineDelta,
     StructuredPatchHunk,
@@ -122,11 +138,13 @@ pub use provider::{
     KNOWN_PROVIDER_IDS,
 };
 pub use revision::{
-    prove_alias, AliasEvidence, AliasProofKind, AttributionRetentionPolicy, AttributionRevision,
-    RevisionCandidate, RevisionWriteOutcome, ATTRIBUTION_REVISION_RETENTION_SECONDS,
-    EVENT_ALIAS_RETENTION_SECONDS, LATE_RECONCILIATION_GRACE_SECONDS,
-    PENDING_OBSERVATION_RETENTION_SECONDS,
+    legacy_claude_hook_event_id, prove_alias, AliasEvidence, AliasProofKind,
+    AttributionRetentionPolicy, AttributionRevision, RevisionCandidate, RevisionWriteOutcome,
+    ATTRIBUTION_REVISION_RETENTION_SECONDS, EVENT_ALIAS_RETENTION_SECONDS,
+    LATE_RECONCILIATION_GRACE_SECONDS, PENDING_OBSERVATION_RETENTION_SECONDS,
 };
+pub use source::{DbFingerprint, FileFingerprint, SourceCheckpoint, SourceKind};
+pub use sqlite_apps::SqliteAppParser;
 pub use state::{AiAttributionState, PendingUsage};
 pub use topology::{
     from_local_root, EditorSurface, ExecutionSurface, TopologyContext, TopologyError,

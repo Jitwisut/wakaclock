@@ -54,7 +54,7 @@ const Logo = React.forwardRef<HTMLImageElement, LogoProps>(
         data-testid={testId}
         height={30}
         ref={ref}
-        src="/atoaxis-symbol-v2.png"
+        src="/atoaxis-mark.svg"
         width={30}
       />
     );

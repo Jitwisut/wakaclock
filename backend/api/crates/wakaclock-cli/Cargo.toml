@@ -2,6 +2,8 @@
 name = "wakaclock-cli"
 version.workspace = true
 edition.workspace = true
+description = "AtoAxis CLI: privacy-first developer time tracking"
+homepage = "https://www.atoaxis.com"
 
 [[bin]]
 name = "wakaclock"

@@ -188,9 +188,10 @@ jq -cn \
   --arg provider "anthropic" \
   --arg model "$AI_MODEL" \
   --arg tool "$TOOL_NAME" \
+  --arg call_id "$CALL_ID" \
   --argjson lines_added "$LINES_ADDED" \
   --argjson lines_deleted "$LINES_DELETED" \
-  '{client_id:$agent,producer_version:1,provider_id:$provider,model_id:(if $model=="" then null else $model end),event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:(if $project_root=="" then null else $project_root end),change_kind:"modify",session_id:(if $session_id=="" then null else $session_id end),source:"agent_hook",confidence:"verified",lines_added:$lines_added,lines_deleted:$lines_deleted,transport:"native_plugin",tool:$tool,tool_call_id:$event_id}' \
+  '{client_id:$agent,producer_version:1,provider_id:$provider,model_id:(if $model=="" then null else $model end),event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:(if $project_root=="" then null else $project_root end),change_kind:"modify",session_id:(if $session_id=="" then null else $session_id end),source:"agent_hook",confidence:"verified",lines_added:$lines_added,lines_deleted:$lines_deleted,transport:"native_plugin",tool:$tool,tool_call_id:(if $call_id=="" then $event_id else $call_id end)}' \
   | emit_metadata
 
 exit 0

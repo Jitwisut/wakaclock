@@ -8,10 +8,12 @@ export default function manifest(): MetadataRoute.Manifest {
     description: SITE_TAGLINE,
     display: 'standalone',
     icons: [
-      { sizes: '192x192', src: '/atoaxis-symbol-v2.png', type: 'image/png', purpose: 'any' },
+      { sizes: '192x192', src: '/atoaxis-mark-192.png', type: 'image/png', purpose: 'any' },
+      { sizes: '512x512', src: '/atoaxis-mark-512.png', type: 'image/png', purpose: 'any' },
+      { sizes: 'any', src: '/atoaxis-mark.svg', type: 'image/svg+xml', purpose: 'any' },
       {
         sizes: '512x512',
-        src: '/atoaxis-symbol-v2.png',
+        src: '/atoaxis-maskable-512.png',
         type: 'image/png',
         purpose: 'maskable',
       },

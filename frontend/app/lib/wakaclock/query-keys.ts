@@ -158,6 +158,44 @@ export const wakaclockKeys = {
       operatingSystem,
       actorType,
     ] as const,
+  replay: (
+    userId: string,
+    start: string,
+    end: string,
+    timezone?: string,
+    projectId?: string,
+    language?: string,
+    editor?: string,
+    category?: string,
+    source?: string,
+    operatingSystem?: string,
+    actorType?: string
+  ) =>
+    [
+      ...wakaclockKeys.all,
+      'replay',
+      userId,
+      start,
+      end,
+      timezone,
+      projectId,
+      language,
+      editor,
+      category,
+      source,
+      operatingSystem,
+      actorType,
+    ] as const,
+  projectCity: (userId: string, projectId: string, timezone?: string) =>
+    [...wakaclockKeys.all, 'project-city', userId, projectId, timezone] as const,
+  replayEvents: (
+    userId: string,
+    organizationId: string,
+    start: string,
+    end: string,
+    timezone?: string
+  ) =>
+    [...wakaclockKeys.all, 'replay-events', userId, organizationId, start, end, timezone] as const,
   goals: (userId: string) => [...wakaclockKeys.all, 'goals', userId] as const,
   goalProgress: (userId: string, goalId: string) =>
     [...wakaclockKeys.all, 'goal-progress', userId, goalId] as const,

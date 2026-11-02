@@ -16,8 +16,9 @@ Rust API server, crate name `wakaclock-server`. Workspace root:
 | `backend/api/src/middleware/auth.rs` | The only identity resolution path |
 | `backend/api/src/config/mod.rs` | `Config::from_env()` |
 
-`src/interfaces/`, `src/docs/`, `src/model/v1/`, `src/helpers/*` are **not
-compiled** — see [../dead-code.md](../dead-code.md).
+The uncompiled e-commerce template trees that used to sit beside these
+(`src/interfaces/`, `src/docs/`, `src/model/v1/`, `src/helpers/*`) were removed —
+see [../dead-code.md](../dead-code.md).
 
 ## Where new code goes
 

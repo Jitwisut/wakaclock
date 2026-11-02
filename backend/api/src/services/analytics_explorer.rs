@@ -41,7 +41,7 @@ pub struct ExplorerFilters {
 }
 
 impl ExplorerFilters {
-    fn matches(&self, interval: &CanonicalInterval) -> bool {
+    pub(crate) fn matches(&self, interval: &CanonicalInterval) -> bool {
         self.project_id
             .is_none_or(|project_id| interval.project_id == Some(project_id))
             && self
@@ -60,7 +60,7 @@ impl ExplorerFilters {
                 .is_none_or(|source| activity_source_matches_filter(&interval.source, source))
     }
 
-    fn applied(&self) -> ExplorerAppliedFilters {
+    pub(crate) fn applied(&self) -> ExplorerAppliedFilters {
         ExplorerAppliedFilters {
             category: self.category.clone(),
             editor: self.editor.clone(),
@@ -154,7 +154,7 @@ fn split_duration<'a>(
     split
 }
 
-fn build_filter_options(intervals: &[CanonicalInterval]) -> ExplorerFilterOptions {
+pub(crate) fn build_filter_options(intervals: &[CanonicalInterval]) -> ExplorerFilterOptions {
     ExplorerFilterOptions {
         actor_types: actor_type_options(intervals.iter()),
         projects: project_options(intervals.iter()),

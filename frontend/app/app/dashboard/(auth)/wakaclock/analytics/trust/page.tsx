@@ -9,10 +9,11 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
+import Link from 'next/link';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { AnalyticsNav } from '@/components/wakaclock/analytics/analytics-nav';
-import { DeliveryStatusNotice } from '@/components/wakaclock/delivery-status-notice';
+import { SYNC_STATUS_HREF } from '@/components/wakaclock/delivery-status-notice';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
@@ -217,7 +218,13 @@ export default function MeasurementTrustPage() {
         title="Measurement Trust"
       />
       <RequireUser>
-        <DeliveryStatusNotice />
+        <p className="text-muted-foreground text-sm">
+          Delivery and queue health moved to{' '}
+          <Link className="text-foreground underline underline-offset-4" href={SYNC_STATUS_HREF}>
+            Sync status
+          </Link>
+          .
+        </p>
         <AnalyticsNav href={(path) => `${path}?start=${start}&end=${end}`} />
         <QueryState error={report.error} isLoading={report.isLoading}>
           {data && (

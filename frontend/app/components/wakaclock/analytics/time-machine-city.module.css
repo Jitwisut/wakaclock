@@ -1,0 +1,271 @@
+.city {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.picker select {
+  max-width: 100%;
+  padding: 6px 8px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-height: 420px;
+  overflow: hidden;
+  background: #0c2230;
+  border: 2px solid #19372d;
+  box-shadow: 6px 6px 0 #19372d;
+}
+.canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: pan-y;
+}
+.canvas:active {
+  cursor: grabbing;
+}
+.hudLeft,
+.hudRight,
+.hudEvent {
+  position: absolute;
+  margin: 0;
+  color: #eef6ea;
+  pointer-events: none;
+  text-shadow: 0 1px 6px rgb(0 0 0 / 60%);
+}
+.hudLeft {
+  top: 14px;
+  left: 18px;
+  max-width: 62%;
+}
+.hudDate {
+  margin: 0;
+  font-size: clamp(22px, 3.6vw, 38px);
+  font-weight: 750;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+.hudLine {
+  margin: 6px 0 0;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.hudRight {
+  top: 14px;
+  right: 18px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  text-align: right;
+}
+.hudRight strong {
+  display: block;
+  font-size: clamp(20px, 3.2vw, 32px);
+  line-height: 1;
+}
+.hudRight span {
+  display: block;
+  margin-top: 4px;
+}
+.hudEvent {
+  bottom: 12px;
+  left: 18px;
+  max-width: calc(100% - 90px);
+  padding: 6px 10px;
+  font-size: 14px;
+  text-shadow: none;
+  background: rgb(6 22 20 / 74%);
+}
+.zoom {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: grid;
+  gap: 6px;
+}
+.zoom button {
+  width: 34px;
+  height: 34px;
+  color: var(--foreground);
+  font-weight: 600;
+  background: var(--card);
+  border: 2px solid #19372d;
+}
+.zoom button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.tip {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  gap: 2px;
+  max-width: 260px;
+  padding: 8px 10px;
+  color: var(--foreground);
+  font-size: 13px;
+  pointer-events: none;
+  background: var(--card);
+  border: 2px solid #19372d;
+}
+.tip b {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.tip span {
+  color: var(--muted-foreground);
+}
+.controls {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+.track {
+  position: relative;
+  height: 10px;
+}
+.track i {
+  position: absolute;
+  top: 1px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  background: var(--muted-foreground);
+}
+.track i[data-tone='success'] {
+  background: var(--chart-2);
+}
+.track i[data-tone='failure'] {
+  background: var(--destructive);
+}
+.track i[data-tone='shrink'] {
+  background: var(--chart-1);
+}
+.scrub {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.row,
+.group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.row {
+  gap: 10px 16px;
+}
+.below {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.card {
+  min-width: 0;
+  padding: 16px 18px;
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+.card h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.scroll {
+  overflow-x: auto;
+}
+.card table {
+  width: 100%;
+  font-size: 14px;
+  border-collapse: collapse;
+}
+.card th {
+  padding: 0 12px 6px 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+.card td {
+  padding: 6px 12px 6px 0;
+  font-variant-numeric: tabular-nums;
+  border-top: 1px solid var(--border);
+}
+.card td button {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.card tr[aria-selected='true'] {
+  background: var(--muted);
+}
+.heat {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border: 1px solid var(--border);
+}
+.files {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  list-style: none;
+}
+.files li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.files span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.files em {
+  color: var(--muted-foreground);
+  font-style: normal;
+}
+.note {
+  margin: 12px 0 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .stage {
+    min-height: 0;
+    aspect-ratio: 4 / 5;
+    box-shadow: 4px 4px 0 #19372d;
+  }
+  .below {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,7 +1,30 @@
 # Phase 01 — Source cursors และ parse engine
 
-สถานะ: **รอ Phase 00 + approval**
-ขึ้นกับ: Phase 00 (A4, A6) · ปลดล็อก: Phase 02–09
+สถานะ: **ทำแล้วใน worktree (2026-10-26) ยังไม่ commit** — ขั้น 4 ใน README
+ขึ้นกับ: Phase 02 (เสร็จแล้ว) · ปลดล็อก: Phase 03–09
+
+## ผลการทำ (2026-10-26)
+
+ต่างจาก design ด้านล่างโดยตั้งใจ (ไฟล์ชุดเดิมตามคำขออนุมัติ):
+- checkpoint ของ SQLite/snapshot เก็บใน `ParserContext.source` (มีที่สร้างตรงๆ 3 จุด) แทนการเพิ่ม field ใน `ParserCursor`
+  (มีที่สร้างตรงๆ 43 จุด); JSON ของ cursor เดิมอ่านได้เหมือนเดิม
+- gate เป็น method `AdapterRuntime::emits_edit_heartbeats()` ไม่เพิ่ม field ใน catalog (ไม่เปลี่ยน schema `catalog-v1.json`)
+- งบเวลา SQLite ใช้ `InterruptHandle` + watchdog thread แทน `progress_handler` (`rusqlite` ไม่ได้เปิด feature `hooks`; ไม่แตะ `Cargo.toml`)
+- `is_reusable` / `seed_at_head` เป็น method ของ trait (`cursor_is_reusable`, `seed_at_head`) ค่า default = พฤติกรรม JSONL เดิม
+- คำสั่งรายงาน dry-run ยกไป Phase 10 (รอบนี้เก็บข้อมูลอย่างเดียว)
+
+ไฟล์ใหม่: `core/src/ai/{source,sqlite_source,snapshot_source,parser_registry}.rs`
+ไฟล์ที่แก้: `core/src/ai/{parser,state,adapter,claude,codex,gemini,mod}.rs`, `cli/src/main.rs`
+(`supported_ai_parsers` → registry, `run_ai_sync` ใช้ trait method + `catch_parser_panic` + gate `keep_edits_as_dry_run`, prune ตารางใหม่)
+
+หลักฐาน: `cargo test -p wakaclock-core` 432 + 12 + 1 ผ่าน; `-p wakaclock-cli` 108 + 7 + 8 + 44 ผ่าน;
+clippy `-D warnings` ผ่าน; rustfmt ไฟล์/ส่วนของงานนี้ผ่าน; integration ผ่านทุก scenario ยกเว้น Cursor scaffold 2 ตัว
+(ล้มตั้งแต่ก่อนแก้). test ใหม่ครอบคลุม: cursor รุ่นเก่า, record hash, dry-run idempotent/ไม่เก็บ path, registry/gate,
+panic → error, SQLite (batch, row limit, unchanged, missing, WAL ที่ writer เปิดค้าง, lock ข้ามภายใน 2s,
+interrupt เมื่อเกินงบ, checksum ไม่เปลี่ยน, เขียนไม่ได้), snapshot (unchanged/too large, rewrite ส่งเฉพาะ record ใหม่/เปลี่ยน)
+
+ยังไม่ได้ทำ: dry-run เทียบก่อน/หลังกับ transcript จริงในเครื่อง (ย้ายไปขั้นทดสอบรวม); ยังไม่มี parser ตัวไหนใช้
+`sqlite_source`/`snapshot_source` จริง (เริ่มใช้ใน Phase 04–08)
 
 ## เป้าหมาย
 
@@ -132,7 +155,21 @@ fn parse_usage(&self, ctx: &ParseContext, cursor: Option<&ParserCursor>)
 - ส่งผ่าน `POST /api/v1/ai/usage` (`AiUsageRecord`) ตามเดิม idempotent ด้วย `usage_event_id`
 - ไม่เปลี่ยน wire format
 
-### 9. Panic isolation
+### 9. Gate "ส่ง edit heartbeat" ต่อ adapter (ตาม Q9 / ผล Phase 00 A6)
+
+- heartbeat ทุกแถวเป็น anchor ที่นับเวลาได้แม้ `active_seconds=0` จึงต้องมี gate ต่อ adapter:
+  `emit_edit_heartbeats: bool` ใน manifest (`core/src/ai/adapter.rs`) — **ค่าเริ่ม `false`** สำหรับ parser ใหม่ทุกตัว
+- `false` → `run_ai_sync` ส่งแค่ usage (`/api/v1/ai/usage`) และเก็บ edit ที่ "จะส่ง" ไว้ในเครื่องเพื่อใช้ทำหลักฐาน Phase 11
+- `true` เฉพาะ Claude Code / Codex / Gemini CLI (ส่ง edit อยู่แล้วก่อนแผนนี้ ไม่เปลี่ยนพฤติกรรม)
+- การเปลี่ยนเป็น `true` ของ adapter ใหม่ = คำขออนุมัติแยกใน Phase 11
+
+### 10. ที่เก็บ edit แบบ dry-run
+
+- ตารางใหม่ใน `state.rs`: `dry_run_edits(parser_id, event_id, occurred_at, path_hash, lines_added, lines_deleted, model)`
+  ไม่เก็บ path ตรงๆ และไม่เก็บเนื้อหา prune 30 วัน
+- `wakaclock ai dry-run-report --agent <id> --days 7` สรุปจำนวน edit/บรรทัด และ timestamp สำหรับจำลองยอดเวลาแบบ offline
+
+### 11. Panic isolation
 
 - ห่อทุกการเรียก `parse_since` และ `parse_usage` ด้วย `std::panic::catch_unwind(AssertUnwindSafe(..))`
 - panic = บันทึก warning `parser_panic` ใน diagnostics, ไม่ขยับ cursor, ไปต่อ parser ถัดไป

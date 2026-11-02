@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { AiSourcesUnsupportedError, parseAiSources } from "./aiSources";
+import type { AiSourceSummary } from "./aiSources";
 import type {
     ApiKeySyncResult,
     ActivitySegment,
@@ -179,6 +181,8 @@ export class WakaclockCliService {
             if (response.schema_version !== 1 || response.scope_id !== scopeId || !Array.isArray(response.results) || response.results.length !== items.length) throw new Error("durable_ack_invalid");
             for (const outcome of response.results) {
                 if (!expected.delete(outcome.heartbeat_id) || !["accepted", "duplicate", "recoverable_rejection", "permanent_rejection"].includes(outcome.status)) throw new Error("durable_ack_invalid");
+                // The CLI serializes a missing code as null; treat it exactly like an absent field.
+                if (outcome.error_code === null) delete outcome.error_code;
                 if (outcome.error_code !== undefined && (typeof outcome.error_code !== "string" || !/^[a-z0-9_]{1,80}$/.test(outcome.error_code))) throw new Error("durable_ack_invalid");
             }
             results.push(...response.results);
@@ -716,6 +720,25 @@ export class WakaclockCliService {
             throw new Error("wakaclock ai doctor returned an unsupported diagnostics snapshot");
         }
         return snapshot;
+    }
+
+    /** The local AI tools whose logs the CLI reads (`wakaclock ai sources list`). */
+    public async listAiSources(): Promise<AiSourceSummary[]> {
+        try {
+            const result = await this.runCli(["ai", "sources", "list", "--json"]);
+            return parseAiSources(result.stdout);
+        } catch (error) {
+            throw isUnsupportedArgument(error) ? new AiSourcesUnsupportedError() : error;
+        }
+    }
+
+    /** Turn reading one tool's local logs on or off. */
+    public async setAiSourceEnabled(agent: string, enabled: boolean): Promise<void> {
+        try {
+            await this.runCli(["ai", "sources", enabled ? "enable" : "disable", agent, "--json"]);
+        } catch (error) {
+            throw isUnsupportedArgument(error) ? new AiSourcesUnsupportedError() : error;
+        }
     }
 
     /** Retained for API compatibility with older extension callers. */

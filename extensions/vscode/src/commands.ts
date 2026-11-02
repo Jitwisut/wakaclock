@@ -3,6 +3,7 @@ import * as os from "node:os";
 import { writeHookConsentState } from "./agentSetup";
 import type { AiAgentId, AiAgentSetupResult, AiAgentStatus } from "./agentSetup";
 import { formatAiDetectionReport, runAiDetectionSelfTest } from "./aiDetectionSelfTest";
+import { manageAiSources } from "./aiSources";
 import type { HeartbeatBufferManager } from "./buffer";
 import type { WakaclockCliService } from "./cli";
 import type { WakaclockConfigService } from "./config";
@@ -90,6 +91,8 @@ export function registerCommands(
     | "getStatus"
     | "getBrokerStatus"
     | "getAiDiagnosticsSnapshot"
+    | "listAiSources"
+    | "setAiSourceEnabled"
   >,
   bufferManager: Pick<HeartbeatBufferManager, "flushCurrentEditor">,
   statusBar: Pick<StatusBarController, "applyVisibility" | "refresh">,
@@ -152,7 +155,9 @@ export function registerCommands(
     }),
     vscode.commands.registerCommand("wakaclock.setApiKey", async () => {
       const value = await vscode.window.showInputBox({
-        prompt: "API key generated from the AtoAxis dashboard (Settings → API key)",
+        prompt:
+          "API key generated from the AtoAxis dashboard (Settings → API key). " +
+          "Don't have a key? Join Early Access at https://www.atoaxis.com/join",
         placeHolder: "wcl_...",
         password: true,
         ignoreFocusOut: true
@@ -264,6 +269,16 @@ export function registerCommands(
         );
       }
     }),
+    vscode.commands.registerCommand("wakaclock.manageAiSources", async () => {
+      await manageAiSources({
+        listAiSources: () => cliService.listAiSources(),
+        setAiSourceEnabled: (agent, enabled) => cliService.setAiSourceEnabled(agent, enabled),
+        pick: (items, placeHolder) =>
+          Promise.resolve(vscode.window.showQuickPick(items, { placeHolder, matchOnDescription: true })),
+        showInformation: (message) => Promise.resolve(vscode.window.showInformationMessage(message)),
+        showError: (message) => Promise.resolve(vscode.window.showErrorMessage(message)),
+      });
+    }),
     vscode.commands.registerCommand("wakaclock.showBrokerStatus", async () => {
       try {
         const status = await cliService.getBrokerStatus();
@@ -281,9 +296,12 @@ export function registerCommands(
         );
       }
     }),
-    vscode.commands.registerCommand("wakaclock.setupAiTracking", async () => {
-      return setupAiTracking(aiIntegrations, cliService, context);
-    }),
+    vscode.commands.registerCommand(
+      "wakaclock.setupAiTracking",
+      async (options?: { agents?: AiAgentId[] }) => {
+        return setupAiTracking(aiIntegrations, cliService, context, false, options?.agents);
+      }
+    ),
     vscode.commands.registerCommand("wakaclock.repairAiIntegrations", async () => {
       return setupAiTracking(aiIntegrations, cliService, context, true);
     }),
@@ -319,10 +337,15 @@ async function setupAiTracking(
     | "getBrokerStatus"
   >,
   context: vscode.ExtensionContext,
-  repairing = false
+  repairing = false,
+  preselected?: AiAgentId[]
 ): Promise<boolean> {
   try {
-    const selectedIds = await chooseAiAgents(aiIntegrations, context, repairing);
+    // "Enable all" from the activation prompt is the user's confirmation for the
+    // tools it named; anything not currently detected is dropped, never installed.
+    const selectedIds = preselected?.length
+      ? await detectedAmong(aiIntegrations, preselected)
+      : await chooseAiAgents(aiIntegrations, context, repairing);
     if (!selectedIds || selectedIds.length === 0) {
       return false;
     }
@@ -375,6 +398,16 @@ async function setupAiTracking(
     );
     return false;
   }
+}
+
+async function detectedAmong(
+  aiIntegrations: AiIntegrationController,
+  ids: AiAgentId[],
+): Promise<AiAgentId[]> {
+  const detected = new Set(
+    (await aiIntegrations.getStatus()).filter((status) => status.detected).map((status) => status.id),
+  );
+  return ids.filter((id) => detected.has(id));
 }
 
 /** Ask per detected tool; no integration is changed until the user confirms. */

@@ -30,12 +30,19 @@ import type { BloomEffect } from 'postprocessing';
 /** Below this monitor factor (sustained slow frames) the bloom pass is dropped. */
 const BLOOM_MIN_FACTOR = 0.5;
 
-/** Marks the scene ready after its first rendered frame, so the still can fade out. */
+/** Seconds of motion the scene's clock starts with, so every cycle opens mid-flight. */
+const WARM_START_SECONDS = 3600;
+
+/**
+ * Marks the scene ready after its first rendered frame, so the still can fade out, and
+ * moves its clock on: the code and the helix are mid-cycle, as if long under way.
+ */
 function FirstFrame() {
   const done = useRef(false);
-  useFrame(() => {
+  useFrame(({ clock }) => {
     if (done.current) return;
     done.current = true;
+    clock.elapsedTime += WARM_START_SECONDS;
     setTimeUi({ sceneStatus: 'ready' });
   });
   return null;

@@ -2,6 +2,7 @@
   "name": "@atoaxis/kilo-code",
   "version": "0.1.0",
   "description": "Metadata-only AtoAxis producer for Kilo Code CLI and VS Code",
+  "homepage": "https://www.atoaxis.com",
   "type": "module",
   "main": "./src/plugin.ts",
   "exports": {

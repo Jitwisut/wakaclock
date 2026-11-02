@@ -1,8 +1,24 @@
 # Phase 06 — VS Code extension family (Cline, Roo, Kilo, IBM Bob, Cody)
 
-สถานะ: **รอ Phase 05 + approval** (เจ้าของต้องติดตั้ง extension ตาม D4)
-Tier: 2 · ขึ้นกับ: Phase 01, 02, `vscode_storage.rs` จาก Phase 05
-ทำขนานกับ Phase 07/08 ได้
+สถานะ: **ขั้น 8a ทำแล้ว (2026-10-26)** ภายใต้การอนุมัติแบบรวมขั้น 7–9
+
+## ผลการทำ (2026-10-26)
+
+| Tool | ผล |
+|---|---|
+| Cline, Roo Code, Kilo Code | ✅ parser ร่วม `ui_messages.rs` ลงทะเบียนแล้ว (Kilo ยังใช้ runtime `KiloCode` ของ plugin; usage only) |
+| IBM Bob | ✅ ลงทะเบียนในขั้น 8b (manifest transcript-only) — ข้อสันนิษฐานเดิมว่าจะกระทบ verifier ผิด |
+| Cody | ✘ Unsupported — ไม่มี record การแก้ไฟล์ราย edit (ต้องเดาจาก diff ของ context file ซึ่งขัดหลัก accuracy-first) |
+
+ที่ทำ: `fields.rs` (helper อ่าน JSON แบบยืดหยุ่น), `ui_messages.rs`, `SourceCheckpoint::JsonSnapshot.seen_through_ms`
+(ใช้ข้ามประวัติเก่าตอนค้นพบครั้งแรกสำหรับไฟล์ที่ถูกเขียนทับ), registry, `CAPABILITIES.md`
+ไม่มีข้อมูลจริงในเครื่อง (ไม่ได้ติดตั้ง extension ตัวใด) — schema จากข้อเท็จจริงสาธารณะ, test ใช้ไฟล์สังเคราะห์
+
+หลักฐาน: core 464 + 12 + 1 ผ่าน (ui_messages 7: edit + บรรทัด SEARCH/REPLACE/unified/content, read ไม่นับ,
+rewrite แล้ว ID เดิม, seed ข้ามประวัติ, usage เฉพาะที่นิ่งแล้ว, ค้นหาโฟลเดอร์แบบไม่สนตัวพิมพ์, marker ลับไม่หลุด);
+cli 108 + 7 + 8 + 44 ผ่าน; clippy, rustfmt ผ่าน; integration ผ่าน (ยกเว้น Cursor hook scaffold 2 ตัวเดิม)
+
+ยังไม่ได้ทำ: ตรวจว่า edit ที่ผู้ใช้ปฏิเสธถูกบันทึกอย่างไร; model/prompt count; แปลง path relative
 
 ## เป้าหมาย
 
@@ -118,10 +134,10 @@ struct UiMessagesProfile {
 
 1. ไฟล์: ตามหัวข้อ "ไฟล์"
 2. ทำ: parser ร่วม `ui_messages.json` 4 profile + Cody
-3. ผล: Tier 2 ห้าตัวได้ edit + token (เริ่ม time-neutral)
+3. ผล: Tier 2 ห้าตัวได้ token ทันที; edit เก็บแบบ dry-run จนกว่าจะ certify (time-neutral)
 4. ความเสี่ยง: นับ edit ที่ถูก reject, ซ้ำกับ Kilo plugin/Roo bridge, prompt หลุด
 5. หลักฐาน: tests + live cert
-- Baseline: time-neutral → ผลต่อเวลา 0%
+- Baseline: time-neutral = ส่งแค่ usage (`emit_edit_heartbeats=false`, [Phase 01 ข้อ 9](phase-01-source-cursors-and-engine.md)); edit เก็บแบบ dry-run จนกว่า Phase 11 อนุมัติ → ผลต่อเวลา 0%
 
 ## Exit criteria
 

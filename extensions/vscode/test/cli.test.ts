@@ -67,6 +67,12 @@ describe("WakaclockCliService", () => {
       await expect(service.acceptJournalBatch("scope",[{entity:"/project/a.ts",heartbeat_id:"keep",time:1}])).rejects.toThrow("durable_ack_invalid");
     }
   });
+  it("accepts the CLI's null error_code for accepted and duplicate ACKs", async () => {
+    spawnMock.mockImplementation(() => mockChild({stdout:JSON.stringify({schema_version:1,scope_id:"scope",results:[{heartbeat_id:"a",status:"accepted",error_code:null},{heartbeat_id:"b",status:"duplicate",error_code:null}]})}));
+    const service=new WakaclockCliService(createConfig,new Logger(() => false));
+    const results=await service.acceptJournalBatch("scope",[{entity:"/project/a.ts",heartbeat_id:"a",time:1},{entity:"/project/a.ts",heartbeat_id:"b",time:2}]);
+    expect(results).toEqual([{heartbeat_id:"a",status:"accepted"},{heartbeat_id:"b",status:"duplicate"}]);
+  });
   it("splits recovery into batches of 100 while preserving every identity", async () => {
     const service=new WakaclockCliService(createConfig,new Logger(() => false));
     const run=vi.spyOn(service as any,"runCli").mockImplementation(async (_args:any,stdin:any) => {

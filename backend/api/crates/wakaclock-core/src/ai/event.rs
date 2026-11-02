@@ -39,6 +39,14 @@ pub const KNOWN_AGENT_IDS: &[&str] = &[
     "cline",
     "roo-code",
     "opencode",
+    // Transcript-only parsers (usage only until certified). The server must know an
+    // ID before clients send it, so these ship server-first.
+    "qwen-code",
+    "pi",
+    "kiro",
+    "factory-droid",
+    "ibm-bob",
+    "qoder",
     "generic-mcp",
     "chatgpt-mcp",
 ];
@@ -239,6 +247,18 @@ mod tests {
         assert!(is_known_agent_id("Cursor Agent"));
         assert!(!is_known_agent_id("verify-declared"));
         assert!(!is_known_agent_id("unknown-agent"));
+    }
+
+    #[test]
+    fn every_registered_parser_can_be_named() {
+        for registered in crate::ai::builtin_parsers() {
+            assert!(
+                is_known_agent_id(registered.id),
+                "{} is parsed but not a known agent ID",
+                registered.id
+            );
+            assert_eq!(normalize_agent_id(registered.id), registered.id);
+        }
     }
 
     #[test]

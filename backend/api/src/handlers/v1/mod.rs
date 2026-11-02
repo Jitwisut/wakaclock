@@ -21,11 +21,13 @@ pub mod keystroke_stats;
 pub mod orgs;
 pub mod presence;
 pub mod project_analytics;
+pub mod project_city;
 pub mod project_identity;
 pub mod project_merges;
 pub mod project_rules;
 pub mod projects;
 pub mod repair;
+pub mod replay;
 pub mod reprocess;
 pub mod stats;
 pub mod status_bar;
@@ -248,6 +250,8 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         )
         .route("/dashboard/analytics", get(dashboard_analytics::overview))
         .route("/dashboard/explorer", get(analytics_explorer::get))
+        .route("/dashboard/replay", get(replay::get))
+        .route("/dashboard/city", get(project_city::get))
         .route(
             "/users/current/api_key",
             get(api_key::current)

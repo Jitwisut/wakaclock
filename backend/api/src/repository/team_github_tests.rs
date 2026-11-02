@@ -651,3 +651,170 @@ async fn github_binding_queue_context_and_revocation() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires isolated POSTGRES_TEST_URL"]
+async fn own_replay_work_returns_only_the_members_verified_pull_requests() {
+    let url = std::env::var("POSTGRES_TEST_URL").expect("isolated database required");
+    assert_eq!(
+        url.parse::<tokio_postgres::Config>().unwrap().get_dbname(),
+        Some("atoaxis_team_test")
+    );
+    let pg = Arc::new(
+        PostgresClient::connect(&PostgresConfig {
+            url: Some(url),
+            max_connections: 8,
+        })
+        .await
+        .unwrap(),
+    );
+    pg.migrate().await.unwrap();
+    let store = GithubRepositoryStore::new(pg.clone());
+    let (org, other_org) = (Uuid::now_v7(), Uuid::now_v7());
+    let (user, colleague) = (Uuid::now_v7(), Uuid::now_v7());
+    let seed = (user.as_u128() % 1_000_000_000) as i64 + 1;
+    let (user_github, colleague_github) = (seed + 1, seed + 2);
+    let project = Uuid::now_v7();
+    for id in [user, colleague] {
+        pg.execute(
+            "INSERT INTO users(id,username) VALUES($1,$2)",
+            &[&id, &id.to_string()],
+        )
+        .await
+        .unwrap();
+    }
+    for id in [org, other_org] {
+        pg.execute(
+            "INSERT INTO organizations(id,slug,name) VALUES($1,$2,'isolated replay test')",
+            &[&id, &id.to_string()],
+        )
+        .await
+        .unwrap();
+        for member in [user, colleague] {
+            pg.execute("INSERT INTO organization_members(organization_id,user_id,role,seat_type) VALUES($1,$2,'owner','developer')",&[&id,&member]).await.unwrap();
+        }
+        pg.execute("INSERT INTO team_rollouts(organization_id,enabled) VALUES($1,true) ON CONFLICT(organization_id) DO UPDATE SET enabled=true",&[&id]).await.unwrap();
+    }
+    let repos = [GithubRepository {
+        id: seed,
+        node_id: "replay-node".into(),
+        full_name: "fixture/replay".into(),
+        default_branch: Some("main".into()),
+        permissions: None,
+    }];
+    store
+        .select(user, org, seed, 1, "fixture", &repos, None)
+        .await
+        .unwrap();
+    let repo: Uuid = pg
+        .query_one(
+            "SELECT repository_id FROM team_repository_scopes WHERE organization_id=$1",
+            &[&org],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let now = Utc::now();
+    let (start, end) = (now - chrono::Duration::days(7), now);
+    let retained = now - chrono::Months::new(12);
+
+    let read = |member: Uuid| {
+        let store = &store;
+        async move {
+            store
+                .own_replay_work(org, member, start, end, retained)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(read(user).await.is_none(), "no verified identity yet");
+
+    pg.execute(
+        "INSERT INTO team_github_identities(user_id,github_user_id,login) VALUES($1,$2,'me'),($3,$4,'colleague')",
+        &[&user, &user_github, &colleague, &colleague_github],
+    )
+    .await
+    .unwrap();
+    assert!(read(user).await.unwrap().0.is_empty());
+
+    let sha = "a".repeat(40);
+    let opened = now - chrono::Duration::days(1);
+    for (external, number, author, head) in [
+        (seed + 10, 1, user_github, Some(sha.as_str())),
+        (seed + 11, 2, colleague_github, None),
+    ] {
+        pg.execute("INSERT INTO team_work_items(organization_id,repository_id,external_id,kind,number,state,author_github_id,opened_at,provider_updated_at,head_sha) VALUES($1,$2,$3,'pull_request',$4,'open',$5,$6,$6,$7)",&[&org,&repo,&external,&number,&author,&opened,&head]).await.unwrap();
+    }
+    // Not bound to a project: the pull request must stay out even though the author matches.
+    assert!(read(user).await.unwrap().0.is_empty());
+
+    pg.execute(
+        "INSERT INTO team_member_project_bindings(organization_id,user_id,project_id,repository_id) VALUES($1,$2,$3,$4)",
+        &[&org, &user, &project, &repo],
+    )
+    .await
+    .unwrap();
+    pg.execute(
+        "INSERT INTO team_github_facts(organization_id,repository_id,kind,external_id,occurred_at,metadata) VALUES($1,$2,'check_run','webhook-1',$3,$4)",
+        &[
+            &org,
+            &repo,
+            &opened,
+            &serde_json::json!({"head_sha": sha, "status": "completed", "conclusion": "success", "at": opened}),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let (items, facts) = read(user).await.unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "a colleague's pull request is never returned"
+    );
+    assert_eq!(items[0].number, 1);
+    assert_eq!(items[0].project_ids, vec![project]);
+    assert_eq!(items[0].repository, "fixture/replay");
+    assert_eq!(facts.len(), 1, "a webhook check joins through its head SHA");
+
+    assert!(read(colleague).await.unwrap().0.is_empty(), "no binding");
+    assert!(store
+        .own_replay_work(other_org, user, start, end, retained)
+        .await
+        .unwrap()
+        .unwrap()
+        .0
+        .is_empty());
+
+    let past = store
+        .own_replay_work(
+            org,
+            user,
+            start - chrono::Duration::days(30),
+            opened - chrono::Duration::hours(1),
+            retained,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(past.0.is_empty(), "opened after the range");
+
+    pg.execute(
+        "UPDATE team_repository_scopes SET enabled=false WHERE organization_id=$1",
+        &[&org],
+    )
+    .await
+    .unwrap();
+    assert!(
+        read(user).await.unwrap().0.is_empty(),
+        "repository disabled"
+    );
+
+    pg.execute(
+        "UPDATE team_github_identities SET revoked_at=now() WHERE user_id=$1",
+        &[&user],
+    )
+    .await
+    .unwrap();
+    assert!(read(user).await.is_none(), "revoked identity");
+}

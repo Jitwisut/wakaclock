@@ -1,5 +1,7 @@
 # AtoAxis AI agent integrations
 
+Website: <https://www.atoaxis.com>
+
 Sends real AtoAxis coding-time heartbeats whenever an AI coding agent (Claude Code,
 Codex CLI, Gemini CLI, Kilo Code or Kimi Code CLI) edits a file — attributed to that agent, not silently merged
 into your own human coding time. This does **not** depend on an editor being open or
@@ -22,7 +24,8 @@ deprecated `is_ai_generated` compatibility field from that enum at heartbeat cre
 `~/.wakaclock/cli-path` (written by the VS Code setup wizard), so the binary does not
 have to be on the AI tool's own `PATH`. This requires the `wakaclock` binary and a saved API key
 (`wakaclock config set-key <key>`, from the dashboard's Settings → API key) already
-working — see the repo root README's Quick Start if that isn't set up yet.
+working — see the repo root README's Quick Start if that isn't set up yet. Don't have a key?
+Join Early Access at <https://www.atoaxis.com/join>.
 
 The VS Code extension bundles these files, detects the corresponding CLIs and offers
 `AtoAxis: Set Up AI Tracking`. The setup writes only its own managed hook block and

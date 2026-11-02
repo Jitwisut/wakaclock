@@ -1,7 +1,31 @@
 # Phase 05 — GitHub Copilot (VS Code + CLI)
 
-สถานะ: **รอ Phase 04 + approval** (ต้องได้คำตอบ Q1 เรื่อง `copilot` / `copilot-cli`)
-Tier: 1 · ขึ้นกับ: Phase 01 (snapshot + SQLite), Phase 02
+สถานะ: **ทำแล้วใน worktree (2026-10-26) ยังไม่ commit** — ขั้น 5 ใน README
+Q1 ตอบแล้ว: agent ID เดียว `copilot` + แยกด้วย `producer_surface` (`vscode` / `cli`)
+
+## ผลการทำ (2026-10-26)
+
+สิ่งที่พบในเครื่องเจ้าของ (key-only): VS Code รุ่นใหม่เขียน transcript JSONL ที่
+`workspaceStorage/<hash>/GitHub.copilot-chat/transcripts/*.jsonl` (`session.start`, `user.message`,
+`assistant.message` + `toolRequests`, `assistant.turn_start/turn_end`) — รูปแบบเดียวกับ CLI `events.jsonl`;
+แต่ยังไม่มี edit จริงเลย (`chatEditingSessions` 57 ไฟล์ `operations` ว่าง, `chatSessions` 2 request ไม่มี edit)
+
+ที่ทำ:
+- `core/src/ai/copilot.rs`: parser ตัวเดียวอ่านทั้ง VS Code (Code / Insiders / VSCodium, macOS/Windows/Linux) และ CLI;
+  edit = tool request ที่ระบุไฟล์ + completion ที่สำเร็จ; ถือ cursor ไว้ที่ request ที่ยังรอ completion (ไม่เกิน 10 นาที
+  นับจาก record ล่าสุดในไฟล์); usage = token ที่ event รายงาน + จำนวน/ความยาว prompt
+- registry เลือก parser ด้วย id `copilot` โดย **runtime ใน catalog ยังเป็น `None`** (ต่างจากคำขอ: การเพิ่ม variant
+  ต้องแก้ `match` ใน `cli/src/ai_setup.rs` ซึ่งอยู่นอก scope) → setup/install/catalog JSON ไม่เปลี่ยน และ `None` ส่งได้แค่ usage
+- `adapter.rs`: เพิ่มเฉพาะ `transcript_roots` ของ manifest `copilot`; `CAPABILITIES.md`: ตารางความสามารถ/ข้อจำกัด
+- fixture `fixtures/copilot/agent_edit_session.jsonl` เป็น **สังเคราะห์** (README อธิบายส่วนที่ยืนยันแล้ว/ที่สมมติ)
+
+หลักฐาน: core 441 + 12 + 1 ผ่าน (copilot 9 test: edit/สร้างไฟล์/อ่านไม่นับ/ล้มไม่นับ, รอ completion, session/model ข้ามรอบ,
+surface vscode/cli, discovery, usage, marker ลับไม่หลุด, บรรทัดที่ยังเขียนไม่จบ); cli 108 + 7 + 8 + 44 ผ่าน; clippy ผ่าน;
+rustfmt ผ่าน; integration ผ่าน (ยกเว้น Cursor scaffold 2 ตัวเดิม). test จับ bug ได้หนึ่งข้อ: path VS Code มี
+`GitHub.copilot-chat` ซึ่งมีคำว่า `.copilot` → เคยถูกตีเป็น CLI แก้แล้ว + regression test
+
+ยังไม่ได้ทำ: อ่าน `chatSessions` (patch log ที่มี `modelId`/token) และ `chatEditingSessions`; ยืนยันชื่อ field ของ
+tool execution กับไฟล์จริง (ขั้นทดสอบรวม: ใช้ Copilot Agent mode แก้ไฟล์จริงอย่างน้อย 1 ครั้ง)
 
 ## เป้าหมาย
 
@@ -97,11 +121,11 @@ session ตามสคริปต์มาตรฐาน + กรณี rejec
 
 1. ไฟล์: ตามหัวข้อ "ไฟล์"
 2. ทำ: parser Copilot VS Code (snapshot + patch log + traces db) และ Copilot CLI (JSONL + db)
-3. ผล: Copilot ได้ edit + token + model (เริ่ม time-neutral)
+3. ผล: Copilot ได้ token + model ทันที; edit เก็บแบบ dry-run จนกว่าจะ certify (time-neutral)
 4. ความเสี่ยง: prompt หลุด (ไฟล์มีข้อความเต็ม), reject ถูกนับ, patch log เล่นผิด, schema เปลี่ยนตาม
    version ของ extension
 5. หลักฐาน: tests + marker test + live cert 3 OS
-- Baseline: time-neutral → ผลต่อเวลา 0%
+- Baseline: time-neutral = ส่งแค่ usage (`emit_edit_heartbeats=false`, [Phase 01 ข้อ 9](phase-01-source-cursors-and-engine.md)); edit เก็บแบบ dry-run จนกว่า Phase 11 อนุมัติ → ผลต่อเวลา 0%
 
 ## Exit criteria
 

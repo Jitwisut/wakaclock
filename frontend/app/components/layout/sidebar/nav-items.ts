@@ -1,7 +1,9 @@
 import {
+  CloudUploadIcon,
   DownloadIcon,
   FolderGit2Icon,
   HeartPulseIcon,
+  HistoryIcon,
   KeyboardIcon,
   LayoutDashboardIcon,
   type LucideIcon,
@@ -83,6 +85,13 @@ export const navItems: NavGroup[] = [
           { title: 'Measurement Trust', href: '/dashboard/wakaclock/analytics/trust' },
         ],
       },
+      {
+        title: 'Time Machine',
+        href: '/dashboard/wakaclock/time-machine',
+        icon: HistoryIcon,
+        isNew: true,
+        requiresFeature: 'time_machine',
+      },
       { title: 'Insights', href: '/dashboard/wakaclock/insights', icon: TrendingUpIcon },
       { title: 'AI Stats', href: '/dashboard/wakaclock/ai', icon: SparklesIcon },
       {
@@ -106,6 +115,7 @@ export const navItems: NavGroup[] = [
         requiresFeature: 'private_leaderboards',
       },
       { title: 'Heartbeats', href: '/dashboard/wakaclock/heartbeats', icon: HeartPulseIcon },
+      { title: 'Sync status', href: '/dashboard/wakaclock/sync', icon: CloudUploadIcon },
       {
         title: 'Import WakaTime',
         href: '/dashboard/wakaclock/import',

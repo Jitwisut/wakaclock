@@ -6,5 +6,6 @@
     "name": "AtoAxis",
     "url": "https://atoaxis.com"
   },
+  "homepage": "https://www.atoaxis.com",
   "hooks": "./hooks/hooks.json"
 }

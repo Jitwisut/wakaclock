@@ -509,6 +509,33 @@ impl AiUsageRepository {
             .map_err(|e| anyhow::anyhow!("ClickHouse usage verification query error: {e}"))
     }
 
+    /// Session windows overlapping a range, in start order. Bounds match
+    /// `ActivityTimelineService::ai_session_intervals`, so an open session stops at its last
+    /// observed event. These rows are display context, never a duration input.
+    pub async fn session_windows(
+        &self,
+        user_id: Uuid,
+        start: f64,
+        end: f64,
+    ) -> Result<Vec<SessionWindow>> {
+        self.client
+            .get_client()
+            .query(
+                "SELECT started_at, ended_at, last_event_at, ai_agent, primary_model
+                 FROM wakaclock.ai_sessions FINAL
+                 WHERE user_id = ?
+                   AND started_at < toUInt32(?)
+                   AND coalesce(ended_at, last_event_at) > toUInt32(?)
+                 ORDER BY started_at",
+            )
+            .bind(user_id)
+            .bind(end.max(0.0) as u32)
+            .bind(start.max(0.0) as u32)
+            .fetch_all::<SessionWindow>()
+            .await
+            .map_err(|e| anyhow::anyhow!("ClickHouse session window query error: {e}"))
+    }
+
     /// Returns the distinct projects already proven for each touched session. This supports
     /// the conservative allocation rule: an event without an explicit project may inherit the
     /// session's sole project, but a multi-project session remains unattributed rather than
@@ -739,6 +766,15 @@ impl AiUsageRepository {
             .map_err(|e| anyhow::anyhow!("ClickHouse end insert Error: {e}"))?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
+pub struct SessionWindow {
+    pub started_at: u32,
+    pub ended_at: Option<u32>,
+    pub last_event_at: u32,
+    pub ai_agent: String,
+    pub primary_model: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]

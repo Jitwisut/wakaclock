@@ -26,6 +26,7 @@ const EN = {
   hero: {
     eyebrow: EN_HOME.badge,
     headline: EN_HOME.headline,
+    subtitle: EN_HOME.tagline,
     lead: EN_HOME.heroLead,
     primary: EN_X.hero.join,
     secondary: EN_X.hero.compare,
@@ -106,6 +107,7 @@ const TH: TimeCopy = {
   hero: {
     eyebrow: TH_HOME.badge,
     headline: TH_HOME.headline,
+    subtitle: TH_HOME.tagline,
     lead: TH_HOME.heroLead,
     primary: TH_X.hero.join,
     secondary: TH_X.hero.compare,

@@ -1615,12 +1615,256 @@ html.lenis.lenis-smooth {
   }
 }
 
+/* ---------- opening: count to 100, then the letterbox parts ---------- */
+/* Server-rendered over everything. Until scripts take over (data-live) it clears itself
+   after a few seconds, so a page whose JavaScript never runs is not left covered. */
+.tx-root .tx-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  animation: tx-intro-failsafe 0.6s var(--tx-ease) 4.5s forwards;
+}
+
+.tx-root .tx-intro[data-live] {
+  animation: none;
+}
+
+.tx-root .tx-intro[data-phase='loading'] {
+  pointer-events: auto;
+}
+
+/* Two halves of one black frame; they overlap at the middle so no seam shows. */
+.tx-root .tx-intro-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 50.5%;
+  background: #020604;
+}
+
+.tx-root .tx-intro-bar[data-side='top'] {
+  top: 0;
+}
+
+.tx-root .tx-intro-bar[data-side='bottom'] {
+  bottom: 0;
+}
+
+.tx-root .tx-intro[data-phase='reveal'] .tx-intro-bar[data-side='top'] {
+  animation: tx-intro-top 2.1s both;
+}
+
+.tx-root .tx-intro[data-phase='reveal'] .tx-intro-bar[data-side='bottom'] {
+  animation: tx-intro-bottom 2.1s both;
+}
+
+.tx-root .tx-intro-core {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  transition:
+    opacity 0.35s var(--tx-ease),
+    transform 0.5s var(--tx-ease),
+    filter 0.35s var(--tx-ease);
+}
+
+.tx-root .tx-intro[data-phase='reveal'] .tx-intro-core {
+  opacity: 0;
+  filter: blur(6px);
+  transform: scale(0.94);
+}
+
+.tx-root .tx-intro-count {
+  font-family: var(--tx-mono);
+  font-size: clamp(64px, 12vw, 156px);
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--tx-ink);
+  text-shadow: 0 0 42px rgb(195 238 138 / 0.18);
+}
+
+.tx-root .tx-intro-label {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 12px;
+  padding: 0 16px;
+  font-family: var(--tx-mono);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--tx-dim);
+}
+
+/* Wide tracking pulls Thai vowel and tone marks off their letters. */
+.tx-root:lang(th) .tx-intro-label {
+  letter-spacing: 0.04em;
+}
+
+.tx-root .tx-intro-label span {
+  color: var(--tx-lime);
+}
+
+.tx-root .tx-intro-track {
+  display: block;
+  width: min(320px, 64vw);
+  height: 1px;
+  overflow: hidden;
+  background: var(--tx-line-strong);
+}
+
+.tx-root .tx-intro-track span {
+  display: block;
+  height: 100%;
+  background: var(--tx-lime);
+  box-shadow: 0 0 12px var(--tx-lime);
+  transform-origin: left;
+}
+
+/* The light that splits the frame open, along the seam between the bars. */
+.tx-root .tx-intro-flare {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 2px;
+  margin-top: -1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--tx-lime) 30%,
+    #fff 50%,
+    var(--tx-lime) 70%,
+    transparent
+  );
+  box-shadow: 0 0 24px 2px rgb(195 238 138 / 0.55);
+  opacity: 0;
+  transform: scaleX(0);
+}
+
+.tx-root .tx-intro[data-phase='reveal'] .tx-intro-flare {
+  animation: tx-intro-flare 1.1s var(--tx-ease) 0.12s both;
+}
+
+/* Behind the curtain the stage waits close and dim; as the bars part the camera pulls
+   back to its frame and the light comes up. */
+.tx-root[data-intro='loading'] .tx-stage {
+  filter: brightness(0.32) saturate(0.7);
+  transform: scale(1.14);
+}
+
+.tx-root[data-intro='reveal'] .tx-stage {
+  transition:
+    transform 2.8s cubic-bezier(0.16, 0.84, 0.24, 1),
+    filter 1.9s var(--tx-ease) 0.2s;
+}
+
+/* The scene replaces the still while it is covered, so the hand-off is quick there. */
+.tx-root[data-intro='loading'] .tx-canvas,
+.tx-root[data-intro='loading'] .tx-still {
+  transition-duration: 0.3s;
+}
+
+/* The hero's entrance plays again, after the opening shot, under its own name so the
+   change restarts it. */
+.tx-root:is([data-intro='reveal'], [data-intro='done']) .tx-hero [data-reveal] {
+  animation: tx-rise-intro 1.2s var(--tx-ease) 1.05s both;
+}
+
+.tx-root:is([data-intro='reveal'], [data-intro='done']) .tx-hero .tx-col > :nth-child(2) {
+  animation-delay: 1.13s;
+}
+
+.tx-root:is([data-intro='reveal'], [data-intro='done']) .tx-hero .tx-col > :nth-child(3) {
+  animation-delay: 1.25s;
+}
+
+.tx-root:is([data-intro='reveal'], [data-intro='done']) .tx-hero .tx-col > :nth-child(n + 4) {
+  animation-delay: 1.37s;
+}
+
+.tx-root:is([data-intro='reveal'], [data-intro='done']) .tx-hero .tx-line:last-child {
+  animation-delay: 1.21s;
+}
+
+@keyframes tx-intro-top {
+  0% {
+    transform: translateY(0);
+    animation-timing-function: cubic-bezier(0.7, 0, 0.2, 1);
+  }
+  42%,
+  64% {
+    transform: translateY(calc(-100% + 11vh));
+    animation-timing-function: cubic-bezier(0.6, 0, 0.3, 1);
+  }
+  100% {
+    transform: translateY(-101%);
+  }
+}
+
+@keyframes tx-intro-bottom {
+  0% {
+    transform: translateY(0);
+    animation-timing-function: cubic-bezier(0.7, 0, 0.2, 1);
+  }
+  42%,
+  64% {
+    transform: translateY(calc(100% - 11vh));
+    animation-timing-function: cubic-bezier(0.6, 0, 0.3, 1);
+  }
+  100% {
+    transform: translateY(101%);
+  }
+}
+
+@keyframes tx-intro-flare {
+  0% {
+    opacity: 0;
+    transform: scaleX(0);
+  }
+  30% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes tx-rise-intro {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+    transform: translateY(26px);
+  }
+}
+
+@keyframes tx-intro-failsafe {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tx-root *,
   .tx-root *::before,
   .tx-root *::after {
     animation: none !important;
     transition: none !important;
+  }
+
+  /* No opening: the page is there at once. */
+  .tx-root .tx-intro {
+    display: none;
   }
 
   .tx-root[data-scroll='ready'] .tx-chapter:not(.tx-hero, [data-inview]) [data-reveal],

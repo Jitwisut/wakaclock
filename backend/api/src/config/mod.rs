@@ -119,6 +119,9 @@ pub struct Config {
     /// Personal experimental receipts; independent of capture and analytics ingestion.
     #[serde(default)]
     pub work_sessions_enabled: bool,
+    /// Personal replay of the canonical timeline. Read-only; adds no duration input.
+    #[serde(default)]
+    pub time_machine_enabled: bool,
     /// Receiver rollout only; each organization must independently opt into Team.
     #[serde(default)]
     pub team_enabled: bool,
@@ -255,6 +258,10 @@ impl Config {
             work_sessions_enabled: parse_opt_in_feature_flag(
                 std::env::var("ATOAXIS_WORK_SESSIONS_ENABLED").ok(),
                 "ATOAXIS_WORK_SESSIONS_ENABLED",
+            )?,
+            time_machine_enabled: parse_opt_in_feature_flag(
+                std::env::var("ATOAXIS_TIME_MACHINE_ENABLED").ok(),
+                "ATOAXIS_TIME_MACHINE_ENABLED",
             )?,
             team_enabled: parse_opt_in_feature_flag(
                 std::env::var("ATOAXIS_TEAM_ENABLED").ok(),

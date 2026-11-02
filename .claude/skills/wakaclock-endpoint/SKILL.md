@@ -11,9 +11,11 @@ description: Add or change a backend HTTP endpoint, handler, service, or reposit
 
 1. **Run cargo from `backend/api`, never the repo root.** The root `Cargo.toml`
    is broken.
-2. **Check the module is reachable first.** ~150 files under `backend/api/src`
-   are not compiled (`interfaces/`, `docs/`, `model/v1/`, `helpers/*`,
-   `handlers/v1/handler.rs`). Never copy their patterns —
+2. **Check the module is reachable first.** The uncompiled e-commerce template
+   trees (`interfaces/`, `docs/`, `model/v1/`, `helpers/*`,
+   `handlers/v1/handler.rs`) were removed; old commits still contain them.
+   Confirm a module is declared via the `mod` chain before using it as a
+   reference, and never copy template patterns —
    [.context/dead-code.md](../../../.context/dead-code.md).
 3. **Handler → service → repository.** Handlers extract HTTP types, call
    `auth::resolve_user_id`, call exactly one service method, map the error.

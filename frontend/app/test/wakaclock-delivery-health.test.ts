@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { deliveryHealth } from '@/lib/wakaclock/delivery-health';
+import { deliveryHealth, syncSummary } from '@/lib/wakaclock/delivery-health';
 import type { DeliveryStatusResponse } from '@/lib/wakaclock/measurement-types';
 
 const now = Date.parse('2026-10-07T05:00:00Z');
@@ -167,8 +167,6 @@ describe('delivery completeness', () => {
     capture.captured_at = new Date(now).toISOString();
     capture.pending = 2;
     expect(deliveryHealth(data, false, now).incomplete).toBe(true);
-    delete data.devices[0].capture;
-    expect(deliveryHealth(data, false, now)).toMatchObject({ state: 'unknown', incomplete: true });
   });
 });
 
@@ -246,10 +244,43 @@ describe('on-demand clients without a background collector', () => {
     expect(deliveryHealth(pipeline, false, now).state).toBe('critical');
   });
 
-  it('keeps requiring editor journal evidence when no capture object is sent', () => {
+  it('treats a device with no capture object as an editor that is not running', () => {
     const data = report();
     delete data.devices[0].capture;
-    expect(deliveryHealth(data, false, now).message).toMatch(/Editor journal details/);
+    expect(deliveryHealth(data, false, now).state).toBe('complete');
+  });
+
+  it('treats a closed or idle editor with nothing pending as complete', () => {
+    const old = new Date(now - 3_600_000).toISOString();
+    for (const status of ['ready', 'stale', 'stopped', 'unavailable'] as const) {
+      for (const pending of [0, null]) {
+        const data = onDemand();
+        Object.assign(data.devices[0].capture!.editor_journal!, {
+          status,
+          pending,
+          last_observed_at: old,
+        });
+        expect(deliveryHealth(data, false, now).state).toBe('complete');
+      }
+    }
+    const missing = onDemand();
+    delete missing.devices[0].capture!.editor_journal;
+    expect(deliveryHealth(missing, false, now).state).toBe('complete');
+  });
+
+  it('still reports editor activity the journal has not handed off', () => {
+    const stale = onDemand();
+    Object.assign(stale.devices[0].capture!.editor_journal!, { status: 'stale', pending: 3 });
+    expect(deliveryHealth(stale, false, now).state).toBe('stale');
+    const waiting = onDemand();
+    waiting.devices[0].capture!.editor_journal!.pending = 2;
+    expect(deliveryHealth(waiting, false, now).state).toBe('pending');
+    const dead = onDemand();
+    Object.assign(dead.devices[0].capture!.editor_journal!, { status: 'stale', dead_letter: 1 });
+    expect(deliveryHealth(dead, false, now).state).toBe('critical');
+    const paused = onDemand();
+    paused.devices[0].capture!.editor_journal!.status = 'paused_by_user';
+    expect(deliveryHealth(paused, false, now).state).toBe('unavailable');
   });
 });
 
@@ -268,4 +299,73 @@ it('reports stale editor journal and producer spool observations', () => {
 
 it('treats an unreported dead-letter count as zero', () => {
   expect(deliveryHealth(report({ dead_letter: null }), false, now).deadLetter).toBe(0);
+});
+
+describe('sync summary', () => {
+  const backlog = (kind: null | string, pending = 2128) =>
+    report({
+      pending,
+      oldest_pending_at: pending ? '2026-10-06T09:51:01Z' : null,
+      details: {
+        eligible: 0,
+        leased: 0,
+        next_retry_at: null,
+        oldest_event_at: null,
+        accepted_total: 1,
+        backlog_error: kind
+          ? { kind, message_code: 'x', http_status: null, failed_at: '2026-10-07T04:00:00Z' }
+          : null,
+      },
+    });
+  const summarize = (data: DeliveryStatusResponse) =>
+    syncSummary(deliveryHealth(data, false, now), data.devices);
+
+  it('reports a fully delivered queue as synced', () => {
+    expect(summarize(report())).toMatchObject({ tone: 'ok', title: 'All activity synced' });
+  });
+  it('names the reported cause instead of the raw pipeline readout', () => {
+    expect(summarize(backlog('network'))).toMatchObject({
+      tone: 'attention',
+      title: "Can't reach the server",
+    });
+    expect(summarize(backlog('network')).detail).toMatch(
+      /^2,128 heartbeats saved on your device since /
+    );
+    expect(summarize(backlog('auth_401')).title).toBe('API key not accepted');
+    expect(summarize(backlog('payment_402')).title).toBe('Subscription needed to sync');
+    expect(summarize(backlog('server_error')).title).toBe('Server asked to retry later');
+    expect(summarize(backlog('validation')).title).toBe('Sending 2,128 queued heartbeats');
+  });
+  it('does not blame the server for an upstream capture failure', () => {
+    const data = backlog('network');
+    data.devices[0].capture!.editor_journal!.status = 'corrupt';
+    expect(summarize(data)).toMatchObject({
+      tone: 'attention',
+      title: 'Capture needs attention',
+      detail: expect.stringMatching(/^Editor capture needs attention/),
+    });
+  });
+  it('keeps a fresh queue amber and singular', () => {
+    const data = backlog('network', 1);
+    data.devices[0].oldest_pending_at = new Date(now - 60_000).toISOString();
+    expect(summarize(data)).toMatchObject({ tone: 'syncing' });
+    expect(summarize(data).detail).toMatch(/^1 heartbeat saved/);
+    data.devices[0].oldest_pending_at = null;
+    expect(summarize(data).detail).toBe(
+      '1 heartbeat saved on your device. They will send automatically when the server is reachable.'
+    );
+  });
+  it('ignores a stale error once the queue is empty and falls back to the health message', () => {
+    const data = backlog('network', 0);
+    data.devices[0].capture!.editor_journal!.pending = 3;
+    const health = deliveryHealth(data, false, now);
+    expect(syncSummary(health, data.devices)).toEqual({
+      tone: 'syncing',
+      title: 'Sync not confirmed',
+      detail: health.message,
+    });
+    expect(syncSummary(health, [{ ...data.devices[0], pending: null }]).title).toBe(
+      'Sync not confirmed'
+    );
+  });
 });

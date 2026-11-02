@@ -107,7 +107,7 @@ export const EN_HOME = {
   title: 'AtoAxis — Developer Time Tracking & AI Coding Analytics',
   headline: ['Your coding time.', 'The whole picture.'],
   highlights: ['Complete history', 'WakaTime compatible', 'No source code uploaded'],
-  tagline: 'Make every working session make sense.',
+  tagline: 'Developer time tracking that makes every session make sense.',
   // Kept under ~155 characters so search engines show it whole rather than truncating
   // mid-claim. "your" is deliberate: the second person reads as an answer to the visitor.
   description: `${SITE_NAME} tracks coding time, projects and AI contributions. Keep your complete history, connect WakaTime plugins and review attribution coverage.`,
@@ -337,12 +337,12 @@ export const EN_HOME = {
 
 export const TH_HOME = {
   badge: 'ประวัติครบถ้วน และรองรับ WakaTime API',
-  title: 'AtoAxis — ติดตามเวลาเขียนโค้ด และวิเคราะห์การใช้ AI',
+  title: 'AtoAxis — โปรแกรมจับเวลาเขียนโค้ด และวิเคราะห์การใช้ AI',
   headline: ['ทุกเวลาที่เขียนโค้ด', 'เห็นภาพชัดกว่าเดิม'],
   highlights: ['เก็บประวัติครบ', 'รองรับ WakaTime', 'ไม่อัปโหลดโค้ด'],
-  tagline: 'เข้าใจงานของคุณ ในไทม์ไลน์เดียว',
+  tagline: 'โปรแกรมจับเวลาเขียนโค้ด ที่ช่วยให้เข้าใจงานของคุณในไทม์ไลน์เดียว',
   // Same length budget as the English description above.
-  description: `${SITE_NAME} ติดตามเวลาเขียนโค้ด วิเคราะห์โปรเจกต์และสัดส่วนงานจาก AI รองรับ WakaTime เก็บประวัติครบ พร้อมแสดงความครอบคลุมของข้อมูลผู้เขียน`,
+  description: `${SITE_NAME} โปรแกรมจับเวลาเขียนโค้ด แยกตามโปรเจกต์และภาษา พร้อมสัดส่วนงานจาก AI รองรับ WakaTime เก็บประวัติครบ และแสดงความครอบคลุมของข้อมูลผู้เขียน`,
   heroLead: `${SITE_NAME} ช่วยติดตามเวลาเขียนโค้ด แยกตามโปรเจกต์ ภาษา และ editor พร้อมดูสัดส่วนงานจาก AI ในไทม์ไลน์เดียว เชื่อมต่อ WakaTime plugin เดิม เก็บประวัติครบถ้วน และเห็นชัดว่าข้อมูลส่วนใดยังระบุผู้เขียนไม่ได้`,
   keyTakeaways: [
     `${SITE_NAME} บันทึกเวลาเขียนโค้ดของคุณจาก editor heartbeat โดยเก็บเฉพาะ metadata ไม่เก็บ source code`,
@@ -1117,7 +1117,7 @@ page(
       ]),
       section('Getting started', 'getting-started', [
         p(
-          'Join Early Access, create an account, generate an API key, then install the VS Code extension or repoint an existing WakaTime plugin.'
+          'Join Early Access, create an account and generate an API key, then repoint your existing WakaTime plugin. The first-party VS Code extension follows as a Marketplace Preview.'
         ),
       ]),
     ],
@@ -1130,9 +1130,14 @@ page(
           description: 'Hosted launch updates and access',
         },
         {
+          href: '/docs/migrate-from-wakatime',
+          label: 'Migrate from WakaTime',
+          description: 'Keep your plugin and import your WakaTime history',
+        },
+        {
           href: '/integrations/vscode',
           label: 'VS Code time tracking',
-          description: 'Install and configure the first-party extension',
+          description: 'The first-party extension, coming as a Marketplace Preview',
         },
         {
           href: '/pricing',
@@ -1152,8 +1157,13 @@ page(
           'No. Point an existing WakaTime plugin at the hosted API, or use the VS Code extension.',
       },
       {
-        question: 'Can I import history?',
-        answer: 'Yes, WakaTime exports can be reprocessed into the same dashboards.',
+        question: 'Can I keep my full WakaTime history?',
+        answer: `Yes. Imported heartbeats land in the same dashboards as new activity, and every ${SITE_NAME} account keeps its complete coding history.`,
+      },
+      {
+        question: 'How do I import my WakaTime export?',
+        answer:
+          'Export your heartbeats from WakaTime and import the JSON file in the dashboard. The import resumes after interruptions and never counts the same heartbeat twice. The Migrate from WakaTime guide at /docs/migrate-from-wakatime walks through each step.',
       },
       {
         question: 'Does it report AI tokens and cost?',
@@ -1216,7 +1226,7 @@ page(
       ]),
       section('เริ่มต้นใช้งาน', 'getting-started', [
         p(
-          'ลงทะเบียน Early Access สร้างบัญชีและ API key จากนั้นติดตั้ง VS Code extension หรือเปลี่ยนปลายทางของ WakaTime plugin เดิม'
+          'ลงทะเบียน Early Access สร้างบัญชีและ API key แล้วเปลี่ยนปลายทางของ WakaTime plugin เดิม ส่วน VS Code extension ของ AtoAxis จะตามมาใน Marketplace แบบ Preview'
         ),
       ]),
     ],
@@ -1229,9 +1239,14 @@ page(
           description: 'ข่าวการเปิดใช้งาน hosted service',
         },
         {
+          href: '/docs/migrate-from-wakatime',
+          label: 'ย้ายจาก WakaTime',
+          description: 'ใช้ plugin เดิมและนำเข้าประวัติ WakaTime',
+        },
+        {
           href: '/integrations/vscode',
           label: 'ติดตามเวลาบน VS Code',
-          description: 'ติดตั้งและตั้งค่า extension',
+          description: 'Extension ของเราเอง กำลังจะเปิดใน Marketplace แบบ Preview',
         },
         {
           href: '/pricing',
@@ -1250,8 +1265,13 @@ page(
         answer: 'ไม่ต้อง เปลี่ยน api_url ของ WakaTime plugin เดิม หรือใช้ VS Code extension',
       },
       {
-        question: 'นำเข้า history ได้หรือไม่?',
-        answer: 'ได้ ระบบนำเข้า WakaTime export เข้า dashboard เดียวกัน',
+        question: 'เก็บประวัติ WakaTime ทั้งหมดไว้ได้หรือไม่?',
+        answer: `ได้ heartbeat ที่นำเข้าจะอยู่ใน dashboard เดียวกับข้อมูลใหม่ และทุกบัญชี ${SITE_NAME} เก็บประวัติการเขียนโค้ดไว้ครบถ้วน`,
+      },
+      {
+        question: 'นำเข้า WakaTime export อย่างไร?',
+        answer:
+          'export heartbeat จาก WakaTime แล้ว import ไฟล์ JSON ใน dashboard ระบบทำต่อได้ถ้าขาดกลางทาง และไม่นับ heartbeat เดิมซ้ำ ดูขั้นตอนทั้งหมดในคู่มือย้ายจาก WakaTime ที่ /th/docs/migrate-from-wakatime',
       },
       {
         question: 'มี AI token และ cost หรือไม่?',
@@ -1277,9 +1297,9 @@ function dualPage(
 dualPage(
   '/ai-coding-tracker',
   {
-    metadataTitle: 'AI Coding Activity Tracking',
+    metadataTitle: 'AI Coding Tracker: Claude Code, Codex & Gemini CLI',
     description:
-      'See how AtoAxis records AI-assisted coding with agent names and line counts without storing prompts, responses or source code.',
+      'Track Claude Code, Codex CLI and Gemini CLI work: agent names, AI and human line counts with coverage. No prompts, responses or source code stored.',
     breadcrumbs: [
       { name: 'Home', path: '/' },
       { name: 'AI coding tracker', path: '/ai-coding-tracker' },
@@ -1322,6 +1342,11 @@ dualPage(
         ]),
         p(
           'Unattributed is normal, not an error. Pasting from a browser, a refactor run by a tool without a hook, or a merge all produce real work that nothing can honestly attribute. Its share is visible so you can decide whether it is small enough to ignore.'
+        ),
+      ]),
+      section('What percentage of my code is written by AI?', 'ai-share', [
+        p(
+          'Each project in the dashboard shows AI-attributed line changes as a share of every line change observed for the selected dates: AI, human and Unattributed together. With nothing to measure, the figure is unavailable rather than 0%. It measures line changes, not time saved, correctness or value, so read it next to the attribution coverage.'
         ),
       ]),
       section('Agents that edit outside the editor', 'outside-editor', [
@@ -1420,6 +1445,10 @@ dualPage(
           'Only with provider-reported usage and a known effective price; otherwise they are unknown.',
       },
       {
+        question: 'What percentage of my code is written by AI?',
+        answer: `${SITE_NAME} shows AI-attributed line changes as a share of all observed line changes per project, next to human and Unattributed lines and the attribution coverage. It measures line changes, not time saved or code quality.`,
+      },
+      {
         question: 'What happens to unproven activity?',
         answer: 'It is classified as Unattributed rather than guessed as Human.',
       },
@@ -1430,9 +1459,9 @@ dualPage(
     ]),
   },
   {
-    metadataTitle: 'ติดตาม AI Coding Activity',
+    metadataTitle: 'ติดตาม AI Coding: Claude Code, Codex, Gemini CLI',
     description:
-      'ติดตาม AI coding ด้วยชื่อ agent จำนวนบรรทัด และ attribution coverage แยกงาน AI, human และ Unattributed พร้อมอธิบายข้อจำกัด โดยไม่เก็บ prompt หรือ source code',
+      'AI เขียนโค้ดกี่เปอร์เซ็นต์? ติดตาม Claude Code, Codex CLI และ Gemini CLI ด้วยชื่อ agent บรรทัด AI/human และ coverage ไม่เก็บ prompt หรือ source code',
     breadcrumbs: [
       { name: 'หน้าหลัก', path: '/' },
       { name: 'AI coding tracker', path: '/ai-coding-tracker' },
@@ -1475,6 +1504,11 @@ dualPage(
         ]),
         p(
           'Unattributed เป็นเรื่องปกติ ไม่ใช่ข้อผิดพลาด การวางโค้ดจาก browser การ refactor ด้วยเครื่องมือที่ไม่มี hook หรือการ merge ล้วนเป็นงานจริงที่ไม่มีใครระบุที่มาได้อย่างซื่อตรง ระบบจึงแสดงสัดส่วนของมันไว้ให้คุณตัดสินเองว่าน้อยพอจะมองข้ามหรือไม่'
+        ),
+      ]),
+      section('AI เขียนโค้ดกี่เปอร์เซ็นต์ในโปรเจกต์ของคุณ', 'ai-share', [
+        p(
+          'แต่ละโปรเจกต์ใน dashboard แสดงบรรทัดที่เปลี่ยนโดย AI เป็นสัดส่วนของการเปลี่ยนแปลงบรรทัดทั้งหมดที่ระบบเห็นในช่วงวันที่เลือก ทั้ง AI, human และ Unattributed รวมกัน ถ้าไม่มีข้อมูลให้วัด ตัวเลขจะแสดงว่าไม่พร้อมใช้งานแทน 0% ตัวเลขนี้วัดการเปลี่ยนแปลงบรรทัด ไม่ใช่เวลาที่ประหยัดได้ ความถูกต้อง หรือคุณค่าของงาน จึงควรอ่านคู่กับ attribution coverage'
         ),
       ]),
       section('Agent ที่แก้ไฟล์นอก editor', 'outside-editor', [
@@ -1571,6 +1605,10 @@ dualPage(
         question: 'token และ cost แสดงหรือไม่?',
         answer:
           'แสดงเมื่อ provider รายงาน tokens และมีราคาที่มีผลใช้งานชัดเจน มิฉะนั้นเป็น unknown',
+      },
+      {
+        question: 'ดูได้ไหมว่า AI เขียนโค้ดกี่เปอร์เซ็นต์?',
+        answer: `ได้ ${SITE_NAME} แสดงสัดส่วนบรรทัดที่เปลี่ยนโดย AI เทียบกับการเปลี่ยนแปลงบรรทัดทั้งหมดในแต่ละโปรเจกต์ พร้อมยอด human, Unattributed และ attribution coverage ตัวเลขนี้วัดการเปลี่ยนแปลงบรรทัด ไม่ใช่เวลาที่ประหยัดหรือคุณภาพโค้ด`,
       },
       {
         question: 'กิจกรรมที่พิสูจน์ไม่ได้ถูกนับเป็นอะไร?',
@@ -1995,6 +2033,11 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
   [
     '/integrations/vscode#2',
     (en) => [
+      p(
+        en
+          ? 'The extension is coming to the Marketplace as a Preview, and Early Access members get it first. Until then, any editor with a WakaTime plugin can report to AtoAxis by changing ~/.wakatime.cfg.'
+          : 'Extension นี้กำลังจะเปิดใน Marketplace แบบ Preview สมาชิก Early Access จะได้ใช้ก่อน ระหว่างนี้ editor ที่มี WakaTime plugin ส่งข้อมูลเข้า AtoAxis ได้เลยโดยแก้ ~/.wakatime.cfg'
+      ),
       code(
         'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
         'VS Code'
@@ -2069,6 +2112,11 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
     '/docs/getting-started#2',
     (en) => [
       sub(en ? 'VS Code, the first-party extension' : 'VS Code กับ extension ของเราเอง'),
+      p(
+        en
+          ? 'The extension is coming to the Marketplace as a Preview, and Early Access members get it first. Until then, any editor with a WakaTime plugin can report to AtoAxis by changing ~/.wakatime.cfg.'
+          : 'Extension นี้กำลังจะเปิดใน Marketplace แบบ Preview สมาชิก Early Access จะได้ใช้ก่อน ระหว่างนี้ editor ที่มี WakaTime plugin ส่งข้อมูลเข้า AtoAxis ได้เลยโดยแก้ ~/.wakatime.cfg'
+      ),
       code(
         'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
         'VS Code'
@@ -2388,14 +2436,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
               'The CLI sends it over HTTPS, authenticated with your API key',
               'If the request fails the heartbeat is queued in a local SQLite file and retried later',
               'Heartbeat data is not sent to any third-party analytics or advertising service',
-              'This public website loads Google Analytics in production to count page visits; the dashboard and the heartbeat pipeline do not',
+              'Only this public website can load Google Analytics, and only if you allow it (see "Website analytics"); the dashboard and the heartbeat pipeline never do',
             ]
           : [
               'กิจกรรมใน editor ถูกพักไว้ในหน่วยความจำ แล้วส่งต่อให้ wakaclock-cli บนเครื่องเดียวกัน',
               'CLI ส่งข้อมูลผ่าน HTTPS โดยยืนยันตัวตนด้วย API key ของคุณ',
               'ถ้าส่งไม่สำเร็จ heartbeat จะถูกคิวไว้ในไฟล์ SQLite ในเครื่องแล้วลองใหม่ภายหลัง',
               'ข้อมูล heartbeat ไม่ถูกส่งไปยังบริการ analytics หรือโฆษณาของบุคคลที่สามใด ๆ',
-              'เว็บไซต์สาธารณะนี้โหลด Google Analytics ในโหมด production เพื่อนับจำนวนผู้เข้าชม ส่วน dashboard และเส้นทางของ heartbeat ไม่ได้ใช้',
+              'มีเพียงเว็บไซต์สาธารณะนี้ที่อาจโหลด Google Analytics และจะโหลดก็ต่อเมื่อคุณอนุญาตเท่านั้น (ดู "Website analytics") ส่วน dashboard และเส้นทางของ heartbeat ไม่เคยใช้',
             ]
       ),
     ],
@@ -2421,6 +2469,33 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
               'ค่า aggregate สร้างจากข้อมูลดิบ การลบข้อมูลดิบจึงลบค่าเหล่านั้นไปด้วย',
               'ขอลบบัญชีหรือข้อมูลได้ทางอีเมล',
               'การเพิกถอน API key จะหยุดข้อมูลใหม่ทันที โดยไม่ลบข้อมูลที่มีอยู่แล้ว',
+            ]
+      ),
+    ],
+  ],
+  [
+    '/privacy#6',
+    (en) => [
+      p(
+        en
+          ? 'The public website (atoaxis.com and its Thai pages) can use Google Analytics 4 to count visits and see which links bring people here. It stays off until you choose "Allow analytics" in the privacy prompt; choosing "Decline" means the Google script is never loaded.'
+          : 'เว็บไซต์สาธารณะ (atoaxis.com และหน้าภาษาไทย) อาจใช้ Google Analytics 4 เพื่อนับจำนวนผู้เข้าชมและดูว่าลิงก์ใดพาคนมาที่นี่ โดยจะปิดอยู่จนกว่าคุณจะเลือก "อนุญาต analytics" ในหน้าต่างตัวเลือกความเป็นส่วนตัว ถ้าเลือก "ไม่อนุญาต" สคริปต์ของ Google จะไม่ถูกโหลดเลย'
+      ),
+      bullets(
+        en
+          ? [
+              "Your choice is remembered in this browser's local storage; no analytics cookie is set before you allow it",
+              'If you allow it, Google receives the page address, the referring link and standard browser and device details, and sets its own analytics cookies',
+              "To change your choice, clear this site's stored data in your browser and the prompt appears again",
+              'The dashboard, the CLI, editor extensions and heartbeat data are never sent to Google Analytics',
+              'An Early Access signup also records which campaign link you arrived from (for example utm_source=reddit), stored with your email so we can tell which channels work',
+            ]
+          : [
+              'ตัวเลือกของคุณถูกจำไว้ใน local storage ของเบราว์เซอร์นี้ และจะไม่มี analytics cookie ใด ๆ ก่อนที่คุณจะอนุญาต',
+              'หากคุณอนุญาต Google จะได้รับที่อยู่หน้าเว็บ ลิงก์ที่พาคุณมา และข้อมูลพื้นฐานของเบราว์เซอร์และอุปกรณ์ และจะตั้ง analytics cookie ของ Google เอง',
+              'หากต้องการเปลี่ยนตัวเลือก ให้ล้างข้อมูลที่เว็บไซต์นี้เก็บไว้ในเบราว์เซอร์ แล้วหน้าต่างตัวเลือกจะแสดงอีกครั้ง',
+              'dashboard, CLI, extension ของ editor และข้อมูล heartbeat ไม่เคยถูกส่งไปยัง Google Analytics',
+              'การสมัคร Early Access จะบันทึกด้วยว่าคุณมาจากลิงก์แคมเปญใด (เช่น utm_source=reddit) เก็บไว้คู่กับอีเมลของคุณ เพื่อให้เรารู้ว่าช่องทางใดได้ผล',
             ]
       ),
     ],
@@ -2957,9 +3032,9 @@ const genericRelated = (path: MarketingPageKey, locale: SiteLocale) => {
 generic(
   '/integrations/vscode',
   {
-    title: 'VS Code time tracking extension',
+    title: 'VS Code time tracker extension',
     description:
-      'Install the AtoAxis VS Code extension, add your API key and confirm your first heartbeat. It tracks coding time by project, language and branch.',
+      'A coding time tracker for VS Code, coming to the Marketplace as a Preview. Use your WakaTime plugin today or join Early Access to get the extension first.',
     lead: 'The first-party extension buffers metadata-only editor activity and sends heartbeats through wakaclock-cli.',
     headings: [
       'What it tracks',
@@ -3003,9 +3078,9 @@ generic(
     ],
   },
   {
-    title: 'ส่วนขยาย AtoAxis สำหรับติดตามเวลาใน VS Code',
+    title: 'โปรแกรมจับเวลาเขียนโค้ดสำหรับ VS Code',
     description:
-      'ติดตั้ง AtoAxis extension สำหรับ VS Code ใส่ API key แล้วตรวจ heartbeat แรก เพื่อเริ่มติดตามเวลาเขียนโค้ดแยกตามโปรเจกต์ ภาษา และ branch โดยไม่ส่ง source code',
+      'ส่วนขยาย AtoAxis สำหรับ VS Code ช่วยวัดเวลาเขียนโปรแกรม กำลังจะเปิดใน Marketplace แบบ Preview ระหว่างนี้ใช้ WakaTime plugin ได้เลย หรือสมัคร Early Access เพื่อใช้ก่อน',
     lead: 'extension ของเราจะ buffer editor activity แบบ metadata แล้วส่ง heartbeat ผ่าน wakaclock-cli',
     headings: [
       'ข้อมูลที่ติดตาม',
@@ -3138,6 +3213,7 @@ generic(
       'AI-related data',
       'How data travels',
       'Retention and deletion',
+      'Website analytics',
     ],
     faqEntries: [
       {
@@ -3174,6 +3250,11 @@ generic(
         answer:
           'New data stops immediately; revoking a key does not delete data that already exists.',
       },
+      {
+        question: 'Does the website use analytics or cookies?',
+        answer:
+          'Only if you allow it. The public site asks before loading Google Analytics 4; if you decline, the script is never loaded and no analytics cookie is set. The dashboard and heartbeat data are never sent to it.',
+      },
     ],
   },
   {
@@ -3188,6 +3269,7 @@ generic(
       'ข้อมูลที่เกี่ยวกับ AI',
       'ข้อมูลเดินทางอย่างไร',
       'การเก็บรักษาและลบ',
+      'Website analytics',
     ],
     faqEntries: [
       {
@@ -3222,6 +3304,11 @@ generic(
       {
         question: 'ถ้าเพิกถอน API key จะเกิดอะไรขึ้น?',
         answer: 'ข้อมูลใหม่จะหยุดทันที แต่การเพิกถอนไม่ลบข้อมูลที่มีอยู่แล้ว',
+      },
+      {
+        question: 'เว็บไซต์ใช้ analytics หรือ cookie หรือไม่?',
+        answer:
+          'ใช้ก็ต่อเมื่อคุณอนุญาตเท่านั้น เว็บไซต์สาธารณะจะถามก่อนโหลด Google Analytics 4 ถ้าคุณไม่อนุญาต สคริปต์จะไม่ถูกโหลดและไม่มี analytics cookie ส่วน dashboard และข้อมูล heartbeat ไม่เคยถูกส่งไป',
       },
     ],
   }
@@ -3778,7 +3865,7 @@ dualPage(
           'Events are keyed by the provider’s own message id, so replaying a transcript cannot double-count a session. Bundled hooks read this from each agent’s local transcript; you can also post it from your own wrapper.'
         ),
       ]),
-      section('Which agents are covered', 'agents', [
+      section('Track Claude Code token usage and other agents', 'agents', [
         bullets([
           'Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI have bundled hooks that read their local transcripts',
           'Any other tool can post to the same endpoint directly',
@@ -3803,7 +3890,7 @@ dualPage(
           'The shipped catalogue covers Anthropic list prices. Usage from a provider with no price row still reports its tokens — you keep the consumption figure and lose only the money figure.'
         ),
       ]),
-      section('Cost per project', 'per-project', [
+      section('Claude Code cost per project, alongside every agent', 'per-project', [
         p(
           'Usage events carry the agent’s workspace context, reduced to a project name before it leaves your machine, so spend can be grouped the same way coding time is.'
         ),
@@ -3868,9 +3955,9 @@ dualPage(
     ],
     faq: faq('AI cost and token FAQ', [
       {
-        question: 'Can I track how many tokens Claude Code uses?',
+        question: 'How do I track Claude Code token usage?',
         answer:
-          'Yes. A bundled hook reads Claude Code’s local transcript and posts input, output, cache read and cache write tokens per event, grouped by session, project and day.',
+          'Turn on the bundled Claude Code hook, for example with AtoAxis: Set Up AI Tracking in VS Code. It reads Claude Code’s local transcript and posts input, output, cache read and cache write tokens per event, grouped by session, project and day.',
       },
       {
         question: 'How is the estimated cost of an AI coding session calculated?',
@@ -3878,9 +3965,9 @@ dualPage(
           'Reported tokens are multiplied by the price that was in effect for that provider and model when the event happened. Prices are versioned and effective-dated, and an unknown provider or model yields an unknown cost rather than zero.',
       },
       {
-        question: 'Does it show AI spend per project?',
+        question: 'Can I see Claude Code cost per project?',
         answer:
-          'Yes. Usage inherits a project from its session when that session touched exactly one project; a session spanning several projects stays unattributed instead of being copied into each.',
+          'Yes. Each project in the dashboard shows reported tokens and estimated spend summed across Claude Code and every other agent that reports usage, each with its coverage. The shipped catalogue has Anthropic list prices, so tokens from a provider without a price row show no cost rather than zero. A session spanning several projects stays unattributed instead of being copied into each.',
       },
       {
         question: 'Which coding agents report token usage?',
@@ -3937,7 +4024,7 @@ dualPage(
           'event ใช้ message id ของ provider เป็นคีย์ ส่งซ้ำจึงนับซ้ำไม่ได้ bundled hook อ่านจาก transcript ในเครื่องคุณเอง หรือจะเขียน wrapper ส่งเองก็ได้'
         ),
       ]),
-      section('agent ที่รองรับ', 'agents', [
+      section('ติดตาม token usage ของ Claude Code และ agent อื่น', 'agents', [
         bullets([
           'Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI มี bundled hook อ่าน transcript ในเครื่อง',
           'เครื่องมืออื่นส่งเข้า endpoint เดียวกันได้โดยตรง',
@@ -3962,7 +4049,7 @@ dualPage(
           'ชุดราคาที่ให้มาครอบราคา list price ของ Anthropic การใช้งานจาก provider ที่ยังไม่มีแถวราคายังรายงาน token ตามปกติ ขาดไปเฉพาะตัวเลขค่าใช้จ่าย'
         ),
       ]),
-      section('ค่าใช้จ่ายแยกตามโปรเจกต์', 'per-project', [
+      section('ค่าใช้จ่าย Claude Code แยกตามโปรเจกต์ รวมกับทุก agent', 'per-project', [
         p(
           'usage event นำ workspace context ของ agent มาด้วย โดยย่อเหลือเพียงชื่อโปรเจกต์ก่อนออกจากเครื่อง จึงจัดกลุ่มค่าใช้จ่ายได้แบบเดียวกับ coding time'
         ),
@@ -4027,9 +4114,9 @@ dualPage(
     ],
     faq: faq('คำถามที่พบบ่อยเรื่อง token และค่าใช้จ่าย AI', [
       {
-        question: 'ติดตามได้หรือไม่ว่า Claude Code ใช้ token ไปเท่าไร?',
+        question: 'ติดตาม token usage ของ Claude Code อย่างไร?',
         answer:
-          'ได้ bundled hook อ่าน transcript ของ Claude Code ในเครื่องแล้วส่ง input, output, cache read และ cache write token แยกตาม session โปรเจกต์และวัน',
+          'เปิด bundled hook ของ Claude Code เช่นผ่านคำสั่ง AtoAxis: Set Up AI Tracking ใน VS Code แล้ว hook จะอ่าน transcript ของ Claude Code ในเครื่องและส่ง input, output, cache read และ cache write token แยกตาม session โปรเจกต์และวัน',
       },
       {
         question: 'คำนวณค่าใช้จ่ายของ AI coding session อย่างไร?',
@@ -4037,9 +4124,9 @@ dualPage(
           'นำ token ที่ provider รายงานมาคูณกับราคาที่มีผล ณ เวลาที่ event เกิด ราคามีเวอร์ชันและช่วงเวลา หากไม่รู้จัก provider หรือ model จะตอบว่าไม่ทราบ ไม่ใช่ 0',
       },
       {
-        question: 'ดูค่าใช้จ่าย AI แยกตามโปรเจกต์ได้หรือไม่?',
+        question: 'ดูค่าใช้จ่าย Claude Code แยกตามโปรเจกต์ได้หรือไม่?',
         answer:
-          'ได้ usage จะสืบโปรเจกต์จาก session เมื่อ session นั้นแตะโปรเจกต์เดียว ถ้าแตะหลายโปรเจกต์จะคงเป็น unattributed แทนการคัดลอกไปทุกโปรเจกต์',
+          'ได้ แต่ละโปรเจกต์ใน dashboard แสดง token ที่รายงานและค่าใช้จ่ายโดยประมาณ รวมจาก Claude Code และ agent อื่นที่รายงาน usage พร้อม coverage ราคาที่มีมาให้ครอบคลุม list price ของ Anthropic ดังนั้น token จาก provider ที่ไม่มีราคาจะไม่แสดงค่าใช้จ่าย แทนที่จะเป็นศูนย์ ส่วน session ที่แตะหลายโปรเจกต์จะคงเป็น unattributed แทนการคัดลอกไปทุกโปรเจกต์',
       },
       {
         question: 'agent ใดบ้างที่รายงาน token ได้?',

@@ -3,7 +3,8 @@
 Canonical implementation:
 [../../backend/api/src/middleware/auth.rs](../../backend/api/src/middleware/auth.rs).
 It is a helper module, **not** an axum middleware layer — handlers call it
-directly. (`src/helpers/auth/` is dead code — see [../dead-code.md](../dead-code.md).)
+directly. (The old `src/helpers/auth/` template code was removed — see
+[../dead-code.md](../dead-code.md).)
 
 ## Three credential types
 
@@ -97,6 +98,7 @@ that split when extending it.
 
 [../../backend/api/src/handlers/oauth.rs](../../backend/api/src/handlers/oauth.rs)
 exposes `/oauth/authorize`, `/token`, `/revoke` and the device flow
-(`/device/code`, `/device/token`, `/device/approve`). State storage interface:
-`src/interfaces/oauth_state.rs` — note that `src/interfaces/` is **not compiled**,
-so treat the live implementation in the handler as authoritative.
+(`/device/code`, `/device/token`, `/device/approve`). The handler and the
+services it calls are the authoritative implementation; the old
+`src/interfaces/oauth_state.rs` interface was uncompiled template code and has
+been removed.

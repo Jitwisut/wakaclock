@@ -61,7 +61,7 @@ Do not restate these — read them when the task needs them.
 ## Status caveat
 
 This repository was scaffolded from an unrelated e-commerce connector template.
-A significant fraction of `backend/api/src_ecommerce_backup/` and a few legacy
-model/helper directories are inherited template code that is **not part of the
-live product**. Always check
+The uncompiled template code (`backend/api/src_ecommerce_backup/` and a few
+legacy model/helper directories) has been removed from the tree, but old commits
+still contain it and it is **not part of the live product**. Always check
 [dead-code.md](dead-code.md) before assuming a directory is live.

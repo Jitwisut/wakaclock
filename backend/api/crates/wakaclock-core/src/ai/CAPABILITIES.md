@@ -74,3 +74,98 @@ Both agents report token usage per *turn*, not per *file edit*. A turn can touch
 one, or several files. This confirms Phase 9's decision to keep per-file token
 allocation as an explicit, documented estimate (or an `unattributed_project` bucket)
 rather than something recoverable exactly from either transcript format.
+
+## GitHub Copilot (`copilot.rs`, added 2026-10-26)
+
+| | VS Code chat/agent | Copilot CLI |
+| --- | --- | --- |
+| Source | `<editor>/User/workspaceStorage/<hash>/GitHub.copilot-chat/transcripts/*.jsonl` | `~/.copilot/session-state/<id>/events.jsonl` |
+| Envelope | JSONL `{type, id, parentId, timestamp, data}` | same event family |
+| Verified locally | `session.start`, `user.message`, `assistant.message` (`toolRequests`), `assistant.turn_start`/`turn_end` — one real session, keys only | no local sample |
+| Assumed (synthetic fixture) | `tool.execution_complete`, `assistant.usage`, `session.model_change` and their fields | same |
+| Agent ID | `copilot`, with `producer_surface` = `vscode` or `cli` | |
+| Edits | a file-naming tool request plus its successful completion; lines only when telemetry reports them | |
+| Sending | usage only; edits kept as local dry-run evidence until certified (catalog runtime `None`) | |
+
+Not read yet: `chatSessions/*.jsonl` (patch log with `modelId` and request token counts) and
+`chatEditingSessions/*/state.json`; inline completions are out of scope.
+
+## Cursor IDE and Windsurf (`cursor.rs` + `vscdb_kv.rs`, added 2026-10-26)
+
+| | |
+| --- | --- |
+| Source | `<editor>/User/globalStorage/state.vscdb` (`Cursor`, `Windsurf`, `Windsurf - Next`), table `cursorDiskKV` |
+| Rows read | only keys `bubbleId:<composerId>:<bubbleId>` (JSON value); every other key is ignored |
+| Verified locally | nothing — neither editor is installed on the development machine; schema from public facts, synthetic SQLite in tests |
+| Edits | assistant bubble (`type = 2`) whose `toolFormerData` names an editing tool with `status = completed`; path from `params` (often workspace-relative, kept relative); lines only if the tool result reports them |
+| Usage | assistant bubble `tokenCount` once the bubble is at least two minutes old; model from the bubble; provider unset (the editor routes to several model vendors); prompt counts not yet derived |
+| Re-reads | a window of recent rowids is re-read each pass because bubbles are updated in place; event and usage IDs are stable, so downstream delivery stays idempotent |
+| Sending | usage only; edits kept as local dry-run evidence until certified (catalog runtime `None`) |
+
+Not covered: `cursor-agent` CLI (moved to the Tier 2 survey), Tab completions, resolving
+workspace-relative paths to a workspace root.
+
+## Antigravity (`antigravity.rs`, added 2026-10-26)
+
+| | |
+| --- | --- |
+| Source | `~/.gemini/{antigravity,antigravity-ide,antigravity-cli}/brain/<session>/.system_generated/logs/transcript.jsonl` |
+| Surface | `producer_surface` = `desktop`, `ide` or `cli` from the directory |
+| Verified locally | nothing — Antigravity is not installed on the development machine; record shape assumed to match Gemini CLI |
+| Edits | same successful-tool-result rule as Gemini CLI (`gemini::edit_from_record`, shared with an identity parameter) |
+| Usage | none: the SQLite stores hold protobuf payloads and are not decoded (owner decision Q4) |
+| Sending | edits kept as local dry-run evidence until certified (catalog runtime `None`) |
+
+## Cline extension family (`ui_messages.rs`, added 2026-10-26)
+
+| | |
+| --- | --- |
+| Tools | Cline (`saoudrizwan.claude-dev`), Roo Code (`rooveterinaryinc.roo-cline`, `…roo-code-nightly`), Kilo Code (`kilocode.kilo-code`); IBM Bob (`ibm.bob-code`, transcript-only manifest added with the JSONL family) |
+| Source | `<editor>/User/globalStorage/<extension>/tasks/<task>/ui_messages.json` for Code, Code - Insiders, Cursor, Windsurf, VSCodium, plus remote `~/.{vscode,cursor,windsurf}-server/data/User/globalStorage` |
+| Verified locally | nothing — none of these extensions is installed on the development machine |
+| Edits | `tool` messages (`ask` or `say`) for `editedExistingFile`, `appliedDiff`, `searchAndReplace`, `insertContent`, `newFileCreated`, `writeToFile`, `fileDeleted`; lines from SEARCH/REPLACE or unified diff, or new content; paths stay workspace-relative |
+| Usage | `api_req_started` `tokensIn`/`tokensOut`/`cacheReads`/`cacheWrites` once two minutes old; no model or prompt counts yet |
+| Re-reads | the file is rewritten as the task runs; it is re-read when its fingerprint changes and IDs are stable per message; first discovery marks existing messages seen |
+| Sending | usage only; edits kept as local dry-run evidence (whether an approval-gated edit was rejected is not yet verified) |
+
+Cody is not parsed: its chat history (`state.vscdb` `ItemTable` key `sourcegraph.cody-ai`) has no per-edit record, so edits could only be inferred from context-file diffs, which the accuracy-first rule does not allow.
+
+## JSONL CLI family (`jsonl_family.rs`, added 2026-10-26)
+
+| Agent ID | Logs (under the home directory) |
+| --- | --- |
+| `qwen-code` | `.qwen/projects/*/chats/*.jsonl` |
+| `pi` | `.pi/agent/sessions/**/*.jsonl` |
+| `kiro` | `.kiro/sessions/**/messages.jsonl`, `.kiro/sessions/cli/*.jsonl` |
+| `factory-droid` | `.factory/sessions/**/*.jsonl` |
+| `kimi-code-cli` | `.kimi/sessions/**/wire.jsonl`, `.kimi-code/**/wire.jsonl` |
+
+Each record is searched (depth ≤ 6) for a completed edit: an editing tool name, a file path,
+and change evidence (a diff, or added/removed counts) in the object or its result layers. A
+request that only carries intended content, or a failed result, is not an edit, so edits whose
+result reports neither diff nor counts are not counted. Usage is the first token block in a
+record. No local sample of any of these logs exists; edits stay dry-run (usage only).
+
+Not parsed yet (need tool-specific joins and were recorded as unsupported for now): Grok CLI
+(edits only in `hunk_records.jsonl`), Amp (tool leases confirmed by later results in `.log`
+files), Continue (edit outcomes and tokens in separate `dev_data` files).
+
+## SQLite app family (`sqlite_apps.rs`, added 2026-10-26)
+
+| Agent ID | Database | Edits | Usage |
+| --- | --- | --- | --- |
+| `opencode` | `~/.local/share/opencode/opencode*.db` (or the app-support `opencode` folder) | `part.data` with `type = "tool"`, tool `edit`/`write`/`patch`/`multiedit`/`apply_patch`, `state.status = "completed"`, `state.input.filePath`, lines from `state.metadata.filediff.{additions, deletions}` | assistant `message.data` `tokens.{input, output, cache.read, cache.write}`, `modelID` |
+| `qoder` | `AppSup/Qoder/SharedClientCache/cache/db/local.db` | `chat_message.tool_result` `results[].{path, diffInfo.{add, delete}}` | `chat_message.token_info` `prompt_tokens`/`completion_tokens`/`cached_tokens` |
+
+Both are read through `sqlite_source.rs` (read-only URI, 250 ms busy timeout, time budget,
+db + WAL fingerprint). Rows are updated in place while a response streams, so each pass
+re-reads the last 500 rows and IDs are stable per row; usage waits two minutes. A missing
+table or column is reported as "schema not recognised" and nothing is read. Not covered:
+OpenCode's legacy `storage/**/*.json` files and any v2 `session_message` schema. No local
+database of either tool exists; edits stay dry-run (usage only), so the OpenCode native
+plugin's markers cannot be double counted.
+
+Not parsed (recorded as unsupported until a live sample settles the schema): Goose (per-session
+token counters that grow in place, which the first-write-wins usage ID cannot express), Zed
+and Warp (no documented table for edits or tokens), cursor-agent CLI (`agent-transcripts` and
+`ai-code-tracking.db` carry no confirmed per-edit record).

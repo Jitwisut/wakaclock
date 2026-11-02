@@ -352,8 +352,10 @@ impl EnterpriseService {
         let tx = db.transaction().await?;
         crate::repository::team_seats::lock(&tx, organization_id).await?;
         let existing = tx.query_opt("SELECT role,seat_type FROM organization_members WHERE organization_id=$1 AND user_id=$2", &[&organization_id,&id]).await?;
-        let (role,seat) = existing.map(|r| (r.get::<_,String>(0),r.get::<_,String>(1))).unwrap_or(("member".into(),"developer".into()));
-        crate::repository::team_seats::admit(&tx,organization_id,id,&role,&seat).await?;
+        let (role, seat) = existing
+            .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1)))
+            .unwrap_or(("member".into(), "developer".into()));
+        crate::repository::team_seats::admit(&tx, organization_id, id, &role, &seat).await?;
         let row = tx
             .query_one(
                 "INSERT INTO users (id, username, email, display_name, is_active)
@@ -384,15 +386,14 @@ impl EnterpriseService {
                 .await
                 .context("failed to provision SCIM email")?;
         }
-        tx
-            .execute(
-                "INSERT INTO organization_members (organization_id, user_id, role, seat_type)
+        tx.execute(
+            "INSERT INTO organization_members (organization_id, user_id, role, seat_type)
                  VALUES ($1, $2, 'member', 'developer')
                  ON CONFLICT (organization_id, user_id) DO UPDATE SET deactivated_at = NULL",
-                &[&organization_id, &id],
-            )
-            .await
-            .context("failed to attach SCIM user to organization")?;
+            &[&organization_id, &id],
+        )
+        .await
+        .context("failed to attach SCIM user to organization")?;
         tx.commit().await?;
         scim_user_from_row(row)
     }

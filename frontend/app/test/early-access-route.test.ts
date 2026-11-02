@@ -42,6 +42,15 @@ describe('POST /api/early-access', () => {
     });
   });
 
+  it('stores a utm-tagged source_page unchanged', async () => {
+    const response = await post(JSON.stringify({ ...valid, source_page: 'en/join?utm_source=x' }));
+    expect(response.status).toBe(200);
+    expect(store.saveSignup).toHaveBeenCalledWith(
+      'postgres://db',
+      expect.objectContaining({ source_page: 'en/join?utm_source=x' })
+    );
+  });
+
   it('rejects an oversized body before parsing it', async () => {
     const response = await post(JSON.stringify({ ...valid, bot_field: 'x'.repeat(5000) }));
     expect(response.status).toBe(413);

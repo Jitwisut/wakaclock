@@ -1,12 +1,6 @@
 import type { ReactNode } from 'react';
 
-import {
-  PRODUCT_ANSWER,
-  SITE_NAME,
-  SITE_TAGLINE,
-  SITE_URL,
-  SOCIAL_IMAGE_PATH,
-} from './site';
+import { PRODUCT_ANSWER, SITE_NAME, SITE_TAGLINE, SITE_URL, SOCIAL_IMAGE_PATH } from './site';
 
 import type { Metadata, Viewport } from 'next';
 
@@ -61,9 +55,12 @@ export const SITE_METADATA: Metadata = {
   },
   verification: { google: 'RA0nx3aI674qLp5GwkgzJPk3-7a7ulAAaDNcBgvtLs4' },
   icons: {
-    icon: { url: '/atoaxis-symbol-v2.png', type: 'image/png', sizes: '1254x1254' },
-    shortcut: '/atoaxis-symbol-v2.png',
-    apple: { url: '/atoaxis-symbol-v2.png', sizes: '1254x1254' },
+    icon: [
+      { url: '/atoaxis-mark.svg', type: 'image/svg+xml' },
+      { url: '/atoaxis-mark-192.png', type: 'image/png', sizes: '192x192' },
+    ],
+    shortcut: '/atoaxis-mark-192.png',
+    apple: { url: '/atoaxis-apple-touch-180.png', sizes: '180x180' },
   },
   manifest: '/manifest.webmanifest',
 };

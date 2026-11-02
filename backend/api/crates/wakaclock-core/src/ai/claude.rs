@@ -55,6 +55,14 @@ impl AiActivityParser for ClaudeCodeParser {
         "claude-code"
     }
 
+    fn parse_usage(
+        &self,
+        source: &std::path::Path,
+        _cursor: Option<&ParserCursor>,
+    ) -> std::io::Result<Vec<crate::ai::usage::AiUsageRecord>> {
+        crate::ai::usage::parse_claude_usage(source)
+    }
+
     fn discover(&self, context: &DiscoveryContext) -> DiscoveryResult {
         let root = Self::projects_root(context);
         if !root.exists() {
@@ -554,6 +562,8 @@ impl AiActivityParser for ClaudeCodeParser {
                     current_turn_id: None,
                     turns: Vec::new(),
                     pending_calls,
+                    source: None,
+                    history_floor_ms: None,
                 }),
             },
             warnings,

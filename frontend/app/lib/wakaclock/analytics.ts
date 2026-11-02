@@ -78,6 +78,93 @@ export interface AnalyticsExplorerResponse {
   };
 }
 
+export interface ReplaySegment {
+  actor_type: ActorType;
+  branch: null | string;
+  category: string;
+  end: number;
+  language: null | string;
+  project: null | string;
+  project_id: null | string;
+  source: string;
+  start: number;
+}
+
+export interface ReplayAiSession {
+  agent: string;
+  end: number;
+  model: null | string;
+  start: number;
+}
+
+export interface ReplayResponse {
+  ai_sessions: ReplayAiSession[];
+  ai_sessions_status: 'available' | 'filtered' | 'not_permitted';
+  applied_filters: AnalyticsExplorerResponse['applied_filters'];
+  filter_options: AnalyticsFilterOptions;
+  generated_at: string;
+  range: AnalyticsExplorerResponse['range'];
+  schema_version: number;
+  segments: ReplaySegment[];
+  summary: AnalyticsDurationSplit;
+}
+
+export type ReplayEventKind =
+  | 'ci_cancelled'
+  | 'ci_failure'
+  | 'ci_success'
+  | 'pr_closed'
+  | 'pr_first_review'
+  | 'pr_merged'
+  | 'pr_opened'
+  | 'pr_ready';
+
+export interface ReplayEvent {
+  at: number;
+  id: string;
+  kind: ReplayEventKind;
+  number: number;
+  project_ids: string[];
+  repository: string;
+  url: string;
+}
+
+export interface ReplayEventsResponse {
+  events: ReplayEvent[];
+  status: 'available' | 'identity_required';
+  unconfirmed_items: number;
+}
+
+export interface ProjectCityPoint {
+  day: number;
+  dependencies: number;
+  files: number;
+  lines: number;
+}
+
+export interface ProjectCityModule {
+  area: string;
+  language: string;
+  path: string;
+  series: ProjectCityPoint[];
+  top_files: Array<{ lines: number; path: string }>;
+}
+
+export interface ProjectCityResponse {
+  coverage: {
+    files_ignored: number;
+    files_included: number;
+    files_outside_root: number;
+    files_without_lines: number;
+  };
+  days: string[];
+  generated_at: string;
+  modules: ProjectCityModule[];
+  project_id: string;
+  schema_version: number;
+  timezone: string;
+}
+
 export const analyticsFilterParamNames = [
   'project_id',
   'language',

@@ -1,7 +1,21 @@
 # AtoAxis logo
 
-Asset: `public/atoaxis-symbol-v2.png` (1254 × 1254 RGBA PNG).
-Created with the built-in ImageGen tool. The original generated file is preserved.
+Asset: `public/atoaxis-mark.svg` (vector, emerald `#146F47`). Traced from the
+original generated `public/atoaxis-symbol-v2.png` (1254 × 1254 RGBA PNG), which
+stays in place for external links but is no longer referenced by the site.
+
+Masters, store icons, the horizontal wordmark lockup and the generator live in
+`/brand` at the repository root. Regenerate every derived file with:
+
+```bash
+python3 brand/make_brand.py frontend/app/public/fonts/atoaxis-sans.woff2 brand
+node brand/render.mjs frontend/app/node_modules/sharp brand
+```
+
+Web exports in `public/`: `atoaxis-mark-{192,512}.png` (icon fallback, manifest,
+organization structured data), `atoaxis-apple-touch-180.png` and
+`atoaxis-maskable-512.png` (full-bleed for platform masks). `app/icon.png` is
+the 512 px mark.
 
 The symbol combines an ascending A silhouette with a broken horizontal axis.
 Use it beside the written name AtoAxis, on a light background. The mark is

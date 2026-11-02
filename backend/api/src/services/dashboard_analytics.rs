@@ -22,7 +22,8 @@ use crate::model::dashboard_analytics::{
 use crate::model::date_range::ResolvedRange;
 use crate::model::metrics::{format_duration, Breakdown, DailyAverages, Metric, PeriodComparison};
 use crate::services::activity_timeline::{
-    totals_by, ActivityTimelineService, BridgeConfig, Dimension,
+    totals_by, totals_by_language_labelling_ai_sessions, ActivityTimelineService, BridgeConfig,
+    Dimension,
 };
 
 /// Weekday order the chart always renders, including days with no activity, so the axis
@@ -364,7 +365,12 @@ impl DashboardAnalyticsService {
                 .build_timeline(user_id, start_epoch, end_epoch)
                 .await?
                 .bridged;
-            let rows = totals_by(&canonical, dimension)
+            let totals = if matches!(dimension, Dimension::Language) {
+                totals_by_language_labelling_ai_sessions(&canonical)
+            } else {
+                totals_by(&canonical, dimension)
+            };
+            let rows = totals
                 .into_iter()
                 .take(20)
                 .map(|(name, seconds, _)| (name, seconds.round() as i64))

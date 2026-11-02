@@ -11,6 +11,9 @@ export interface DeliveryHealth {
 
 type DeliveryDevice = DeliveryStatusResponse['devices'][number];
 
+const BACKLOG_ATTENTION_MESSAGE =
+  'Delivery needs attention: an old backlog, permissions or recoverable dead letters remain. Any stale or missing details leave completion unconfirmed.';
+
 /** No background collector on this device (never installed, or uninstalled):
  * the client runs on demand, so collector evidence is not expected. */
 const isOnDemand = (device: DeliveryDevice) => !device.capture || device.capture.enabled === false;
@@ -19,6 +22,20 @@ const isOnDemand = (device: DeliveryDevice) => !device.capture || device.capture
  * still the latest truth, not a stale snapshot. */
 const isIdleOnDemand = (device: DeliveryDevice) =>
   isOnDemand(device) && !device.pending && !device.dead_letter;
+
+/** On an on-demand device a closed or idle editor (or one that exited before its final
+ * report) leaves a journal that is stopped, unavailable, stale or an aged-out ready with
+ * nothing pending: the editor is not running, which is not missing data. */
+const isClosedEditor = (device: DeliveryDevice) => {
+  if (!isOnDemand(device)) return false;
+  const journal = device.capture?.editor_journal;
+  if (!journal) return true;
+  return (
+    !journal.dead_letter &&
+    !journal.pending &&
+    ['ready', 'stale', 'stopped', 'unavailable'].includes(journal.status)
+  );
+};
 
 /** A successful new send is separate from a fully reconciled queue. Missing v2
  * details and old snapshots cannot establish completeness. */
@@ -48,8 +65,7 @@ export function deliveryHealth(
     );
   if (critical) {
     state = 'critical';
-    message =
-      'Delivery needs attention: an old backlog, permissions or recoverable dead letters remain. Any stale or missing details leave completion unconfirmed.';
+    message = BACKLOG_ATTENTION_MESSAGE;
   } else if (unavailable || devices.some((device) => device.status === 'unavailable')) {
     state = 'unavailable';
     message = 'Delivery status unavailable. Check the local client for queued data.';
@@ -117,11 +133,14 @@ export function deliveryHealth(
     message =
       'Editor capture needs attention. Durable journal or handoff failed; queued data is retained.';
   } else if (state === 'complete') {
-    if (journals.some((journal) => !journal || journal.pending == null)) {
+    const open = devices
+      .filter((device) => !isClosedEditor(device))
+      .map((device) => device.capture?.editor_journal);
+    if (open.some((journal) => !journal || journal.pending == null)) {
       state = 'unknown';
       message = 'Editor journal details not available. Completion remains unconfirmed.';
     } else if (
-      journals.some(
+      open.some(
         (journal) =>
           journal &&
           (journal.status === 'stale' || now - Date.parse(journal.last_observed_at) > 300_000)
@@ -129,10 +148,10 @@ export function deliveryHealth(
     ) {
       state = 'stale';
       message = 'Editor journal status is stale. Check the local client.';
-    } else if (journals.some((journal) => journal && journal.status !== 'ready')) {
+    } else if (open.some((journal) => journal && journal.status !== 'ready')) {
       state = 'unavailable';
       message = 'Editor capture is paused or unavailable. Existing data is retained.';
-    } else if (journals.some((journal) => (journal?.pending ?? 0) > 0)) {
+    } else if (open.some((journal) => journal!.pending! > 0)) {
       state = 'pending';
       message =
         'Editor activity awaits durable CLI handoff. An empty server queue does not confirm completeness.';
@@ -188,4 +207,83 @@ export function deliveryHealth(
     }
   }
   return { incomplete: state !== 'complete', state, pending, deadLetter, message };
+}
+
+export type SyncTone = 'attention' | 'ok' | 'syncing';
+
+export interface SyncSummary {
+  detail: string;
+  title: string;
+  tone: SyncTone;
+}
+
+const formatWhen = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+/** One plain-language line for the header indicator and the Sync status page.
+ * It reads the same `deliveryHealth` state (no new thresholds) and names the
+ * reported cause instead of listing every pipeline field. */
+export function syncSummary(
+  health: Pick<DeliveryHealth, 'message' | 'pending' | 'state'>,
+  devices: DeliveryDevice[]
+): SyncSummary {
+  if (health.state === 'complete') {
+    return { tone: 'ok', title: 'All activity synced', detail: health.message };
+  }
+  const tone: SyncTone = health.state === 'critical' ? 'attention' : 'syncing';
+  // Capture, journal or spool failures outrank the delivery backlog in deliveryHealth;
+  // say so rather than blaming the server for them.
+  if (health.state === 'critical' && health.message !== BACKLOG_ATTENTION_MESSAGE) {
+    return { tone, title: 'Capture needs attention', detail: health.message };
+  }
+  // A recorded error only explains a queue that still holds rows.
+  const waiting = devices.filter((device) => (device.pending ?? 0) > 0);
+  const kinds = new Set(waiting.map((device) => device.details?.backlog_error?.kind));
+  const oldest = waiting
+    .map((device) => device.oldest_pending_at)
+    .filter(Boolean)
+    .sort()[0];
+  const since = oldest ? ` since ${formatWhen(oldest)}` : '';
+  const queued = `${health.pending.toLocaleString()} heartbeat${health.pending === 1 ? '' : 's'} saved on your device${since}`;
+  if (kinds.has('auth_401')) {
+    return {
+      tone,
+      title: 'API key not accepted',
+      detail: `${queued}. Update the API key in your editor to resume sending.`,
+    };
+  }
+  if (kinds.has('payment_402')) {
+    return {
+      tone,
+      title: 'Subscription needed to sync',
+      detail: `${queued}. They will send once your plan is active.`,
+    };
+  }
+  if (kinds.has('network')) {
+    return {
+      tone,
+      title: "Can't reach the server",
+      detail: `${queued}. They will send automatically when the server is reachable.`,
+    };
+  }
+  if (kinds.has('server_error')) {
+    return {
+      tone,
+      title: 'Server asked to retry later',
+      detail: `${queued}. Retrying automatically.`,
+    };
+  }
+  if (health.pending > 0) {
+    return {
+      tone,
+      title: `Sending ${health.pending.toLocaleString()} queued heartbeats`,
+      detail: 'Totals may rise as queued activity arrives.',
+    };
+  }
+  return { tone, title: 'Sync not confirmed', detail: health.message };
 }

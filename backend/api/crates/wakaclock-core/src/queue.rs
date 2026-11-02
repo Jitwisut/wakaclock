@@ -101,6 +101,18 @@ pub struct DeliveryQueueSnapshot {
     pub capture: Option<CaptureHealthSnapshot>,
 }
 
+/// An identical delivery state is uploaded at most once per this many seconds.
+pub const SNAPSHOT_IDENTICAL_INTERVAL_SECONDS: i64 = 60;
+/// A changed state whose upload is not yet confirmed is retried at most this often.
+pub const SNAPSHOT_UNCONFIRMED_RETRY_SECONDS: i64 = 5;
+
+/// A reserved status snapshot and the fingerprint of the state it describes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReservedDeliverySnapshot {
+    pub snapshot: DeliveryQueueSnapshot,
+    pub fingerprint: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProducerSpoolHealth {
@@ -593,6 +605,30 @@ impl Queue {
         );",
         )
         .map_err(AppError::Queue)?;
+
+        // The snapshot throttle is per state: the fingerprint last reserved and the one
+        // the server last accepted, so a changed queue is reported at once and a lost
+        // upload does not hide it for a minute. Additive; older rows read as unsent.
+        for (name, definition) in [
+            ("attempted_fingerprint", "TEXT"),
+            ("uploaded_fingerprint", "TEXT"),
+            ("uploaded_sequence", "INTEGER NOT NULL DEFAULT 0"),
+        ] {
+            let exists = conn
+                .prepare("PRAGMA table_info(delivery_queue_state)")
+                .map_err(AppError::Queue)?
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(AppError::Queue)?
+                .filter_map(Result::ok)
+                .any(|column| column == name);
+            if !exists {
+                conn.execute(
+                    &format!("ALTER TABLE delivery_queue_state ADD COLUMN {name} {definition}"),
+                    [],
+                )
+                .map_err(AppError::Queue)?;
+            }
+        }
 
         // Backfill identities for rows written by pre-id clients. When the old payload
         // has no identity at all, derive one from the exact JSON bytes and persist it
@@ -1695,21 +1731,32 @@ impl Queue {
         &self,
         scope: &QueueScope,
     ) -> Result<Option<DeliveryQueueSnapshot>, AppError> {
-        self.capture_delivery_snapshot(scope, false)
+        Ok(self
+            .reserve_delivery_snapshot_scoped(scope, "", false)?
+            .map(|reserved| reserved.snapshot))
     }
 
     pub fn capture_delivery_snapshot_force_scoped(
         &self,
         scope: &QueueScope,
     ) -> Result<Option<DeliveryQueueSnapshot>, AppError> {
-        self.capture_delivery_snapshot(scope, true)
+        Ok(self
+            .reserve_delivery_snapshot_scoped(scope, "", true)?
+            .map(|reserved| reserved.snapshot))
     }
 
-    fn capture_delivery_snapshot(
+    /// Reserves a status upload. An identical state uploads at most once a minute;
+    /// a state the server has not yet accepted goes out at once, and is retried at
+    /// most every few seconds while its upload is unconfirmed. `local_state` is the
+    /// caller's metadata-only summary of capture and editor health, which belongs to
+    /// the same state. Call [`Self::record_delivery_snapshot_uploaded`] once the
+    /// server accepts the snapshot.
+    pub fn reserve_delivery_snapshot_scoped(
         &self,
         scope: &QueueScope,
+        local_state: &str,
         force: bool,
-    ) -> Result<Option<DeliveryQueueSnapshot>, AppError> {
+    ) -> Result<Option<ReservedDeliverySnapshot>, AppError> {
         let tx = self.conn.unchecked_transaction().map_err(AppError::Queue)?;
         // Acquire the writer reservation before reading counters: all fields and
         // the sequence then describe one consistent SQLite snapshot.
@@ -1743,6 +1790,12 @@ impl Queue {
             .flatten();
 
         let now_seconds = now.timestamp();
+        let fingerprint = format!(
+            "queue:{heartbeat_pending}/{}/{}/{}|{local_state}",
+            status.retry,
+            status.dead_letter,
+            oldest_pending.map_or_else(|| "-".to_string(), |seconds| seconds.to_string()),
+        );
         self.conn
             .execute(
                 "INSERT OR IGNORE INTO delivery_queue_state(queue_id, sequence, last_attempt_at)
@@ -1754,13 +1807,20 @@ impl Queue {
             .conn
             .execute(
                 "UPDATE delivery_queue_state
-                 SET sequence = sequence + 1, last_attempt_at = ?2
-                 WHERE queue_id = ?1 AND (last_attempt_at <= ?3 OR ?4)",
+                 SET sequence = sequence + 1, last_attempt_at = ?2, attempted_fingerprint = ?5
+                 WHERE queue_id = ?1 AND (
+                     ?4
+                     OR last_attempt_at <= ?3
+                     OR (COALESCE(uploaded_fingerprint, '') <> ?5
+                         AND (COALESCE(attempted_fingerprint, '') <> ?5
+                              OR last_attempt_at <= ?6)))",
                 params![
                     &queue_id,
                     now_seconds,
-                    now_seconds.saturating_sub(60),
-                    force
+                    now_seconds.saturating_sub(SNAPSHOT_IDENTICAL_INTERVAL_SECONDS),
+                    force,
+                    &fingerprint,
+                    now_seconds.saturating_sub(SNAPSHOT_UNCONFIRMED_RETRY_SECONDS),
                 ],
             )
             .map_err(AppError::Queue)?;
@@ -1794,7 +1854,32 @@ impl Queue {
             capture: None,
         };
         tx.commit().map_err(AppError::Queue)?;
-        Ok(Some(snapshot))
+        Ok(Some(ReservedDeliverySnapshot {
+            snapshot,
+            fingerprint,
+        }))
+    }
+
+    /// Records that the server accepted a reserved snapshot. A slower, older upload
+    /// finishing after a newer one does not overwrite the newer record.
+    pub fn record_delivery_snapshot_uploaded(
+        &self,
+        scope: &QueueScope,
+        reserved: &ReservedDeliverySnapshot,
+    ) -> Result<(), AppError> {
+        self.conn
+            .execute(
+                "UPDATE delivery_queue_state
+                 SET uploaded_fingerprint = ?2, uploaded_sequence = ?3
+                 WHERE queue_id = ?1 AND uploaded_sequence <= ?3",
+                params![
+                    opaque_queue_id(scope),
+                    &reserved.fingerprint,
+                    reserved.snapshot.sequence.min(i64::MAX as u64) as i64
+                ],
+            )
+            .map_err(AppError::Queue)?;
+        Ok(())
     }
 
     /// Persist the local confirmation time after a server accepts all rows in the
@@ -3419,6 +3504,186 @@ mod tests {
             .unwrap();
         assert_eq!(first.device_id, separate.device_id);
         assert_ne!(first.queue_id, separate.queue_id);
+    }
+
+    /// Moves the snapshot reservation clock back, as if the last attempt was older.
+    fn age_snapshot_attempt(temp: &TempQueue, scope: &QueueScope, seconds: i64) {
+        temp.queue
+            .conn
+            .execute(
+                "UPDATE delivery_queue_state SET last_attempt_at = last_attempt_at - ?2
+                 WHERE queue_id = ?1",
+                params![opaque_queue_id(scope), seconds],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_changed_delivery_state_is_reported_without_waiting_for_the_minute() {
+        let temp = TempQueue::new();
+        let owner = scope(ORIGIN, "mine");
+        temp.queue
+            .push_scoped(&row("hb-one", 1_000.0, 0), &owner)
+            .unwrap();
+        let first = temp
+            .queue
+            .reserve_delivery_snapshot_scoped(&owner, "journal:ready/2/0", false)
+            .unwrap()
+            .unwrap();
+        temp.queue
+            .record_delivery_snapshot_uploaded(&owner, &first)
+            .unwrap();
+
+        // The same state stays throttled for the full minute, even once confirmed.
+        assert!(temp
+            .queue
+            .reserve_delivery_snapshot_scoped(&owner, "journal:ready/2/0", false)
+            .unwrap()
+            .is_none());
+        age_snapshot_attempt(&temp, &owner, 30);
+        assert!(temp
+            .queue
+            .reserve_delivery_snapshot_scoped(&owner, "journal:ready/2/0", false)
+            .unwrap()
+            .is_none());
+
+        // A drained backlog or a handed-off editor journal goes out at once.
+        temp.queue
+            .push_scoped(&row("hb-two", 1_001.0, 0), &owner)
+            .unwrap();
+        let queue_changed = temp
+            .queue
+            .reserve_delivery_snapshot_scoped(&owner, "journal:ready/2/0", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(queue_changed.snapshot.pending, Some(2));
+        assert!(queue_changed.snapshot.sequence > first.snapshot.sequence);
+        temp.queue
+            .record_delivery_snapshot_uploaded(&owner, &queue_changed)
+            .unwrap();
+        let journal_changed = temp
+            .queue
+            .reserve_delivery_snapshot_scoped(&owner, "journal:ready/0/0", false)
+            .unwrap()
+            .unwrap();
+        assert_ne!(journal_changed.fingerprint, queue_changed.fingerprint);
+
+        // An identical state is still refreshed once the minute has passed.
+        temp.queue
+            .record_delivery_snapshot_uploaded(&owner, &journal_changed)
+            .unwrap();
+        age_snapshot_attempt(&temp, &owner, SNAPSHOT_IDENTICAL_INTERVAL_SECONDS);
+        assert!(temp
+            .queue
+            .reserve_delivery_snapshot_scoped(&owner, "journal:ready/0/0", false)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn a_lost_status_upload_is_retried_instead_of_using_up_the_minute() {
+        let temp = TempQueue::new();
+        let owner = scope(ORIGIN, "mine");
+        temp.queue
+            .push_scoped(&row("hb-one", 1_000.0, 0), &owner)
+            .unwrap();
+        // Reserved but never recorded: the upload died with its process.
+        let lost = temp
+            .queue
+            .reserve_delivery_snapshot_scoped(&owner, "", false)
+            .unwrap()
+            .unwrap();
+        // Concurrent processes do not stampede while that upload may be in flight...
+        assert!(temp
+            .queue
+            .reserve_delivery_snapshot_scoped(&owner, "", false)
+            .unwrap()
+            .is_none());
+        // ...but the unconfirmed state is retried within seconds, not a minute.
+        age_snapshot_attempt(&temp, &owner, SNAPSHOT_UNCONFIRMED_RETRY_SECONDS);
+        let retried = temp
+            .queue
+            .reserve_delivery_snapshot_scoped(&owner, "", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retried.fingerprint, lost.fingerprint);
+        assert!(retried.snapshot.sequence > lost.snapshot.sequence);
+
+        // Once confirmed, the same state waits for the minute again.
+        temp.queue
+            .record_delivery_snapshot_uploaded(&owner, &retried)
+            .unwrap();
+        age_snapshot_attempt(&temp, &owner, SNAPSHOT_UNCONFIRMED_RETRY_SECONDS);
+        assert!(temp
+            .queue
+            .reserve_delivery_snapshot_scoped(&owner, "", false)
+            .unwrap()
+            .is_none());
+        // A slower, older upload finishing late does not overwrite the newer record.
+        temp.queue
+            .record_delivery_snapshot_uploaded(&owner, &lost)
+            .unwrap();
+        let uploaded: (String, i64) = temp
+            .queue
+            .conn
+            .query_row(
+                "SELECT uploaded_fingerprint, uploaded_sequence FROM delivery_queue_state
+                 WHERE queue_id = ?1",
+                [opaque_queue_id(&owner)],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            uploaded,
+            (retried.fingerprint, retried.snapshot.sequence as i64)
+        );
+        // Forced status publication is never throttled.
+        assert!(temp
+            .queue
+            .capture_delivery_snapshot_force_scoped(&owner)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn delivery_state_from_an_older_client_gains_the_fingerprint_columns() {
+        let path = std::env::temp_dir().join(format!("wakaclock-old-state-{}.db", Uuid::new_v4()));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE delivery_queue_state (
+                    queue_id TEXT PRIMARY KEY,
+                    sequence INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at INTEGER NOT NULL DEFAULT 0,
+                    last_successful_delivery_at INTEGER
+                );
+                INSERT INTO delivery_queue_state(queue_id, sequence, last_attempt_at)
+                VALUES ('kept', 41, 7);",
+            )
+            .unwrap();
+        }
+        let queue = Queue::open_at(&path).unwrap();
+        let kept: (i64, i64, Option<String>, Option<String>, i64) = queue
+            .conn
+            .query_row(
+                "SELECT sequence, last_attempt_at, attempted_fingerprint, uploaded_fingerprint,
+                        uploaded_sequence
+                 FROM delivery_queue_state WHERE queue_id = 'kept'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(kept, (41, 7, None, None, 0));
+        drop(queue);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

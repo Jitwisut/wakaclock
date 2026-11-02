@@ -30,7 +30,9 @@ use wakaclock_core::broker::{
     QuarantineDiagnostic, MAX_BATCH_BYTES, MAX_EDITOR_OBSERVATION_BYTES, MAX_EVENT_BYTES,
 };
 use wakaclock_core::{
-    ai::{AiAttributionState, AiEditEvent},
+    ai::{
+        legacy_claude_hook_event_id, AiAttributionState, AiEditEvent, AiEventSource, AliasEvidence,
+    },
     api_client::ApiClient,
     broker::{
         broker_discovery_path, broker_runtime_dir, BrokerBatchAck, BrokerDiscovery, BrokerEventAck,
@@ -392,6 +394,18 @@ async fn process_record(
     let event = &record.event;
     let event_time = event.occurred_at.timestamp_millis() as f64 / 1000.0;
 
+    // The Claude Code hook reports an edit immediately and transcript sync replays the
+    // same tool call later under a different event ID. When the other producer's event
+    // is already delivered and the pair carries alias proof, keep the first one as the
+    // canonical operation and stop here, so one edit becomes one heartbeat.
+    {
+        let state = AiAttributionState::open()?;
+        if alias_delivered_counterpart(&state, event)? {
+            state.mark_delivered(&record.event_id, "broker_alias")?;
+            return Ok(ProcessRecordOutcome::Processed);
+        }
+    }
+
     // Write correlation evidence as soon as the durable inbox has handed the event to
     // the processor, before any backend request. This keeps an external AI edit from
     // being classified as Human while the API is offline. The append is idempotent by
@@ -562,6 +576,67 @@ async fn process_record(
     state.mark_delivered(&delivery_id, "broker")?;
     agent_service::record_heartbeat();
     Ok(ProcessRecordOutcome::Processed)
+}
+
+/// Alias evidence for this event and for the event the other producer would have
+/// emitted for the same tool call. Only Claude Code pairs are derivable today:
+/// a transcript event can recompute the hook's digest ID, and a hook that reports the
+/// raw tool-use ID (plugin >= 1.0.3) can name the transcript's ID. A legacy hook whose
+/// tool ID is its own digest cannot name the transcript event, so it is left alone.
+fn counterpart_evidence(event: &BrokerEventV1) -> Option<(AliasEvidence, AliasEvidence)> {
+    if event.agent != "claude-code" {
+        return None;
+    }
+    let session_id = event
+        .session_id
+        .as_deref()
+        .filter(|value| !value.is_empty())?;
+    let tool_event_id = event
+        .tool_event_id
+        .as_deref()
+        .filter(|value| !value.is_empty())?;
+    let this = AliasEvidence::new(event.event_id.clone(), event.entity.clone())
+        .with_tool_event_id(tool_event_id)
+        .with_session_id(session_id);
+    let other = match event.source {
+        AiEventSource::Transcript => AliasEvidence::new(
+            legacy_claude_hook_event_id(session_id, tool_event_id, &event.entity),
+            event.entity.clone(),
+        )
+        .with_session_id(session_id),
+        AiEventSource::AgentHook if !tool_event_id.starts_with("claude-code-") => {
+            AliasEvidence::new(
+                format!("claude-code-v1:{tool_event_id}"),
+                event.entity.clone(),
+            )
+            .with_tool_event_id(tool_event_id)
+            .with_session_id(session_id)
+        }
+        _ => return None,
+    };
+    Some((this, other))
+}
+
+/// Whether the other producer already delivered this event's tool call. On a proven
+/// match the alias is recorded with the delivered event as canonical. Proximity in
+/// time is never used: without ID proof the event is delivered as usual.
+fn alias_delivered_counterpart(
+    state: &AiAttributionState,
+    event: &BrokerEventV1,
+) -> Result<bool, AppError> {
+    let Some((this, other)) = counterpart_evidence(event) else {
+        return Ok(false);
+    };
+    if !state.is_delivered_in_any_scope(&other.event_id)? {
+        return Ok(false);
+    }
+    let canonical_event_id = other.event_id.clone();
+    match state.record_event_alias(&this, &other, &canonical_event_id, Utc::now().timestamp()) {
+        Ok(_) => Ok(true),
+        // No proof, or this event is already bound elsewhere: deliver it rather than drop it.
+        Err(AppError::Validation(_)) | Err(AppError::Conflict(_)) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// A tool id identifies an operation for attribution, but it does not by itself
@@ -1061,7 +1136,7 @@ mod tests {
     use std::path::PathBuf;
     use tower::ServiceExt;
     use wakaclock_core::ai::{AiConfidence, AiEventSource};
-    use wakaclock_core::broker::BrokerChangeKind;
+    use wakaclock_core::broker::{scoped_storage_event_id, BrokerChangeKind};
 
     fn event(id: &str) -> BrokerEventV1 {
         BrokerEventV1 {
@@ -1228,6 +1303,135 @@ mod tests {
     fn temp_db(name: &str) -> PathBuf {
         let nonce = Utc::now().timestamp_nanos_opt().unwrap_or_default();
         std::env::temp_dir().join(format!("wakaclock-cli-broker-{name}-{nonce}.db"))
+    }
+
+    fn claude_hook(tool_use_id: &str, legacy: bool) -> BrokerEventV1 {
+        let mut hook = event(&legacy_claude_hook_event_id(
+            "session",
+            tool_use_id,
+            "/workspace/src/lib.rs",
+        ));
+        hook.tool_event_id = Some(if legacy {
+            hook.event_id.clone()
+        } else {
+            tool_use_id.to_string()
+        });
+        hook.transport = Some("native_plugin".to_string());
+        hook
+    }
+
+    fn claude_transcript(tool_use_id: &str, entity: &str) -> BrokerEventV1 {
+        let mut transcript = event(&format!("claude-code-v1:{tool_use_id}"));
+        transcript.source = AiEventSource::Transcript;
+        transcript.tool_event_id = Some(tool_use_id.to_string());
+        transcript.entity = entity.to_string();
+        transcript.transport = None;
+        transcript
+    }
+
+    #[test]
+    fn transcript_after_legacy_hook_is_aliased_to_the_hook() {
+        let state = AiAttributionState::open_at(&temp_db("alias-legacy")).unwrap();
+        let hook = claude_hook("toolu_01", true);
+        state.mark_delivered(&hook.event_id, "broker").unwrap();
+        let transcript = claude_transcript("toolu_01", "/workspace/src/lib.rs");
+
+        assert!(alias_delivered_counterpart(&state, &transcript).unwrap());
+        assert_eq!(
+            state
+                .resolve_canonical_event_id(&transcript.event_id)
+                .unwrap(),
+            hook.event_id
+        );
+    }
+
+    #[test]
+    fn transcript_after_owner_scoped_hook_delivery_is_aliased() {
+        // The broker inbox key can carry both session and owner scope.
+        let state = AiAttributionState::open_at(&temp_db("alias-owner")).unwrap();
+        let hook = claude_hook("toolu_01", true);
+        state
+            .mark_delivered(
+                &format!("{}|session:session|owner:abc123", hook.event_id),
+                "broker",
+            )
+            .unwrap();
+        let transcript = claude_transcript("toolu_01", "/workspace/src/lib.rs");
+        assert!(alias_delivered_counterpart(&state, &transcript).unwrap());
+    }
+
+    #[test]
+    fn delivery_lookup_does_not_treat_underscore_as_a_wildcard() {
+        let state = AiAttributionState::open_at(&temp_db("alias-wildcard")).unwrap();
+        state
+            .mark_delivered("claude-code-v1:toolu_01x", "broker")
+            .unwrap();
+        assert!(!state
+            .is_delivered_in_any_scope("claude-code-v1:toolu_01")
+            .unwrap());
+        assert!(state
+            .is_delivered_in_any_scope("claude-code-v1:toolu_01x")
+            .unwrap());
+    }
+
+    #[test]
+    fn transcript_is_delivered_when_no_hook_reported_the_call() {
+        let state = AiAttributionState::open_at(&temp_db("alias-none")).unwrap();
+        let transcript = claude_transcript("toolu_01", "/workspace/src/lib.rs");
+        assert!(!alias_delivered_counterpart(&state, &transcript).unwrap());
+    }
+
+    #[test]
+    fn current_hook_after_transcript_is_aliased_to_the_transcript() {
+        let state = AiAttributionState::open_at(&temp_db("alias-current")).unwrap();
+        let transcript = claude_transcript("toolu_01", "/workspace/src/lib.rs");
+        // Transcript sync records the session-scoped key, not the bare event ID.
+        state
+            .mark_delivered(
+                &scoped_storage_event_id(&transcript.event_id, Some("session")),
+                "claude-code",
+            )
+            .unwrap();
+        let hook = claude_hook("toolu_01", false);
+
+        assert!(alias_delivered_counterpart(&state, &hook).unwrap());
+        assert_eq!(
+            state.resolve_canonical_event_id(&hook.event_id).unwrap(),
+            transcript.event_id
+        );
+    }
+
+    #[test]
+    fn legacy_hook_after_transcript_is_not_guessed() {
+        let state = AiAttributionState::open_at(&temp_db("alias-legacy-late")).unwrap();
+        let transcript = claude_transcript("toolu_01", "/workspace/src/lib.rs");
+        state
+            .mark_delivered(&transcript.event_id, "broker")
+            .unwrap();
+        let hook = claude_hook("toolu_01", true);
+        assert!(!alias_delivered_counterpart(&state, &hook).unwrap());
+    }
+
+    #[test]
+    fn another_file_or_tool_call_is_never_aliased() {
+        let state = AiAttributionState::open_at(&temp_db("alias-other")).unwrap();
+        let hook = claude_hook("toolu_01", true);
+        state.mark_delivered(&hook.event_id, "broker").unwrap();
+
+        let other_file = claude_transcript("toolu_01", "/workspace/src/main.rs");
+        let other_call = claude_transcript("toolu_02", "/workspace/src/lib.rs");
+        assert!(!alias_delivered_counterpart(&state, &other_file).unwrap());
+        assert!(!alias_delivered_counterpart(&state, &other_call).unwrap());
+    }
+
+    #[test]
+    fn other_agents_are_not_aliased() {
+        let state = AiAttributionState::open_at(&temp_db("alias-agent")).unwrap();
+        let hook = claude_hook("toolu_01", true);
+        state.mark_delivered(&hook.event_id, "broker").unwrap();
+        let mut codex = claude_transcript("toolu_01", "/workspace/src/lib.rs");
+        codex.agent = "codex".to_string();
+        assert!(!alias_delivered_counterpart(&state, &codex).unwrap());
     }
 
     #[tokio::test]

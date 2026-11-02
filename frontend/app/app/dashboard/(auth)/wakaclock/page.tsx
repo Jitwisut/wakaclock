@@ -1,5 +1,4 @@
 import { DashboardPanel } from '@/components/dashboard-panels';
-import { DeliveryStatusNotice } from '@/components/wakaclock/delivery-status-notice';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { RequireUser } from '@/components/wakaclock/require-user';
 
@@ -29,7 +28,6 @@ export default function WakaclockOverviewPage() {
         title="Player dashboard"
       />
       <RequireUser>
-        <DeliveryStatusNotice />
         <OverviewMotion>
           <div className="flex flex-col gap-8">
             {/* Each panel is individually switchable from Settings; see lib/dashboard-panels.ts. */}

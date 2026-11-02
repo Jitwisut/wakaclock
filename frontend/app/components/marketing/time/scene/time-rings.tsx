@@ -61,7 +61,6 @@ const HIGHLIGHT_DAY = new Color(DAY.highlight);
 const INK = new Color(SCENE.ink);
 const INK_DAY = new Color(DAY.ink);
 const glow = new Color();
-const GROW_SECONDS = 2.6;
 const dummy = new Object3D();
 const scratch = new Color();
 
@@ -111,7 +110,7 @@ function DayRing({ bloom, day, slices }: { bloom: boolean; day: number; slices: 
   const ring = useRef<LineBasicMaterial>(null);
   const inner = useRef<LineBasicMaterial>(null);
   const painted = useRef<null | Paint>(null);
-  const grow = useRef(0);
+  const drawn = useRef(false);
 
   const ringGeometry = useMemo(() => circleGeometry(RING_RADIUS), []);
   const innerGeometry = useMemo(() => circleGeometry(RING_RADIUS * 0.16, 96), []);
@@ -140,7 +139,7 @@ function DayRing({ bloom, day, slices }: { bloom: boolean; day: number; slices: 
     mesh.instanceMatrix.needsUpdate = true;
   }, [tickCount]);
 
-  useFrame((_, delta) => {
+  useFrame(() => {
     const g = timeMotion.current;
     const { collapse, warp } = timeMotion;
     // At midnight the week folds into today: each day becomes a lane just outside it.
@@ -179,16 +178,15 @@ function DayRing({ bloom, day, slices }: { bloom: boolean; day: number; slices: 
     const arcMesh = arcs.current;
     if (!arcMesh) return;
 
-    // Arcs grow around the dial once, clockwise from midnight, after the scene appears.
-    if (grow.current < 1) {
-      grow.current = Math.min(1, grow.current + Math.min(delta, 0.1) / GROW_SECONDS);
-      const reach = (1 - (1 - grow.current) ** 3) * MINUTES_PER_DAY;
+    // The day is already lit when the scene appears: it reads as a clock that has been
+    // running all along, not one starting up as the visitor arrives.
+    if (!drawn.current) {
+      drawn.current = true;
       slices.forEach((slice, index) => {
         const [x, y] = pointOnRing(slice.minute + SLICE_MINUTES / 2, RING_RADIUS);
         dummy.position.set(x, y, 0);
         dummy.rotation.set(0, 0, angleForMinute(slice.minute + SLICE_MINUTES / 2));
-        const shown = slice.minute <= reach ? 1 : 0;
-        dummy.scale.set(shown, shown, shown);
+        dummy.scale.set(1, 1, 1);
         dummy.updateMatrix();
         arcMesh.setMatrixAt(index, dummy.matrix);
       });

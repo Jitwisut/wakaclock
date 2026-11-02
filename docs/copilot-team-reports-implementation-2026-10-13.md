@@ -76,7 +76,7 @@ python3 scripts/copilot-reports-restore-drill.py
 
 Restore drill ใช้ PostgreSQL 16 native จาก Homebrew, localhost ports 56437/56438 และ DB `atoaxis_team_test` เฉพาะ fixture สร้าง directory ใหม่ 0700 ทุกครั้ง เปิดครั้งละหนึ่ง instance และหยุดใน finally; ไม่อ่าน app env files/credentials หรือแตะฐานจริง Backup และ independent ledger เก็บใน private temporary directory; output เป็น metadata/log ของ fixture เท่านั้น
 
-หลักฐาน machine-readable: `output/copilot-reports-local/restore.json` รวม UTC timestamp, base SHA, source hashes, backup hash และ benchmark scope สำเนารายรอบอยู่ใน `drill-*/restore.json` การวัด 1.57s เป็น service test รวม authorization/ledger fsync/JSON/CSV/final fence บน native PG และ debug build ไม่ใช่ HTTP p95 หรือ production-equivalent concurrent load certification
+หลักฐาน machine-readable: `output/copilot-reports-local/restore.json` (สร้างในเครื่องโดย `scripts/copilot-reports-restore-drill.py` และไม่เก็บใน git) รวม UTC timestamp, base SHA, source hashes, backup hash และ benchmark scope สำเนารายรอบอยู่ใน `drill-*/restore.json` การวัด 1.57s เป็น service test รวม authorization/ledger fsync/JSON/CSV/final fence บน native PG และ debug build ไม่ใช่ HTTP p95 หรือ production-equivalent concurrent load certification
 
 ## สิ่งที่ยังไม่ผ่าน/ควรทำต่อ
 
