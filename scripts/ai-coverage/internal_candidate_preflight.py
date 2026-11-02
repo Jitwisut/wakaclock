@@ -35,6 +35,6 @@ def main():
     validate(args.target,platform.system(),platform.machine(),node["arch"],host)
     if sys.version_info<(3,10) or int(node["version"].split('.')[0])<24:raise ValueError("candidate_runtime_prerequisite_missing")
     args.output.parent.mkdir(parents=True,exist_ok=True)
-    args.output.write_text(json.dumps({"schema_version":1,"source_commit":head,"target":args.target,"checked_at":datetime.now(timezone.utc).isoformat(),"native_runner_preflight":"passed","python":platform.python_version(),"node":node["version"],"rust_host":host,"native_smoke":"pending","live_certification":"pending","production_ready":False},sort_keys=True,indent=2)+'\n')
+    args.output.write_text(json.dumps({"schema_version":1,"source_commit":head,"target":args.target,"checked_at":datetime.now(timezone.utc).isoformat(),"native_runner_preflight":"passed","python":platform.python_version(),"node":node["version"],"system":platform.system(),"machine":platform.machine(),"node_arch":node["arch"],"rust_host":host,"native_smoke":"pending","live_certification":"pending","production_ready":False},sort_keys=True,indent=2)+'\n')
     print(json.dumps({"status":"native_runner_verified","target":args.target}))
 if __name__=='__main__':main()

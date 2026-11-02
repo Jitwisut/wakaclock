@@ -2,9 +2,28 @@ name: Internal client candidate
 
 on:
   workflow_dispatch:
+    inputs:
+      run_native_smoke:
+        description: Run real service and installed-VSIX smoke on disposable native runners
+        type: boolean
+        default: false
+      baseline_run_id:
+        description: Optional prior candidate workflow run ID from this repository
+        type: string
+        required: false
+      baseline_commit:
+        description: Exact prior candidate SHA; required together with baseline_run_id
+        type: string
+        required: false
+      vscode_executables:
+        description: Optional JSON map target to native VS Code executable; missing targets stay pending
+        type: string
+        required: false
+        default: '{}'
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   candidate:
@@ -15,26 +34,32 @@ jobs:
           - target: darwin-x64
             runner: macos-15-intel
             rust_target: x86_64-apple-darwin
+            architecture: x64
           - target: darwin-arm64
             runner: macos-15
             rust_target: aarch64-apple-darwin
+            architecture: arm64
           - target: win32-x64
             runner: windows-2022
             rust_target: x86_64-pc-windows-msvc
+            architecture: x64
           - target: win32-arm64
             runner: windows-11-arm
             rust_target: aarch64-pc-windows-msvc
+            architecture: arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          architecture: ${{ matrix.architecture }}
           cache: npm
           cache-dependency-path: extensions/vscode/package-lock.json
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          architecture: ${{ matrix.architecture }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
@@ -73,8 +98,40 @@ jobs:
           python scripts/ai-coverage/package_internal_candidate.py --vsix extensions/vscode/atoaxis-vscode-${{ matrix.target }}.vsix --commit "$GITHUB_SHA" --output candidate
           python scripts/ai-coverage/verify_release_artifacts.py --vsix candidate/atoaxis-vscode-${{ matrix.target }}.vsix
           cp "$RUNNER_TEMP/native-runner.json" "candidate/native-runner-${{ matrix.target }}.json"
+      - name: Optional extracted artifact lifecycle and installed VSIX smoke
+        shell: bash
+        env:
+          NATIVE_SMOKE_ENABLED: ${{ inputs.run_native_smoke && 'true' || 'false' }}
+          NATIVE_SMOKE_BASELINE_RUN: ${{ inputs.baseline_run_id }}
+          NATIVE_SMOKE_BASELINE_COMMIT: ${{ inputs.baseline_commit }}
+          NATIVE_SMOKE_VSCODE_MAP: ${{ inputs.vscode_executables }}
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/ai-coverage/run_native_candidate_ci.py --vsix candidate/atoaxis-vscode-${{ matrix.target }}.vsix --commit "$GITHUB_SHA" --target "${{ matrix.target }}" --output "candidate/native-smoke-${{ matrix.target }}.json"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: internal-client-${{ matrix.target }}-${{ github.sha }}
           path: candidate/*
+          retention-days: 14
+  matrix-evidence:
+    if: always()
+    needs: candidate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: internal-client-*-${{ github.sha }}
+          path: candidate-matrix
+          merge-multiple: true
+      - name: Verify all eight artifacts and separate native pending from passed
+        run: python scripts/ai-coverage/verify_candidate_matrix.py --directory candidate-matrix --commit "$GITHUB_SHA" --output candidate-matrix-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: internal-client-matrix-${{ github.sha }}
+          path: candidate-matrix-report.json
           retention-days: 14
