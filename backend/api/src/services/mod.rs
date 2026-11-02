@@ -1,6 +1,7 @@
 pub mod account_analytics;
 pub mod account_deletion;
 pub mod activity_timeline;
+pub mod agent_universe;
 pub mod ai_certification;
 pub mod ai_diagnostics;
 pub mod ai_stats;

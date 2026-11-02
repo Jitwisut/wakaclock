@@ -176,6 +176,9 @@ export const wakaclockKeys = {
     timezone?: string
   ) =>
     [...wakaclockKeys.all, 'replay-events', userId, organizationId, start, end, timezone] as const,
+  agentUniverse: (userId: string, start: string, end: string, timezone?: string) =>
+    [...wakaclockKeys.all, 'agent-universe', userId, start, end, timezone] as const,
+  agentLive: (userId: string) => [...wakaclockKeys.all, 'agent-live', userId] as const,
   goals: (userId: string) => [...wakaclockKeys.all, 'goals', userId] as const,
   goalProgress: (userId: string, goalId: string) =>
     [...wakaclockKeys.all, 'goal-progress', userId, goalId] as const,

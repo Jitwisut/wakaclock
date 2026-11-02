@@ -56,6 +56,10 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ## Approval gate — ต้องถามก่อนแก้
 
+การอนุมัติ 2026-11-02 (Agent Universe Phase 2, ทาง A): ผู้ใช้ตอบ “อนุญาต” ต่อแผนโหมด Live: `GET /api/v2/me/agents/live` อ่าน heartbeat ที่มี `ai_agent` ใน 15 นาทีล่าสุดแบบอ่านอย่างเดียวผ่าน `canonical_winner_relation` แสดงชื่อ Agent เฉพาะแถวที่ effective actor เป็น `ai_verified` และหน้าเว็บ poll ทุก 20 วินาที ไม่คำนวณ duration ไม่เปลี่ยน baseline แถวใด, ไม่มี migration และไม่แตะ ingest/queue/client. ไม่อ้างความเร็วการส่งข้อมูล เพราะ `created_at` มาจาก client. ไม่ครอบคลุม commit/push, merge main หรือทาง B (สัญญาณในหน่วยความจำตอนรับ heartbeat + SSE).
+
+การอนุมัติ 2026-11-02 (Agent Universe ขั้น 1): ผู้ใช้ตอบ “อนุญาต” ต่อแผน `GET /api/v2/me/agents/universe` อ่านเฉพาะ `ai_usage_events` และ `project_identities` เป็นข้อมูลรายชั่วโมง ไม่อ่าน heartbeat ไม่คำนวณ duration และไม่ใช้ช่วง session เป็นเวลา ไม่เปลี่ยน baseline แถวใด, ไม่มี migration และไม่แตะ ingest/client. ไม่ครอบคลุม commit/push, merge main, เรียลไทม์ หรือเวลาต่อ Agent.
+
 การอนุมัติ 2026-11-01 (Time Machine City): ผู้ใช้ตอบ “อนุญาต” ต่อแผนเมืองโค้ด: `GET /api/v1/dashboard/city` อ่าน path, `lines`, language และ `dependencies` รายไฟล์รายวันจาก `heartbeats_canonical` ไม่อ่านและไม่คำนวณเวลา ส่งเฉพาะ path แบบ relative. หน้า City ใช้ three.js ที่มีอยู่แล้ว. ไม่เปลี่ยน baseline แถวใด, ไม่มี migration และไม่แตะ ingest/client. ไม่ครอบคลุม commit/push, merge main หรือการคำนวณ complexity ฝั่ง client.
 
 การอนุมัติ 2026-11-01 (Time Machine Phase 2): ผู้ใช้ตอบ “อนุญาต” ต่อแผนซ้อน PR/CI ของตัวเองบน Replay: `GET /api/v2/organizations/:id/me/github/replay-events` อ่านเฉพาะ Postgres, แสดงเฉพาะ PR ที่ผู้ใช้เป็นคนเปิดเองผ่าน GitHub identity ที่ยืนยันแล้ว และ repo ที่ผู้ใช้ bind ไว้. ไม่มีมุมมองทั้งทีม, ไม่เปลี่ยน baseline แถวใด, ไม่มี migration และไม่อ่าน ClickHouse. ไม่ครอบคลุม commit/push, merge main หรือการเก็บ Git commit เพิ่ม.

@@ -27,6 +27,7 @@
     { "key": "ai_prompt_length", "status": "beta", "api": "/api/v2/me/ai/effectiveness" },
     { "key": "work_session_receipts", "status": "experimental", "api": "/api/v2/me/work-sessions" },
     { "key": "time_machine", "status": "experimental", "api": "/api/v1/dashboard/replay" },
+    { "key": "agent_universe", "status": "experimental", "api": "/api/v2/me/agents/universe" },
     { "key": "ai_human_follow_up_events", "status": "beta", "api": "/api/v2/ai/follow-up-events" },
     { "key": "ai_human_follow_up", "status": "unavailable", "api": "/api/v2/ai/follow-up" },
     { "key": "measurement_trust_center", "status": "beta", "api": "/api/v2/me/measurement-quality" },

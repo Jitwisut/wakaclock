@@ -46,6 +46,7 @@ use crate::model::profile::{
 };
 use crate::model::report::{CreateReportScheduleRequest, ReportSchedule};
 
+mod agent_universe;
 mod copilot_reports;
 mod heartbeat_readback;
 mod team_actions;
@@ -552,6 +553,8 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/presence/rooms/:room_id/office", get(crate::handlers::presence_v2::office::snapshot).post(crate::handlers::presence_v2::office::command))
         .route("/presence/rooms/:room_id/messages", get(crate::handlers::presence_v2::office::messages))
         .route("/presence/rooms/:room_id/media-token", post(crate::handlers::presence_v2::office::media_token))
+        .route("/me/agents/universe", get(agent_universe::get))
+        .route("/me/agents/live", get(agent_universe::live))
         .route("/me/ai/effectiveness", get(ai_effectiveness))
         .route("/ai/follow-up-events", post(follow_up_event))
         .route("/ai/follow-up", get(follow_up_stats))
@@ -758,7 +761,10 @@ fn feature_available(
 
     match key {
         "ai_human_follow_up" | "organization_analytics" => false,
-        "ai_human_follow_up_events" | "work_session_receipts" | "time_machine" => true,
+        "ai_human_follow_up_events"
+        | "work_session_receipts"
+        | "time_machine"
+        | "agent_universe" => true,
         "data_exports" => export_available && postgres,
         "postgres_transactional_store"
         | "personal_organizations"
@@ -885,7 +891,8 @@ pub async fn capabilities(State(state): State<Arc<AppState>>) -> Json<V2Envelope
                         || state.config.measurement_repair_enabled)
                         && (feature.key != "work_session_receipts"
                             || state.config.work_sessions_enabled)
-                        && (feature.key != "time_machine" || state.config.time_machine_enabled);
+                        && (feature.key != "time_machine" || state.config.time_machine_enabled)
+                        && (feature.key != "agent_universe" || state.config.agent_universe_enabled);
                     FeatureCapability {
                         available: feature_enabled
                             && feature_available(
@@ -4087,6 +4094,13 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: error.to_string(),
+        }
+    }
+
+    fn too_many_requests(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: message.into(),
         }
     }
 

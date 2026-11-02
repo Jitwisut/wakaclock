@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { wakaclockClient } from '@/lib/wakaclock/client';
 import { wakaclockV2Client } from '@/lib/wakaclock/client-v2';
 import { getProjectCity, getReplay } from '@/lib/wakaclock/endpoints';
+import { getAgentLive, getAgentUniverse } from '@/lib/wakaclock/endpoints-v2';
 import { getReplayEvents } from '@/lib/wakaclock/github-endpoints';
 
 vi.mock('@/lib/wakaclock/client', () => ({ wakaclockClient: { get: vi.fn() } }));
@@ -28,6 +29,18 @@ it('requests a project city by id and timezone', async () => {
   expect(wakaclockClient.get).toHaveBeenCalledWith('/dashboard/city', {
     params: { project_id: 'project-a', timezone: 'UTC' },
   });
+});
+
+it('requests the agent universe for a range', async () => {
+  const params = { end: '2026-08-02', start: '2026-08-01', timezone: 'UTC' };
+
+  expect(await getAgentUniverse(params)).toEqual({ events: [] });
+  expect(wakaclockV2Client.get).toHaveBeenCalledWith('/me/agents/universe', { params });
+});
+
+it('requests live agent activity for the signed-in account only', async () => {
+  expect(await getAgentLive()).toEqual({ events: [] });
+  expect(wakaclockV2Client.get).toHaveBeenCalledWith('/me/agents/live');
 });
 
 it('requests the signed-in member events inside one organization', async () => {

@@ -46,6 +46,18 @@ relative to the project and refuses more than 200,000 file-days.
 GitHub identity, and needs the Team guard plus `ATOAXIS_TIME_MACHINE_ENABLED`.
 A range over 92 days, 1,000 pull requests or 2,000 events is refused, not truncated.
 
+`GET /me/agents/universe` serves Agent Universe from hourly `ai_usage_events`. It reads
+no heartbeat and returns no duration: sessions stay open for days, so a session span is
+never time. Raw session ids stay on the server. A range over 92 days is refused.
+
+`GET /me/agents/live` lists which agents sent heartbeats in the last 15 minutes, by agent and
+project. It reads `canonical_winner_relation` rows (so retried and deleted heartbeats drop out)
+and names an agent only when the shared effective actor rule says `ai_verified`; other agent
+heartbeats are only counted. `heartbeats.created_at` comes from the client, so the response
+reports the latest activity, never delivery time. Client times up to 5 minutes ahead are pinned
+to `server_time` and counted; later ones are excluded. No path, entity or session id is
+returned. It shares the per-account analytics rate limit and the Agent Universe flag.
+
 ## Handler pattern — Existing Convention
 
 Canonical minimal example:
