@@ -5,13 +5,21 @@
  * outside a component.
  */
 let currentToken: null | string = null;
+let currentSessionEpoch = 0;
 
 export function getCurrentToken(): null | string {
   return currentToken;
 }
 
 export function setCurrentToken(token: null | string): void {
+  if (!Object.is(currentToken, token)) currentSessionEpoch += 1;
   currentToken = token;
+}
+
+/** Cache observation only, never authorization. A token is never placed in a key
+ * or hashed into one. An as-yet-unsynchronized React session stays unconfirmed. */
+export function getSessionObservation(expected: null | string): 'unconfirmed' | number {
+  return Object.is(currentToken, expected) ? currentSessionEpoch : 'unconfirmed';
 }
 
 /**

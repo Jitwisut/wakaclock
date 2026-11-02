@@ -1,7 +1,143 @@
 # Goal: ปิดงาน AtoAxis Team รุ่นแรก
 
-ตั้ง Goal ในแชตนี้วันที่ 13 ต.ค. 2026 (Asia/Bangkok) สถานะ **active**
+## จุดส่งมอบล่าสุด — 2 พ.ย. 2026
+
+เจ้าของสั่งปิดรอบนี้ไว้ก่อนและเขียนรายการทดสอบ จึงเปลี่ยน Goal เป็น
+**paused ตามคำสั่งเจ้าของ** ไม่ใช่ complete งานพัฒนาส่วนไม่รวม Stripe
+ส่งต่อพร้อม [รายการทดสอบ T1–T6](atoaxis-team-test-handoff-2026-11-02.md)
+ยังไม่เริ่มทดสอบ ไม่ commit/push และคงงาน Stripe ที่ยังขาดไว้ครบ
+ข้อความ blocked ด้านล่างเป็นประวัติก่อนคำสั่งพักครั้งนี้
+
+สถานะก่อนคำสั่งพัก: **blocked** หลังตรวจเงื่อนไขเดิมสามรอบต่อเนื่อง
+งาน non-Stripe ส่งมอบแล้ว ส่วน Stripe ยังมี code gaps แต่เจ้าของสั่งพักไว้
+การเริ่ม behavioral/native verification ต้องรอคำสั่งเจ้าของ ไม่มี process/job
+ที่กำลังรอผล และไม่มีงานพัฒนาอิสระที่ยืนยันได้ว่าเหลือให้เดินต่อในรอบนี้
+จึงหยุดการวนอัตโนมัติ ไม่เปลี่ยน objective ไม่ mark complete และไม่ถือว่า
+เจ้าของสั่ง pause Goal การกลับมาทำงานต้องรับคำตอบขั้นถัดไปจากเจ้าของ
+
+ส่วนที่ไม่รวม Stripe ต่อ implementation แล้วและจัดทำ
+[source inventory กับรายการส่งต่อทดสอบ](atoaxis-team-non-stripe-handoff-2026-11-02.md)
+พร้อม snapshot แบบ uncommitted/hash และผล compile/typecheck/static ที่รันจริง
+การตรวจ source และ bounded review ไม่พบ code gap ใหม่ที่ยืนยันได้ในขอบเขตนี้
+สถานะจุดส่งมอบย่อยคือ **พัฒนาส่วนที่ไม่รวม Stripe ครบ — รอทดสอบ**
+ไม่ใช่หลักฐานว่า behavioral/native/provider tests ผ่านหรือรับรองครบ G1–G6
+
+Stripe ยังมี code gaps ที่พักตามคำสั่งเจ้าของ Goal ทั้งหมดยังไม่ complete
+รอเจ้าของสั่งเริ่มตรวจรับหรือกลับมาทำ Stripe ไม่เริ่ม verification ชุดใหญ่
+ไม่ commit/push หรือเปิด flags/checkout/production จากรายงานนี้
+
+## คำสั่งล่าสุด — 30 ต.ค. 2026
+
+เจ้าของให้พักงาน Stripe ไว้ก่อนเพราะยังไม่มีบัญชี ให้ปิดงาน Team ที่ไม่พึ่ง
+Stripe ต่อ เช่น onboarding/no-card trial prerequisites, privacy/retention/restore,
+GitHub/session/report และ client/package/configuration tooling พร้อม error/recovery
+โดยคง identity และ consent safeguards เดิม ไม่ทำทางลัดเพื่อเปิดสิทธิ์ใช้งาน
+
+เก็บโค้ด Stripe, IDs, หลักฐาน และ additive migrations ที่ทำไว้; คง flags
+การชำระเงินปิด ไม่สร้างบัญชีหรือ credential แทนเจ้าของ และไม่เดินงาน provider
+preview/upgrade/proration/paid downgrade หรือ Stripe-specific maintenance ต่อ
+จนกว่าเจ้าของจะสั่งกลับมาทำ งานตรวจชุดใหญ่ยังพักตามคำสั่ง development-first
+
+จุดส่งมอบถัดไปคือ **พัฒนาส่วนที่ไม่รวม Stripe ครบ — รอทดสอบ** เมื่อ code gaps
+ของส่วนนั้นปิดจริง พร้อมระบุ Stripe เป็น **พักตามคำสั่งเจ้าของ** ไม่ใช่เสร็จแล้ว
+Goal โดยรวมยัง active และไม่ยกระดับเป็นครบ G1–G6 หรือพร้อมเปิดขายจากการพัก Stripe
+รายละเอียดลำดับงานปัจจุบันอยู่ใน [development handoff](atoaxis-team-development-first-2026-10-26.md)
+
+## ประวัติและขอบเขตเดิม
+
+2 พ.ย. ต่อ readiness ให้แสดงวันที่/build ของหลักฐาน local/external แยกกัน
+พร้อม snapshot แบบ read-only และตรวจสิทธิ์/source ซ้ำก่อนตอบกลับ มีหน้า Owner/
+Admin อ่านหลักฐานแบบ explicit และ session fence โดยไม่รันการทดสอบหรือเปิด flags
+ผ่าน compile/typecheck/scoped lint แล้ว ยังไม่ใช่การรับรองภายนอกหรือปิด Goal
+ดู [readiness handoff](atoaxis-team-readiness-evidence-2026-11-02.md)
+
+1 พ.ย. เจ้าของยืนยันค่าเฉลี่ยจาก PR ที่ usage ซึ่งระบบได้รับและยืนยันเชื่อมไว้
+มีราคาครบ โดยไม่อ้างว่าจับกิจกรรมครบทั้งหมด ต่อ metric ใหม่พร้อม numerator/
+denominator, privacy equation ledger แบบ atomic, restore/retention, UI และ CSV
+แล้ว ยังไม่รัน behavioral/SQL/provider tests หรือ migration064 และยังไม่ปิด Goal
+ดู [observed average handoff](atoaxis-team-observed-pr-average-2026-11-01.md)
+
+1 พ.ย. ต่อเครื่องมือ local operator สำหรับ Prepare/Apply rollout/timezone
+รายองค์กรแล้ว โดยตรวจ Owner ที่อ้างอิง หลักฐาน enrollment/privacy และแผนเดิม
+ก่อนเขียน SQL พร้อม original-operation readback และ final recapture ที่ไม่จับคู่
+สถานะเก่ากับ privacy generation ใหม่ ไม่เริ่ม trial/consent หรือเปิด flag จริง
+ดู [pilot control handoff](atoaxis-team-pilot-control-2026-11-01.md)
+
+1 พ.ย. ต่อ config/preflight สำหรับ onboarding/trial/admission ใน local staging
+โดยใช้ metadata allowlist และ independent guard เดิม ไม่ต้องมีบัญชี Stripe
+ผ่าน syntax/static เท่านั้น ยังไม่รัน services/tests และพบว่ายังขาดเครื่องมือ
+เปิด rollout/timezone แบบ explicit รายองค์กร ซึ่ง fixture SQL ใช้แทนไม่ได้
+ดู [staging configuration handoff](atoaxis-team-staging-configuration-2026-11-01.md)
+
+1 พ.ย. เพิ่มเครื่องมือ native smoke และรายงานรวมแพ็กเกจ 8 ไฟล์ใน workflow
+แบบ opt-in โดยแยก pending ออกจากผลผ่าน ตรวจ syntax/static แล้ว แต่ยังไม่
+รันบริการจริงหรือ workflow และยังไม่ประกาศ non-Stripe development ทั้งชุดเสร็จ
+ดู [candidate tooling handoff](atoaxis-client-candidate-native-handoff-2026-11-01.md)
+Stripe ยังพักตามคำสั่งเจ้าของ ไม่มีการเปิด flags หรือสร้างบัญชีแทน
+
+31 ต.ค. ต่อ authoritative admission/hints ให้ตรวจ birth และ confirmation SQL
+ร่วมกับ independent proof แล้ว พร้อมหน้า Owner inspect/confirm/readback สำหรับ
+องค์กรที่สร้างไว้แล้วแต่ยังไม่ยืนยัน โดยไม่ replay องค์กร/สมาชิก/trial ใหม่
+Compile/typecheck/scoped lint ผ่าน; behavioral tests ยังไม่รัน
+ดู [current-Owner recovery handoff](atoaxis-team-organization-recovery-2026-10-31.md)
+
+ความคืบหน้า 30 ต.ค. หลังพัก Stripe: ต่อ fresh organization birth proof และ
+original-nonce retry/creation receipt/UI เข้ากับ trial ที่ไม่ผูกบัตรแล้ว โดยไม่
+เปิด rollout หรือ consent อัตโนมัติ ผ่าน compile/static ของส่วนนี้; behavioral
+verification ยังไม่รัน และยังมี admission/restore inventory กับ operator handling
+ของ ambiguous creation ที่ต้องปิดก่อนส่งมอบ non-Stripe development ทั้งชุด
+ดู [onboarding handoff](atoaxis-team-organization-onboarding-2026-10-30.md)
+
+ตั้ง Goal ในแชตนี้วันที่ 13 ต.ค. 2026 (Asia/Bangkok)
+อัปเดตลำดับงานตามเจ้าของวันที่ 26 ต.ค. 2026: **พัฒนาให้ครบก่อน แล้วตรวจรับเป็นชุด**
+อัปเดตจุดส่งมอบตามเจ้าของวันที่ 27 ต.ค. 2026: **พัฒนาครบ → รอทดสอบ**
 ฐาน source ที่ส่งแล้ว: `382c92e0b973369c428da2477424cbbc89bb78ef` บน `codex/heartbeat-capture-release`
+
+## เกณฑ์ส่งมอบงานพัฒนาล่าสุด — 27 ต.ค. 2026
+
+เจ้าของต้องการให้พัฒนาให้ครบก่อน แล้วมีสถานะ **รอทดสอบ** แยกต่างหาก
+ใช้เกณฑ์ส่วนนี้สำหรับการปิดระยะพัฒนา แทนการรอเกณฑ์พร้อมเปิดขายทั้งหมด
+ส่วนเป้าหมายผลิตภัณฑ์ G1–G6 และ release gates ด้านล่างยังใช้สำหรับตรวจรับ/
+เปิดขายภายหลัง ไม่เป็นเงื่อนไขให้วนพัฒนาต่อเมื่อโค้ดตามขอบเขตครบแล้ว
+
+สถานะส่งมอบในเอกสารและรายงาน:
+
+| สถานะ | เกณฑ์ |
+|---|---|
+| กำลังพัฒนา | ยังมี code gap, interface ที่ยังไม่เชื่อม หรือ compile/typecheck ของส่วนที่แก้ไม่ผ่าน |
+| พัฒนาครบ — รอทดสอบ | โค้ดตามขอบเขตเดิมครบและเชื่อมกันแล้ว, compile/typecheck ที่เกี่ยวข้องผ่าน, มี source snapshot และรายการตรวจรับ/สิ่งที่รอภายนอกครบ |
+| กำลังทดสอบ / แก้บั๊ก | เริ่มระยะตรวจรับตามคำสั่งเจ้าของ บันทึกผลและ defect แยกจากรายการพัฒนาเดิม |
+| ทดสอบผ่าน | ชุดตรวจรับของขอบเขตที่ระบุผ่านด้วยหลักฐานของ candidate เดียวกัน; รายการที่ยังรอภายนอกต้องแสดงแยกและห้ามนับว่าผ่าน |
+| พร้อมเปิดขาย | เกณฑ์เปิดขายเดิมครบ รวม configuration, external evidence และการอนุญาตเปิดใช้งาน |
+
+ปิดระยะพัฒนาและส่งมอบเป็น **พัฒนาครบ — รอทดสอบ** ได้เมื่อ:
+
+1. Backend, worker, API, UI, migrations, error/recovery paths และ client/package/
+   configuration tooling ตามขอบเขตเชื่อมครบ ไม่มี placeholder หรือ runtime path
+   ที่ยังไม่ทำ ไม่ย้าย code gap ไปอยู่ในรายการรอทดสอบเพื่อให้ดูว่าเสร็จ
+2. Compile/typecheck และ static checks ที่เกี่ยวข้องกับโค้ดส่งมอบผ่าน
+   ผลนี้รับรองเฉพาะระดับ development ไม่แทนผล behavioral/runtime tests
+3. ระบุ branch, SHA และสถานะ uncommitted/diff ให้ระบุ source ชุดส่งมอบได้
+   พร้อมรายการฟังก์ชันที่พัฒนาครบและข้อจำกัด ไม่อ้างว่าเป็น clean release candidate
+   หากยังมีโค้ดค้างที่ไม่ commit
+4. มี test handoff ระบุสิ่งที่จะทดสอบ, expected behavior, วิธีรัน,
+   prerequisites, ผลที่มีอยู่และ source ที่ผลนั้นรับรอง รวมรายการยังไม่ได้รัน
+5. แยก Cloud, ราคา/Price IDs, login/บัญชีที่สอง, Windows, provider certification,
+   canary และลูกค้าทดลองไว้เป็น **รอทดสอบ/รอภายนอก** ได้เมื่อโค้ดรองรับครบ
+   ไม่ต้องรอการทดลอง 14 วันเพื่อปิดระยะพัฒนา
+
+เมื่อครบ ให้ส่งรายงาน **พัฒนาครบ — รอทดสอบ** และจบระยะพัฒนา
+เริ่มชุดตรวจรับระยะ B เมื่อเจ้าของสั่งเริ่มทดสอบ ไม่วนเพิ่ม scope หรือรัน
+broad certification เพื่อรอให้ Goal พร้อมเปิดขาย หากพบ defect ภายหลังให้เปิด
+รายการแก้ไขและตรวจซ้ำตามจริง การเปลี่ยนเกณฑ์นี้ไม่เปิด feature flags,
+Checkout หรือ production และไม่อนุญาต commit/push/deploy เพิ่ม
+
+สถานะ ณ การปรับเกณฑ์ยังเป็น **กำลังพัฒนา** ตามรายการ code gaps ใน
+[development handoff](atoaxis-team-development-first-2026-10-26.md)
+27 ต.ค. ตรวจเครื่องมือแล้ว Goal เดิมไม่มีอยู่ (`get_goal` คืน null) จึงสร้าง
+Goal ใหม่ในแชตเดิมสำเร็จโดยไม่กำหนด token budget ใช้ objective งานพัฒนา
+ตามเกณฑ์ **พัฒนาครบ — รอทดสอบ** ด้านบน สถานะเครื่องมือเป็น `active`;
+ยังไม่ใช่การปิดงานหรืออนุญาตเปิดขาย
 
 ## เป้าหมายสุดท้าย
 
@@ -9,8 +145,75 @@
 
 จุดส่งมอบ:
 
-1. **พร้อมให้ทีมทดลองใช้:** candidate/build ตรงกัน, flow และ privacy บน staging ผ่าน, client ตาม scope มีหลักฐานจริง และสามารถดำเนินงานทดลองโดยควบคุม rollout ได้
-2. **พร้อมเปิดขาย:** commercial flow, Cloud/security/restore/performance, lifecycle/canary/client และผลทดลองลูกค้าผ่านครบ พร้อมราคาที่เจ้าของอนุมัติและการอนุญาตเปิด production/checkout
+1. **พัฒนาครบ — รอทดสอบ:** ใช้เกณฑ์ส่งมอบงานพัฒนาล่าสุดด้านบน ปิดระยะพัฒนาได้โดยยังไม่ผ่าน external acceptance
+2. **พร้อมให้ทีมทดลองใช้:** candidate/build ตรงกัน, flow และ privacy บน staging ผ่าน, client ตาม scope มีหลักฐานจริง และสามารถดำเนินงานทดลองโดยควบคุม rollout ได้
+3. **พร้อมเปิดขาย:** commercial flow, Cloud/security/restore/performance, lifecycle/canary/client และผลทดลองลูกค้าผ่านครบ พร้อมราคาที่เจ้าของอนุมัติและการอนุญาตเปิด production/checkout
+
+## ลำดับ Goal ล่าสุด — เจ้าของอนุมัติ 26 ต.ค. 2026
+
+27 ต.ค. ต่อ no-card trial API/UI แล้ว: start/status/recovery transition เดิม,
+Owner/rollout/financial fences และ capacity ที่คงอยู่หลัง trial หมดอายุ พร้อม
+ข้อยกเว้นเฉพาะ seat เดิม/first personal-owner seat ที่พิสูจน์ creation ปัจจุบันได้
+โดยไม่สร้าง baseline เจ้าของอนุญาตเพิ่ม route ใน v2.rs เฉพาะสองบรรทัด;
+ยังไม่อนุญาต commit/push ไฟล์ protected เพิ่ม Rust all-target compile/TypeScript ผ่าน
+แต่ยังไม่รัน behavioral tests ไม่เปิด flag หรือเริ่ม trial จริง และไม่ปิด G5/G6
+รายละเอียดและข้อจำกัด [trial development](atoaxis-team-self-service-trial-2026-10-27.md).
+Portal, subscription changes, retention/latest restore และ fresh nonpersonal-org
+enrollment ยังเป็นงานพัฒนา ไม่ถูกแทนด้วยผลจำลองหรือสถานะรอ external tests
+
+27 ต.ค. เพิ่ม billing UI ที่ซ่อนแผง Checkout/ราคา/ลิงก์เดิมเมื่อผลตรวจ Owner
+ไม่พร้อมหรือแผงย่อยตอบ 401/403 ต้องโหลดใหม่สำเร็จโดยไม่มี denial ใหม่กว่าจึงกลับมา
+แสดงข้อมูล พร้อมคำแนะนำ recovery แบบไม่แสดงข้อความ provider ที่ไม่รู้จัก
+Typecheck ผ่าน; behavioral suites ยังแยกไว้ ยังมี **code gaps** ของ public trial,
+portal และ upgrade/proration/downgrade/cancellation runtime ไม่ใช่เพียงรอหลักฐาน
+รายละเอียดใน [billing UI development](atoaxis-team-billing-ui-2026-10-27.md).
+งานยังไม่ commit และไม่เปิด checkout/production readiness
+
+ความคืบหน้า 27 ต.ค. (development-first, ยังไม่ commit): เพิ่มคำสั่ง Prepare/Apply
+เพื่อยืนยัน transaction การเงินชนิดที่รู้จักซึ่ง SQL commit ไปแล้ว แต่ journal
+ยังไม่ Confirm ใช้ตัวตรวจร่วมกับ worker แผน 15 นาที และตรวจหลักฐานซ้ำใต้ file lock
+ก่อนบันทึก review/confirmation แบบถาวร ไม่ replay SQL หรือส่ง provider request
+ดู [ขอบเขตและงานตรวจที่แยกไว้](atoaxis-team-transaction-recovery-2026-10-27.md).
+ผล compile ไม่แทน behavioral verification; general recovery, financial retention,
+independent restore freshness และ external gates ยังเปิดอยู่ Goal G1–G6 ยัง active
+และ production readiness/checkout ไม่ได้เปิดจากงานนี้
+
+**ระยะ A: ปิดงานพัฒนาทั้งหมดก่อน**
+
+- ทำ code path ที่ยังขาดของ G1–G6 ต่อเนื่อง โดยเริ่ม Checkout worker/dispatch,
+  retained results/recovery, subscription binding และ financial writer/read/restore
+  แล้วปิด onboarding/UI/error flows และ tooling ของ client packages ที่ยังขาด
+- ระหว่างพัฒนาใช้ compile/typecheck และตรวจ diff ที่จำเป็นเพื่อให้ interface
+  ต่อกันได้ พักการรันชุดทดสอบใหญ่ซ้ำ, native integration, restore drills,
+  broad regressions, certification และการทดลองจริงไว้ระยะ B
+- รักษาและเพิ่มรายการตรวจรับที่สัมพันธ์กับโค้ดใน handoff ledger ไม่ลบ tests,
+  ไม่ลด assertions, ไม่เปลี่ยนสูตรหรือ fixture เพื่อทำให้ผลผ่าน และไม่ใช้ผลตรวจ
+  ของ source เก่าอ้างว่าโค้ดใหม่ผ่าน
+- งานที่รอ Cloud/ราคา/login/Windows/ผู้ทดสอบ ให้แยก pending แล้วเดินงานโค้ดที่
+  ไม่พึ่ง prerequisites เหล่านี้ต่อ ไม่สร้างทรัพยากรหรือขยายสิทธิ์เอง
+- ปิดระยะ A ได้เมื่อ pipeline/interface/UI/tooling ตามขอบเขตไม่มี code gap
+  ที่ยังเปิด และ compile/typecheck ของส่วนที่แก้ผ่าน จากนั้นส่งรายการ
+  **โค้ดครบ / ยังขาด / รอภายนอก / ยังไม่ได้ตรวจ** พร้อม SHA หรือสถานะ uncommitted
+  แล้วส่งมอบสถานะ **พัฒนาครบ — รอทดสอบ** ตามเกณฑ์ 27 ต.ค. ด้านบน
+
+**ระยะ B: ตรวจรับและแก้ defect หลังโค้ดครบ**
+
+เริ่มเมื่อเจ้าของสั่งเริ่มทดสอบหลังส่งมอบสถานะรอทดสอบ
+ตรึง candidate แล้วรัน local/fault/privacy/retention/restore/regression เป็นชุด
+แก้ failure ตามสาเหตุ แล้วเก็บ native packages/provider/OS, staging, canary และ
+customer evidence ตาม G1–G6 เดิม การตรวจที่ยังไม่มีหลักฐานคง pending ไม่ถือว่าผ่าน
+
+**“พัฒนาเสร็จ” แยกจาก “ตรวจรับผ่าน” และ “พร้อมเปิดขาย”** การจัดลำดับใหม่นี้
+ไม่เปิด Checkout/production ไม่เปลี่ยนเกณฑ์รับรอง ไม่แตะ main และไม่ยกเว้น
+approval ของ protected scope ที่ยังไม่มีอนุญาต
+
+รายละเอียด increment ล่าสุดและชุดตรวจที่พักไว้:
+[Development-first handoff](atoaxis-team-development-first-2026-10-26.md)
+
+เอกสารนี้บันทึกคำสั่งล่าสุดของเจ้าของ แต่ไม่ได้อ้างว่าแก้ objective ใน Goal
+ของตัวแอปแล้ว: เครื่องมือ Goal ที่มีรองรับเฉพาะการอ่านและการเปลี่ยนสถานะ
+ไม่รองรับการแก้ข้อความของ Goal ที่ยังไม่จบ และช่องทางควบคุม UI ของ Codex
+ถูกปฏิเสธ จึงคงสถานะ runtime เดิมไว้ ไม่ mark complete/clear/recreate เพื่อข้ามข้อจำกัด
 
 ## Milestones และเกณฑ์ปิด
 
@@ -48,12 +251,15 @@ Readiness/checkout เปิดได้หลัง implementation, configurati
 
 ## งานที่เดินต่อได้ทันที
 
-1. ตรวจ clean candidate และปรับเอกสาร/manifest สำหรับ candidate โดยรักษาประวัติ evidence รุ่นก่อน
-2. Build/packaging preflight และ local fault/privacy/restore/regressions ที่ขาด โดยใช้ข้อมูลแยก
-3. ทำ onboarding/improvement/summary และ commercial test-mode interfaces พร้อม fail-closed live configuration
-4. เตรียม scripts/runbook/expected ledgers สำหรับ GitHub/Windows/Cloud certification เพื่อรับหลักฐานเมื่อ prerequisites พร้อม
+1. ปิด Checkout worker → provider proof/result retention → subscription binding
+   → recovery และ financial lifecycle code ที่ยังขาด
+2. ปิด Team onboarding/billing UI และ canonical error/recovery paths ที่เหลือ
+3. ปิด build/package/configuration/evidence tooling ที่พัฒนาได้โดยไม่พึ่ง runtime
+   หรือ credential จากเจ้าของ
+4. เมื่อ code gaps ปิด จึงตรึง clean candidate และเริ่มชุดตรวจระยะ B ตามรายการเดิม
 
-G1/G2 ทำก่อน จากนั้น G3/G4 และ G5 โดยงานอิสระเดินต่อระหว่างรอภายนอก ไม่เปิด environment จริงหรือ billing live จากข้อมูลจำลอง
+งานตรวจจริงและ prerequisites ภายนอกแยกไว้ ไม่ใช้เป็นเหตุให้หยุดงานพัฒนาอิสระ
+และไม่ประกาศว่าทั้ง Team ผ่านจาก compile/typecheck เพียงอย่างเดียว
 
 ## งานรอเจ้าของ/ภายนอก
 
@@ -83,7 +289,11 @@ G1/G2 ทำก่อน จากนั้น G3/G4 และ G5 โดยง�
 
 ทุกชุดส่งมอบรายงาน `รายการ | พัฒนา | local tests | artifact/native | external certification | evidence/build | blocker | งานถัดไป` แยกเสร็จแล้ว/ยังไม่เสร็จ/รอภายนอก/ควรทำต่อ
 
-Goal นี้ยัง active จนเกณฑ์ G1–G6 และ release gates ครบ ห้ามระบุ complete เพราะโค้ด build ผ่านหรือ external prerequisite ยังไม่พร้อม หากเกิดการเปลี่ยน scope ต้องบันทึกข้อตกลงจากเจ้าของ ไม่ลดเกณฑ์เอง
+งานพัฒนาปิดระยะ A ได้ด้วยสถานะ **พัฒนาครบ — รอทดสอบ** ตามเกณฑ์
+27 ต.ค. โดยไม่รอ external gates ส่วน Goal พร้อมเปิดขายตามขอบเขตเดิมยังไม่
+complete จน G1–G6 และ release gates ครบ ห้ามอ้างว่า build ผ่านเท่ากับตรวจรับ
+ผ่าน หรือเปลี่ยนสถานะ runtime ของ Goal เดิมให้ complete เพื่อแทนการปิดระยะ
+พัฒนา หากเปลี่ยน scope ต้องบันทึกข้อตกลงจากเจ้าของ
 
 หลักฐานปัจจุบัน: [Copilot Team implementation](copilot-team-reports-implementation-2026-10-13.md), [GitHub runbook](atoaxis-team-github.md), [Team Phase 2](atoaxis-team-phase2.md), [Context/health](context-health-closure-2026-10-12.md), [Adapter closure](adapter-development-closure-2026-10-12.md)
 

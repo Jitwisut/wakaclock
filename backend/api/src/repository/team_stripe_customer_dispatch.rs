@@ -62,7 +62,7 @@ impl Proof {
         let token = guard
             .as_ref()
             .map(|g| {
-                if source_mode {
+                if source_mode && !c.lookup_only {
                     g.read()?.source_token(&scope)
                 } else {
                     inventory::account_source_token(
@@ -111,6 +111,70 @@ impl Proof {
     pub(super) fn is_source(&self) -> bool {
         self.source_mode
     }
+    pub(super) fn retain_lookup(
+        &self,
+        c: &CustomerClaim,
+        result: source::CustomerLookupResult,
+    ) -> Result<()> {
+        ensure!(
+            identity(c)? == self.claim_hash && c.lookup_only,
+            "financial_customer_claim_identity_changed"
+        );
+        let Some(guard) = self.guard.as_ref() else {
+            return Ok(());
+        };
+        let state = guard.read()?.snapshot;
+        let writer = state
+            .transactions
+            .groups
+            .values()
+            .filter(|g| g.committed)
+            .filter_map(|g| g.proposal.writer.as_ref().map(|w| (&g.proposal.account, w)))
+            .find_map(|(account, w)| match w {
+                Writer::CustomerRecoveryAuthorization {
+                    organization,
+                    request,
+                    actor,
+                    expected_revision,
+                    ..
+                } if account.account == c.account_id
+                    && account.live == c.livemode
+                    && *organization == c.organization_id
+                    && request == &self.request
+                    && *actor == c.actor
+                    && expected_revision.checked_add(1) == Some(c.revision) =>
+                {
+                    Some(w)
+                }
+                _ => None,
+            });
+        let authorization_hash = if self.source_mode {
+            fingerprint(writer.context("financial_customer_recovery_authorization_unconfirmed")?)?
+        } else {
+            // A footprint appearing after this legacy claim is unauthorized
+            // migration evidence, retained atomically with its absorbing freeze.
+            fingerprint(&(
+                "legacy_lookup_without_source_authorization_v1",
+                &self.request,
+                c.actor,
+                c.revision,
+                c.lease_id,
+            ))?
+        };
+        guard.retain_customer_lookup(
+            self.scope.clone(),
+            &self.request,
+            source::CustomerLookupAttempt {
+                actor: c.actor,
+                revision: c.revision,
+                authorization_hash,
+                lease: c.lease_id,
+            },
+            result,
+            self.source_mode,
+        )?;
+        Ok(())
+    }
     pub(super) fn retain(
         &self,
         c: &CustomerClaim,
@@ -121,6 +185,21 @@ impl Proof {
             identity(c)? == self.claim_hash,
             "financial_customer_claim_identity_changed"
         );
+        if c.lookup_only {
+            let result = if verified {
+                source::CustomerLookupResult::Verified {
+                    customer: customer
+                        .context("financial_customer_lookup_identity_missing")?
+                        .into(),
+                    outcome: Uuid::nil(),
+                }
+            } else {
+                source::CustomerLookupResult::Invalid {
+                    customer: customer.map(String::from),
+                }
+            };
+            return self.retain_lookup(c, result);
+        }
         if let Some(guard) = &self.guard {
             guard.retain_customer_outcome(
                 self.scope.clone(),
@@ -142,6 +221,21 @@ impl Proof {
             identity(c)? == self.claim_hash,
             "financial_customer_claim_identity_changed"
         );
+        if self.source_mode && c.lookup_only {
+            return crate::repository::team_stripe_customer_lookup::preflight(
+                &self.pg,
+                self.guard
+                    .as_ref()
+                    .context("financial_customer_authority_changed")?,
+                &self.scope,
+                &self.request,
+                c,
+                self.token
+                    .as_deref()
+                    .context("financial_customer_proof_missing")?,
+            )
+            .await;
+        }
         let account = crate::services::team_financial_ingress::Scope {
             account: c.account_id.clone(),
             live: c.livemode,
@@ -157,12 +251,13 @@ impl Proof {
         .await?;
         AuthorizationService::require_locked_billing_owner(&tx, c.actor, c.organization_id).await?;
         let row=tx.query_opt("SELECT first_attempt_at,lease_until FROM team_stripe_customer_operations WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4 AND requested_by=$5 AND lease_id=$6 AND revision=$7 AND lookup_only=$8 AND customer_id IS NOT DISTINCT FROM $9 AND disposition='pending' AND lease_until>clock_timestamp() FOR SHARE",&[&c.operation_id,&c.organization_id,&c.account_id,&c.livemode,&c.actor,&c.lease_id,&c.revision,&c.lookup_only,&c.customer_id]).await?.context("financial_customer_lease_unconfirmed")?;
-        let first: DateTime<Utc> = row
-            .get::<_, Option<DateTime<Utc>>>(0)
-            .context("financial_customer_first_attempt_missing")?;
+        let first: Option<DateTime<Utc>> = row.get(0);
         let mut deadline: DateTime<Utc> = row.get(1);
         if !c.lookup_only {
-            deadline = deadline.min(first + chrono::Duration::hours(23));
+            deadline = deadline.min(
+                first.context("financial_customer_first_attempt_missing")?
+                    + chrono::Duration::hours(23),
+            );
         }
         // A configured independent authority cannot authorize a create without
         // an explicitly reviewed source baseline. Legacy read/lookup remains a
@@ -194,7 +289,7 @@ impl Proof {
                     .context("financial_customer_dispatch_missing")?;
                 ensure!(
                     entry.accepted.get(&c.operation_id) == Some(&self.request)
-                        && dispatch.first_attempt_at == first
+                        && Some(dispatch.first_attempt_at) == first
                         && dispatch.request_hash == self.request.request_hash
                         && dispatch.idempotency_hash == self.request.idempotency_hash,
                     "financial_customer_dispatch_changed"
@@ -239,14 +334,53 @@ pub(super) async fn claim(
         .guard()?
         .context("financial_guard_configuration_unconfirmed")?;
     let retired = crate::repository::team_financial_transaction::retired(guard, account)?;
-    let row=tx.query_opt("SELECT operation_id,organization_id,requested_by FROM team_stripe_customer_operations WHERE account_id=$1 AND livemode=$2 AND disposition='pending' AND retry_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<=clock_timestamp()) AND NOT(organization_id=ANY($3::uuid[])) ORDER BY retry_at,created_at,operation_id LIMIT 1",&[&account.account,&account.live,&retired]).await?;
+    let row=tx.query_opt("SELECT * FROM team_stripe_customer_operations WHERE account_id=$1 AND livemode=$2 AND disposition='pending' AND retry_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<=clock_timestamp()) AND NOT(organization_id=ANY($3::uuid[])) ORDER BY retry_at,created_at,operation_id LIMIT 1",&[&account.account,&account.live,&retired]).await?;
     let Some(candidate) = row else {
         tx.commit().await?;
         return Ok(None);
     };
-    let op: Uuid = candidate.get(0);
-    let org: Uuid = candidate.get(1);
-    let actor: Uuid = candidate.get(2);
+    let op: Uuid = candidate.get("operation_id");
+    let org: Uuid = candidate.get("organization_id");
+    let actor: Uuid = candidate.get("requested_by");
+    if candidate.get::<_, bool>("lookup_only") {
+        let scope = source::Scope {
+            organization: org,
+            account: account.account.clone(),
+            live: account.live,
+        };
+        if let Some(observation) =
+            crate::repository::team_stripe_customer_lookup::resumable(guard, &candidate)?
+        {
+            crate::repository::team_stripe_customer_lookup::resume(repo, tx, scope, observation)
+                .await?;
+            return Ok(None);
+        }
+        return crate::repository::team_stripe_customer_lookup::claim(repo, tx, scope, op, actor)
+            .await;
+    }
+    // Resolve retained create evidence before asking NormalWrite for a clean
+    // source. This is an idle retry, not permission to dispatch another POST.
+    let scope = source::Scope {
+        organization: org,
+        account: account.account.clone(),
+        live: account.live,
+    };
+    let pending_result = guard
+        .read()?
+        .snapshot
+        .sources
+        .scopes
+        .get(&scope.key()?)
+        .is_some_and(|entry| {
+            entry
+                .outcomes
+                .values()
+                .any(|o| o.operation == op && entry.unapplied_outcomes.contains(&o.id))
+        });
+    if pending_result {
+        crate::repository::team_stripe_customer_resolution::resume(repo, tx, scope, op).await?;
+        return Ok(None);
+    }
     crate::repository::team_seats::lock(&tx, org).await?;
     let allowed = match AuthorizationService::require_locked_billing_owner(&tx, actor, org).await {
         Ok(()) => true,
@@ -375,6 +509,9 @@ pub(super) async fn fail(
         identity(c)? == proof.claim_hash,
         "financial_customer_claim_identity_changed"
     );
+    if c.lookup_only {
+        return crate::repository::team_stripe_customer_lookup::fail(repo, c, e).await;
+    }
     let guard = repo
         .guard()?
         .context("financial_guard_configuration_unconfirmed")?;

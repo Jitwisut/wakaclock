@@ -291,9 +291,21 @@ export function TeamInsightsPanel({
                     Without cost: {report.merged_pr_cost.without_cost.value ?? 'withheld'}
                   </p>
                   <p>
-                    Average for PRs with confirmed complete cost coverage:{' '}
-                    {teamCostLabel(report.merged_pr_cost.average_microusd)} · PR count:{' '}
-                    {report.merged_pr_cost.complete_prs.value ?? 'withheld'}
+                    Average for PRs whose received linked usage is fully priced:{' '}
+                    {report.merged_pr_cost.observed_average_microusd
+                      ? teamCostLabel(report.merged_pr_cost.observed_average_microusd)
+                      : 'unavailable in this server version'}{' '}
+                    · PRs used:{' '}
+                    {report.merged_pr_cost.fully_priced_observed_prs?.value ?? 'withheld'}
+                  </p>
+                  <p>
+                    Numerator:{' '}
+                    {report.merged_pr_cost.fully_priced_observed_cost_microusd
+                      ? teamCostLabel(report.merged_pr_cost.fully_priced_observed_cost_microusd)
+                      : 'unavailable'}
+                    . Only received, confirmed linked facts before merge are included. Complete
+                    capture remains unconfirmed. The mean is rounded down to one micro-USD; the
+                    numerator and PR count retain the exact ratio.
                   </p>
                   <p>
                     Cost accumulates after consent up to merge, within retention. Capture

@@ -18,17 +18,17 @@ use uuid::Uuid;
 // A rare explicit review may briefly block financial writes across accounts.
 // This prevents an empty observation racing with an unguarded legacy writer.
 // No provider call/file lock is held while waiting. Deadlock/timeout aborts safely.
-async fn fence_writers(tx: &Transaction<'_>) -> Result<()> {
+pub(super) async fn fence_writers(tx: &Transaction<'_>) -> Result<()> {
     tx.batch_execute("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='15s'; SET LOCAL TIME ZONE 'UTC'; LOCK TABLE billing_customers,team_stripe_customer_operations,team_stripe_customer_authorizations,team_stripe_quotes,team_stripe_checkout_intents,team_stripe_checkout_authorizations,team_stripe_bindings,team_stripe_snapshots,team_financial_source_heads,team_financial_source_tombstones,team_stripe_ingress_heads,team_stripe_inbox,team_stripe_reconcile_jobs IN SHARE MODE").await?;
     Ok(())
 }
-struct Observation {
-    sql: String,
-    instance: String,
-    counts: Counts,
+pub(super) struct Observation {
+    pub(super) sql: String,
+    pub(super) instance: String,
+    pub(super) counts: Counts,
     head: Option<Value>,
 }
-async fn observe(
+pub(super) async fn observe(
     tx: &Transaction<'_>,
     scope: &Scope,
     independent_sources: u64,
@@ -166,7 +166,7 @@ async fn classify(
         }
     })
 }
-async fn clock(tx: &Transaction<'_>) -> Result<DateTime<Utc>> {
+pub(super) async fn clock(tx: &Transaction<'_>) -> Result<DateTime<Utc>> {
     Ok(tx.query_one("SELECT clock_timestamp()", &[]).await?.get(0))
 }
 

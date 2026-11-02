@@ -131,11 +131,16 @@ impl CopilotDailyRepository {
             let tx = db.transaction().await?;
             super::team_seats::lock(&tx, org).await?;
             let state = super::team_analytics_entitlement::load(&tx, org).await?;
-            let financial =
-                match super::team_financial_guard::TransactionProof::capture(org, state.as_ref()) {
-                    Ok(proof) => proof,
-                    Err(_) => continue,
-                };
+            let financial = match super::team_financial_guard::TransactionProof::capture(
+                &tx,
+                org,
+                state.as_ref(),
+            )
+            .await
+            {
+                Ok(proof) => proof,
+                Err(_) => continue,
+            };
             if tx.query_opt("SELECT 1 FROM team_rollouts t JOIN organizations o ON o.id=t.organization_id WHERE t.organization_id=$1 AND t.enabled AND o.deleted_at IS NULL FOR UPDATE OF t FOR SHARE OF o", &[&org]).await?.is_none() {
                 continue;
             }
@@ -249,8 +254,12 @@ impl CopilotDailyRepository {
         let tx = c.transaction().await?;
         super::team_seats::lock(&tx, j.org).await?;
         let entitlement = super::team_analytics_entitlement::load(&tx, j.org).await?;
-        let financial =
-            super::team_financial_guard::TransactionProof::capture(j.org, entitlement.as_ref())?;
+        let financial = super::team_financial_guard::TransactionProof::capture(
+            &tx,
+            j.org,
+            entitlement.as_ref(),
+        )
+        .await?;
         let generation: i64 = tx
             .query_one(
                 "SELECT generation FROM team_rollouts WHERE organization_id=$1 FOR UPDATE",

@@ -9,6 +9,8 @@ import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { getTeamMeasurementHealth } from '@/lib/wakaclock/team-endpoints';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
+import { TeamReadinessPanel } from './team-readiness-panel';
+
 export function TeamTrustPanel({ organizationId }: { organizationId: string }) {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const query = useQuery({
@@ -75,6 +77,7 @@ export function TeamTrustPanel({ organizationId }: { organizationId: string }) {
           </div>
         )}
       </QueryState>
+      <TeamReadinessPanel organizationId={organizationId} />
     </section>
   );
 }

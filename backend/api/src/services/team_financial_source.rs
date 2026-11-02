@@ -78,6 +78,8 @@ pub struct Review {
 pub enum OperationKind {
     CreateCustomer,
     CreateCheckout,
+    CancelAtPeriodEnd,
+    PreviewUpgrade,
 }
 /// Only digests of the immutable request/key, never a credential or hosted URL.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +126,10 @@ pub struct Dispatch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProviderIdentity {
+    Subscription {
+        customer: String,
+        subscription: String,
+    },
     Customer {
         customer: String,
     },
@@ -138,6 +144,10 @@ impl ProviderIdentity {
         let id = super::team_stripe::id;
         ensure!(
             match self {
+                Self::Subscription {
+                    customer,
+                    subscription,
+                } => id(customer, "cus_") && id(subscription, "sub_"),
                 Self::Customer { customer } => id(customer, "cus_"),
                 Self::Checkout {
                     session,
@@ -154,6 +164,16 @@ impl ProviderIdentity {
     }
     fn agrees(&self, other: &Self) -> bool {
         match (self, other) {
+            (
+                Self::Subscription {
+                    customer: a,
+                    subscription: asub,
+                },
+                Self::Subscription {
+                    customer: b,
+                    subscription: bsub,
+                },
+            ) => a == b && asub == bsub,
             (Self::Customer { customer: a }, Self::Customer { customer: b }) => a == b,
             (
                 Self::Checkout {
@@ -181,6 +201,80 @@ pub struct Outcome {
     pub observed_at: DateTime<Utc>,
     pub identity: Option<ProviderIdentity>,
 }
+/// A lookup attempt is evidence of a fresh observation, not a new customer fact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CustomerLookupResult {
+    Verified {
+        customer: String,
+        outcome: Uuid,
+    },
+    NotFound,
+    Ambiguous {
+        candidates: Vec<String>,
+        has_more: bool,
+    },
+    Deleted {
+        customer: String,
+    },
+    Invalid {
+        customer: Option<String>,
+    },
+}
+impl CustomerLookupResult {
+    pub(crate) fn identities(&self) -> Vec<&str> {
+        match self {
+            Self::Verified { customer, .. } | Self::Deleted { customer } => vec![customer],
+            Self::Ambiguous { candidates, .. } => candidates.iter().map(String::as_str).collect(),
+            Self::Invalid { customer } => customer.iter().map(String::as_str).collect(),
+            Self::NotFound => vec![],
+        }
+    }
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            self.identities()
+                .iter()
+                .all(|id| super::team_stripe::id(id, "cus_")),
+            "financial_customer_lookup_identity_invalid"
+        );
+        match self {
+            Self::Verified { outcome, .. } => ensure!(
+                !outcome.is_nil(),
+                "financial_customer_lookup_outcome_invalid"
+            ),
+            Self::Ambiguous {
+                candidates,
+                has_more,
+            } => ensure!(
+                candidates.len() <= 2 && (*has_more || candidates.len() > 1),
+                "financial_customer_lookup_candidates_invalid"
+            ),
+            _ => (),
+        }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CustomerLookupAttempt {
+    pub actor: Uuid,
+    pub revision: i64,
+    pub authorization_hash: String,
+    pub lease: Uuid,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CustomerLookup {
+    pub id: Uuid,
+    pub operation: Uuid,
+    pub request_hash: String,
+    pub actor: Uuid,
+    pub authorization_revision: i64,
+    pub authorization_hash: String,
+    pub lease: Uuid,
+    pub observed_at: DateTime<Utc>,
+    pub result: CustomerLookupResult,
+}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FreezeReason {
@@ -193,6 +287,8 @@ pub enum FreezeReason {
     RequestIdentityConflict,
     OutcomeIdentityConflict,
     UnmatchedOperation,
+    LookupObservationConflict,
+    ObservationTimeUnconfirmed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,6 +307,33 @@ pub struct Entry {
     pub conflicting_outcomes: BTreeMap<String, Outcome>,
     pub unapplied_outcomes: BTreeSet<Uuid>,
     pub frozen: BTreeSet<FreezeReason>,
+    // Empty additive fields preserve serialization/tokens of pre-lookup entries.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub customer_lookups: BTreeMap<Uuid, CustomerLookup>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub conflicting_customer_lookups: BTreeMap<String, CustomerLookup>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub checkout_observations: BTreeMap<Uuid, super::team_stripe_checkout_receipt::Observation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub conflicting_checkout_observations:
+        BTreeMap<String, super::team_stripe_checkout_receipt::Observation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub checkout_failures: BTreeMap<Uuid, super::team_stripe_checkout_receipt::FailureObservation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub conflicting_checkout_failures:
+        BTreeMap<String, super::team_stripe_checkout_receipt::FailureObservation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cancellation_observations:
+        BTreeMap<Uuid, super::team_subscription_cancellation::Observation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub conflicting_cancellation_observations:
+        BTreeMap<String, super::team_subscription_cancellation::Observation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cancellation_failures:
+        BTreeMap<Uuid, super::team_subscription_cancellation::FailureObservation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub conflicting_cancellation_failures:
+        BTreeMap<String, super::team_subscription_cancellation::FailureObservation>,
 }
 impl Entry {
     fn unknown(scope: &Scope) -> Self {
@@ -227,6 +350,16 @@ impl Entry {
             conflicting_outcomes: BTreeMap::new(),
             unapplied_outcomes: BTreeSet::new(),
             frozen: BTreeSet::new(),
+            customer_lookups: BTreeMap::new(),
+            conflicting_customer_lookups: BTreeMap::new(),
+            checkout_observations: BTreeMap::new(),
+            conflicting_checkout_observations: BTreeMap::new(),
+            checkout_failures: BTreeMap::new(),
+            conflicting_checkout_failures: BTreeMap::new(),
+            cancellation_observations: BTreeMap::new(),
+            conflicting_cancellation_observations: BTreeMap::new(),
+            cancellation_failures: BTreeMap::new(),
+            conflicting_cancellation_failures: BTreeMap::new(),
         }
     }
     fn ready(&self) -> Result<&Root> {
@@ -278,6 +411,31 @@ pub enum Event {
         scope: Scope,
         outcome: Outcome,
     },
+    /// Retain the normalized observation and optional deduplicated positive fact
+    /// atomically, including absorbing conflicts. It never grants SQL authority.
+    CheckoutFailure {
+        scope: Scope,
+        observation: super::team_stripe_checkout_receipt::FailureObservation,
+    },
+    CheckoutObservation {
+        scope: Scope,
+        observation: super::team_stripe_checkout_receipt::Observation,
+        outcome: Outcome,
+    },
+    CancellationObservation {
+        scope: Scope,
+        observation: super::team_subscription_cancellation::Observation,
+        outcome: Outcome,
+    },
+    CancellationFailure {
+        scope: Scope,
+        observation: super::team_subscription_cancellation::FailureObservation,
+    },
+    CustomerLookup {
+        scope: Scope,
+        observation: CustomerLookup,
+        outcome: Option<Outcome>,
+    },
     Freeze {
         scope: Scope,
         reason: FreezeReason,
@@ -292,6 +450,11 @@ impl Event {
             | Self::Dispatch { scope, .. }
             | Self::Outcome { scope, .. }
             | Self::RejectedOutcome { scope, .. }
+            | Self::CustomerLookup { scope, .. }
+            | Self::CheckoutObservation { scope, .. }
+            | Self::CheckoutFailure { scope, .. }
+            | Self::CancellationObservation { scope, .. }
+            | Self::CancellationFailure { scope, .. }
             | Self::Freeze { scope, .. } => scope,
         }
     }
@@ -345,7 +508,309 @@ impl Snapshot {
             entry.scope == *event.scope(),
             "financial_source_scope_mismatch"
         );
+        if let Event::CancellationObservation {
+            scope,
+            observation,
+            outcome,
+        } = event
+        {
+            use super::team_subscription_cancellation::{self as cancellation, ObservationKind};
+            observation.validate(scope)?;
+            let request = observation.request.accepted_request()?;
+            let identity = observation.subscription.identity();
+            ensure!(
+                outcome.id == observation.outcome
+                    && outcome.operation == request.operation
+                    && outcome.request_hash == request.request_hash
+                    && outcome.identity == Some(identity.clone())
+                    && outcome.evidence_hash
+                        == cancellation::result_hash(
+                            scope,
+                            request.operation,
+                            &observation.attempt,
+                            &observation.kind,
+                            &observation.subscription
+                        )?,
+                "financial_cancellation_outcome_conflict"
+            );
+            let mut combined = self.clone();
+            combined.apply(&Event::Outcome {
+                scope: scope.clone(),
+                outcome: outcome.clone(),
+            })?;
+            let mut entry = combined
+                .scopes
+                .remove(&key)
+                .context("financial_source_uninitialized")?;
+            let valid = entry.accepted.get(&request.operation) == Some(&request)
+                && observation.attempt.source_claim
+                && observation.subscription.customer == observation.request.customer()
+                && observation.subscription.subscription == observation.request.subscription()
+                && (observation.kind != ObservationKind::MutationResponse
+                    || (observation.attempt.actor == request.actor
+                        && observation.attempt.revision == 1
+                        && entry.dispatches.get(&request.operation).is_some_and(|d| {
+                            d.request_hash == request.request_hash
+                                && d.idempotency_hash == request.idempotency_hash
+                                && d.first_attempt_at <= observation.observed_at
+                        })));
+            if !valid {
+                entry.frozen.insert(FreezeReason::RequestIdentityConflict);
+            }
+            if observation.observed_at < observation.request.accepted_at()
+                || (observation.kind == ObservationKind::MutationResponse
+                    && entry
+                        .dispatches
+                        .get(&request.operation)
+                        .is_some_and(|dispatch| {
+                            observation.observed_at < dispatch.first_attempt_at
+                        }))
+            {
+                entry
+                    .frozen
+                    .insert(FreezeReason::ObservationTimeUnconfirmed);
+            }
+            if let Some(old) = entry.cancellation_observations.get(&observation.id) {
+                if old != observation {
+                    entry.frozen.insert(FreezeReason::LookupObservationConflict);
+                    entry
+                        .conflicting_cancellation_observations
+                        .insert(fingerprint(observation)?, observation.clone());
+                }
+            } else {
+                entry
+                    .cancellation_observations
+                    .insert(observation.id, observation.clone());
+            }
+            combined.scopes.insert(key, entry);
+            *self = combined;
+            return Ok(());
+        }
+        if let Event::CancellationFailure { scope, observation } = event {
+            observation.validate(scope)?;
+            let request = observation.request.accepted_request()?;
+            if observation.observed_at < observation.request.accepted_at() {
+                entry
+                    .frozen
+                    .insert(FreezeReason::ObservationTimeUnconfirmed);
+            }
+            if !observation.attempt.source_claim
+                || entry.accepted.get(&request.operation) != Some(&request)
+            {
+                entry.frozen.insert(FreezeReason::RequestIdentityConflict);
+            }
+            if let Some(old) = entry.cancellation_failures.get(&observation.id) {
+                if old != observation {
+                    entry.frozen.insert(FreezeReason::LookupObservationConflict);
+                    entry
+                        .conflicting_cancellation_failures
+                        .insert(fingerprint(observation)?, observation.clone());
+                }
+            } else {
+                entry
+                    .cancellation_failures
+                    .insert(observation.id, observation.clone());
+            }
+            self.scopes.insert(key, entry);
+            return Ok(());
+        }
+        if let Event::CheckoutFailure { observation, .. } = event {
+            observation.validate()?;
+            let valid = entry
+                .accepted
+                .get(&observation.operation)
+                .is_some_and(|request| {
+                    request.kind == OperationKind::CreateCheckout
+                        && request.request_hash == observation.request_hash
+                        && observation.observed_at >= request.accepted_at
+                });
+            if !valid || !observation.attempt.source_claim {
+                entry.frozen.insert(FreezeReason::RequestIdentityConflict);
+            }
+            if let Some(old) = entry.checkout_failures.get(&observation.id) {
+                if old != observation {
+                    entry.frozen.insert(FreezeReason::LookupObservationConflict);
+                    entry
+                        .conflicting_checkout_failures
+                        .insert(fingerprint(observation)?, observation.clone());
+                }
+            } else {
+                entry
+                    .checkout_failures
+                    .insert(observation.id, observation.clone());
+            }
+            self.scopes.insert(key, entry);
+            return Ok(());
+        }
+        if let Event::CheckoutObservation {
+            scope,
+            observation,
+            outcome,
+        } = event
+        {
+            observation.validate(scope)?;
+            let identity = observation.session.identity();
+            ensure!(
+                outcome.id == observation.outcome
+                    && outcome.operation == observation.operation
+                    && outcome.request_hash == observation.request_hash
+                    && outcome.identity == Some(identity.clone())
+                    && outcome.evidence_hash
+                        == super::team_stripe_checkout_receipt::result_hash(
+                            scope,
+                            observation.operation,
+                            &identity
+                        )?,
+                "financial_checkout_outcome_conflict"
+            );
+            let mut combined = self.clone();
+            combined.apply(&Event::Outcome {
+                scope: scope.clone(),
+                outcome: outcome.clone(),
+            })?;
+            let mut entry = combined
+                .scopes
+                .remove(&key)
+                .context("financial_source_uninitialized")?;
+            let valid = entry
+                .accepted
+                .get(&observation.operation)
+                .is_some_and(|request| {
+                    request.kind == OperationKind::CreateCheckout
+                        && request.request_hash == observation.request_hash
+                        && observation.observed_at >= request.accepted_at
+                        && (observation.kind
+                            != super::team_stripe_checkout_receipt::ObservationKind::CreateResponse
+                            || (observation.revision == 1
+                                && observation.actor == request.actor
+                                && entry.dispatches.get(&request.operation).is_some_and(
+                                    |dispatch| {
+                                        dispatch.request_hash == request.request_hash
+                                            && dispatch.idempotency_hash == request.idempotency_hash
+                                    },
+                                )))
+                });
+            if !valid || !observation.source_claim {
+                entry.frozen.insert(FreezeReason::RequestIdentityConflict);
+            }
+            if let Some(old) = entry.checkout_observations.get(&observation.id) {
+                if old != observation {
+                    entry.frozen.insert(FreezeReason::LookupObservationConflict);
+                    entry
+                        .conflicting_checkout_observations
+                        .insert(fingerprint(observation)?, observation.clone());
+                }
+            } else {
+                entry
+                    .checkout_observations
+                    .insert(observation.id, observation.clone());
+            }
+            combined.scopes.insert(key, entry);
+            *self = combined;
+            return Ok(());
+        }
+        if let Event::CustomerLookup {
+            scope,
+            observation,
+            outcome,
+        } = event
+        {
+            ensure!(
+                !observation.id.is_nil()
+                    && !observation.operation.is_nil()
+                    && !observation.actor.is_nil()
+                    && !observation.lease.is_nil()
+                    && observation.authorization_revision > 0
+                    && digest(&observation.request_hash)
+                    && digest(&observation.authorization_hash),
+                "financial_customer_lookup_invalid"
+            );
+            observation.result.validate()?;
+            let mut combined = self.clone();
+            if let CustomerLookupResult::Verified {
+                customer,
+                outcome: id,
+            } = &observation.result
+            {
+                let value = outcome
+                    .as_ref()
+                    .context("financial_customer_lookup_outcome_missing")?;
+                let identity = Some(ProviderIdentity::Customer {
+                    customer: customer.clone(),
+                });
+                ensure!(
+                    value.id == *id
+                        && value.operation == observation.operation
+                        && value.request_hash == observation.request_hash
+                        && value.identity == identity
+                        && value.evidence_hash
+                            == super::team_stripe_customer_request::result_hash(
+                                scope,
+                                value.operation,
+                                &identity,
+                                true
+                            )?,
+                    "financial_customer_lookup_outcome_conflict"
+                );
+                combined.apply(&Event::Outcome {
+                    scope: scope.clone(),
+                    outcome: value.clone(),
+                })?;
+            } else {
+                ensure!(
+                    outcome.is_none(),
+                    "financial_customer_lookup_unexpected_outcome"
+                );
+            }
+            let mut entry = combined.scopes.remove(&key).unwrap_or(entry);
+            match entry.accepted.get(&observation.operation) {
+                Some(request)
+                    if request.kind == OperationKind::CreateCustomer
+                        && request.request_hash == observation.request_hash
+                        && observation.observed_at >= request.accepted_at => {}
+                _ => {
+                    entry.frozen.insert(FreezeReason::RequestIdentityConflict);
+                }
+            }
+            if matches!(observation.result, CustomerLookupResult::Ambiguous { .. }) {
+                entry.frozen.insert(FreezeReason::ProviderIdentityConflict);
+            }
+            if matches!(observation.result, CustomerLookupResult::Invalid { .. }) {
+                entry.frozen.insert(FreezeReason::RequestIdentityConflict);
+            }
+            if entry.customer_lookups.values().any(|old| {
+                old.operation == observation.operation
+                    && old.actor == observation.actor
+                    && old.authorization_revision == observation.authorization_revision
+                    && old.lease == observation.lease
+                    && old.result != observation.result
+            }) {
+                entry.frozen.insert(FreezeReason::LookupObservationConflict);
+            }
+            if let Some(old) = entry.customer_lookups.get(&observation.id) {
+                if old != observation {
+                    entry.frozen.insert(FreezeReason::LookupObservationConflict);
+                    entry
+                        .conflicting_customer_lookups
+                        .insert(fingerprint(observation)?, observation.clone());
+                }
+            } else {
+                entry
+                    .customer_lookups
+                    .insert(observation.id, observation.clone());
+            }
+            combined.scopes.insert(key, entry);
+            *self = combined;
+            return Ok(());
+        }
         match event {
+            Event::CustomerLookup { .. }
+            | Event::CheckoutObservation { .. }
+            | Event::CancellationObservation { .. }
+            | Event::CancellationFailure { .. }
+            | Event::CheckoutFailure { .. } => {
+                unreachable!("observation handled atomically above")
+            }
             Event::Seed {
                 scope,
                 head,
@@ -500,6 +965,9 @@ impl Snapshot {
                                 ) | (
                                     OperationKind::CreateCheckout,
                                     ProviderIdentity::Checkout { .. }
+                                ) | (
+                                    OperationKind::CancelAtPeriodEnd,
+                                    ProviderIdentity::Subscription { .. }
                                 )
                             )
                         });
@@ -1005,5 +1473,16 @@ pub(crate) mod tests {
             snapshot.scopes[&scope.key().unwrap()].pending.as_ref(),
             Some(&transition)
         );
+    }
+    #[test]
+    fn empty_lookup_fields_preserve_legacy_entry_serialization_and_tokens() {
+        let (state, scope, _, _) = fixture();
+        let entry = &state.scopes[&scope.key().unwrap()];
+        let json = serde_json::to_value(entry).unwrap();
+        assert!(json.get("customer_lookups").is_none());
+        assert!(json.get("conflicting_customer_lookups").is_none());
+        let legacy: Entry = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(&legacy, entry);
+        assert_eq!(serde_json::to_value(legacy).unwrap(), json);
     }
 }

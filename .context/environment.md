@@ -1,6 +1,34 @@
 # Environment Variables
 
+## Fresh organization onboarding (internal, default off)
+
+`ATOAXIS_TEAM_ORGANIZATION_ONBOARDING_ENABLED`: explicit true/1 enables prospective
+nonpersonal organization creation with original-nonce SQL/independent birth proof;
+absent/false/0 leaves it off. Invalid encoding/value fails closed. Requires the
+already initialized financial-guard path, pinned namespace and required mode;
+does not require a Stripe account/credential, initialize a registry, enable rollout,
+start trial, or grant sharing/analytics. Enabled clients must send a nonnil
+`creation_request_id` and check the matching creation receipt; older-server 201
+alone is insufficient. Preserve migration062/birth evidence on rollback. See
+`docs/atoaxis-team-organization-onboarding-2026-10-30.md`. No owner values set.
+
 **Names only. Never write a value into any file in `.context/` or `CLAUDE.md`.**
+
+The isolated Team staging launcher accepts the existing non-Stripe feature
+settings through metadata-only `output/team-github-staging/team-features.json`,
+not inherited application variables. `preflight-team` is read-only and never
+claims journal/runtime readiness. See
+`docs/atoaxis-team-staging-configuration-2026-11-01.md` for schema, private staging
+journal requirements and the separate organization rollout prerequisite. No
+product flag or Stripe credential is introduced by this launcher interface.
+
+`team-pilot` is a privileged local operator Prepare/Apply tool using explicit
+`POSTGRES_URL`, the existing pinned/required financial enrollment guard and fresh
+`ATOAXIS_TEAM_PRIVACY_LEDGER_PATH`. It loads no dotenv, migrates nothing, calls no
+provider and does not authenticate a person from its reviewed Owner reference.
+Staging wrappers `pilot-prepare`/`pilot-apply` use isolated configuration and local
+private plan paths. No new environment setting is introduced. See
+`docs/atoaxis-team-pilot-control-2026-11-01.md`; nothing has been enabled here.
 
 ## Backend — `backend/api`
 
@@ -16,6 +44,11 @@ and the crates. `.env` is loaded by `dotenvy` at startup.
 | `CLICKHOUSE_DATABASE` / `CLICKHOUSE_DB` | no | Both names are read; defaults exist. |
 | `POSTGRES_URL` | no | Absent ⇒ `AppState.postgres` is `None` and Phase 10 org/billing paths degrade. |
 | `ATOAXIS_TEAM_PRIVACY_LEDGER_PATH` | Team reads/worker | Absolute path to shared independent privacy registry outside database backups; missing/stale fails closed. |
+| `ATOAXIS_TEAM_SELF_SERVICE_TRIAL_ENABLED` | no | Default-off no-card trial API/UI. Requires enabled organization rollout, current Owner and validated commercial enrollment guard; invalid configuration blocks requests. Does not enable Stripe, sharing, analytics readiness or production release. |
+| `ATOAXIS_TEAM_STRIPE_PORTAL_ENABLED` | no | Default-off explicit current-Owner billing-details portal; strict boolean. Requires Stripe integration, organization rollout, verified Customer, commercial/source evidence and separately approved portal policy. Does not enable subscription mutation or analytics. |
+| `ATOAXIS_TEAM_SUBSCRIPTION_CANCELLATION_ENABLED` | no | Default-off strict boolean for sealed end-period cancellation. Preparation, worker and separately owner-approved routes/UI are connected in code; this does not activate them or certify runtime behavior. Requires configured Stripe account/mode, current Owner, organization rollout, independent commercial/source evidence and account lease. Does not directly change paid coverage or analytics permission. |
+| `ATOAXIS_TEAM_SUBSCRIPTION_CHANGES_ENABLED` | no | Default-off strict boolean for sealed subscription-change preview request preparation/ingress. Requires current Owner/rollout, canonical binding/source revisions, approved price catalog and independent financial evidence. Actual preview HTTP/result and monetary change/capacity/API/UI flow remain development work. Ingress ACK is not provider preview or paid access. |
+| `ATOAXIS_STRIPE_PORTAL_POLICY_PATH` | no | Private bounded JSON policy for the dedicated Stripe configuration, pinned account/mode/configuration version, HTTPS return origin and approved customer/invoice/payment-method capabilities. Never put policy content, credential or issued portal URL in diagnostics or repository. Subscription update/cancel and public login link must be disabled. |
 | `ATOAXIS_EDITOR_LINE_METRICS_ENABLED` | production: yes | Accepts versioned editor line metrics (`editor-before-after-v1`) and advertises them in `/api/v2/capabilities`. Defaults off. While off, clients keep the line-measurement corrections in their local queue and report them as pending, so dashboards show delivery as incomplete; enable it on every server clients send to. Accepts `1`/`true`/`on`. |
 | `ATOAXIS_COPILOT_DAILY_ENABLED` | no | Explicit opt-in for separate GitHub Copilot provider-day counters. Defaults off; accepts `1`/`true`/`on`, and an unrecognised value refuses startup. Requires existing installation permissions and Team rollout/consent. No session, token or PR cost inference. |
 | `ATOAXIS_COPILOT_WEEKLY_ENABLED` | no | Opt-in for privacy-safe UTC weekly Copilot reports/CSV; also needs `ATOAXIS_COPILOT_DAILY_ENABLED` and Team enabled for the organization. Accepts `1`/`true`/`on`; an unrecognised value refuses startup. |

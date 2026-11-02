@@ -1,5 +1,13 @@
 # AtoAxis Team GitHub — implementation and staging runbook
 
+Current follow-up (1 November): the old completeness aliases described below
+remain unavailable, while explicit **received, fully priced** observed PR
+average/numerator/denominator are now connected by owner decision. See
+[current contract and deferred verification](atoaxis-team-observed-pr-average-2026-11-01.md).
+The historical 12 October daily-only limitation below was superseded by
+[Copilot UTC weekly reports](copilot-team-reports-implementation-2026-10-13.md).
+Neither follow-up certifies GitHub/provider runtime or production readiness.
+
 Status: **implementation in progress; not certified**. Work stays on `codex/atoaxis-team`, continued from `579967b`. Do not push or merge `main` without specific authorization. The local test evidence was collected before the source commit; live certification must record the committed build SHA and does not follow automatically from publishing source.
 
 ## Implemented

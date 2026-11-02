@@ -93,6 +93,7 @@ async fn financial_ingress_runtime_signed_retry_restore_unknown_commit_and_lock_
             .unwrap(),
         session_id: Some("cs_ingress".into()),
         lookup_only: false,
+            financial: None,
     };
     let now = Utc::now();
     let session = crate::services::team_stripe_checkout::SessionEvidence {

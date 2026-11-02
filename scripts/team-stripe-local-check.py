@@ -34,6 +34,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--target-dir', required=True, help='reuse the active task Cargo cache')
     args = parser.parse_args()
+    # Cargo runs in backend/api, while evidence/binary lookup runs at ROOT.
+    # Resolve once so a relative cache path cannot create a second nested target.
+    args.target_dir = str(Path(args.target_dir).expanduser().resolve())
     assert BIN.is_dir(), 'native Homebrew PostgreSQL 16 required'
     TMP.mkdir(mode=0o700)
     OUT.mkdir(parents=True)
@@ -50,7 +53,7 @@ def main():
              '--target-dir', args.target_dir, '--jobs', '4'], 'inventory-cli-build', env, ROOT/'backend/api')
         env['TEAM_FINANCIAL_GUARD_TEST_BIN'] = str(Path(args.target_dir).resolve()/'debug/team-financial-guard')
         env['TEAM_FINANCIAL_INVENTORY_TEST_DIR'] = str(TMP/'inventory-ledger')
-        tests = ('financial_source_customer_recovery_authorization_original_identity_atomicity_and_history', 'financial_sql_checkpoint_requires_same_account_authority', 'financial_source_customer_resolution_exact_evidence_history_and_fences', 'financial_source_customer_dispatch_retention_lease_restart_and_baseline', 'financial_source_customer_request_acceptance_history_and_legacy_fences', 'financial_source_quote_atomic_terms_history_owner_expiry_and_predecessor_fences', 'financial_source_scheduler_exact_batch_lost_confirmation_and_operational_claim', 'financial_source_observation_atomic_enrollment_exact_history_retry_and_expired_lease', 'financial_source_signed_ingress_coordinator_exact_retry_and_final_fences', 'financial_transaction_sql_boundary_pending_rollback_and_lost_confirmation', 'financial_ingress_operator_plan_prospective_recovery_and_restore_fences', 'financial_semantic_lock_order_owner_wait_and_fresh_leases', 'personal_identity_sync_billing_order_first_sync_race_and_atomic_retry', 'stripe_durable_ingress', 'stripe_worker_current_readback', 'stripe_guarded_observation_commit_and_lost_confirmation', 'stripe_customer_durable_provisioning', 'stripe_quote_owner_customer_catalog', 'stripe_checkout_confirmation_durability', 'team_entitlement_trial_durability', 'team_trial_financial_guard_commit_restore', 'team_usage_admission_expiry', 'financial_source_inventory_consistent_historical_scope_and_loss_detection', 'financial_ingress_runtime_signed_retry_restore_unknown_commit_and_lock_wait')
+        tests = ('financial_cancellation_worker_original_send_scheduled_read_and_ticket_fences', 'financial_cancellation_result_projection_current_cas_and_history', 'financial_cancellation_acceptance_exact_next_idempotency_owner_and_rollback_fences', 'team_self_service_trial_owner_rollout_recovery_and_personal_seat_fences', 'financial_transaction_operator_exact_next_review_and_no_replay_fences', 'financial_source_customer_lookup_current_receipt_projection_restart_and_faults', 'financial_customer_lookup_receipts_durable_dedup_tokens_and_atomic_conflicts', 'financial_source_customer_recovery_authorization_original_identity_atomicity_and_history', 'financial_sql_checkpoint_requires_same_account_authority', 'financial_source_customer_resolution_exact_evidence_history_and_fences', 'financial_source_customer_dispatch_retention_lease_restart_and_baseline', 'financial_source_customer_request_acceptance_history_and_legacy_fences', 'financial_source_quote_atomic_terms_history_owner_expiry_and_predecessor_fences', 'financial_source_scheduler_exact_batch_lost_confirmation_and_operational_claim', 'financial_source_observation_atomic_enrollment_exact_history_retry_and_expired_lease', 'financial_source_signed_ingress_coordinator_exact_retry_and_final_fences', 'financial_transaction_sql_boundary_pending_rollback_and_lost_confirmation', 'financial_ingress_operator_plan_prospective_recovery_and_restore_fences', 'financial_semantic_lock_order_owner_wait_and_fresh_leases', 'personal_identity_sync_billing_order_first_sync_race_and_atomic_retry', 'stripe_durable_ingress', 'stripe_worker_current_readback', 'stripe_guarded_observation_commit_and_lost_confirmation', 'stripe_customer_durable_provisioning', 'stripe_quote_owner_customer_catalog', 'stripe_checkout_confirmation_durability', 'team_entitlement_trial_durability', 'team_trial_financial_guard_commit_restore', 'team_usage_admission_expiry', 'financial_source_inventory_consistent_historical_scope_and_loss_detection', 'financial_ingress_runtime_signed_retry_restore_unknown_commit_and_lock_wait')
         for name in tests:
             result = run(['cargo', 'test', '-p', 'wakaclock-server', '--lib', name,
                           '--target-dir', args.target_dir, '--jobs', '4', '--', '--ignored', '--nocapture', '--test-threads=1'],
@@ -58,6 +61,11 @@ def main():
             assert b'1 passed' in result, 'regression did not execute'
         files = ['backend/api/src/repository/user_identity_sync.rs',
                  'backend/api/src/repository/team_stripe_customer_recovery.rs',
+                 'backend/api/src/repository/team_stripe_customer_lookup.rs',
+                 'backend/api/src/repository/team_stripe_checkout_control.rs',
+                 'backend/api/src/repository/team_stripe_checkout_dispatch.rs',
+                 'backend/api/src/repository/team_stripe_checkout_projection.rs',
+                 'backend/api/src/services/team_stripe_checkout_receipt.rs',
                  'backend/api/src/repository/team_stripe_customer_resolution.rs',
                  'backend/api/src/services/team_stripe_customer_request.rs',
                  'backend/api/src/repository/team_stripe_customer_dispatch.rs',
@@ -71,6 +79,34 @@ def main():
                  'backend/api/src/repository/team_financial_locks_tests.rs',
                  'backend/api/src/services/team_financial_recovery.rs',
                  'backend/api/src/repository/team_financial_recovery.rs',
+                 'backend/api/src/repository/team_trial.rs',
+                 'backend/api/src/repository/team_trial_tests.rs',
+                 'backend/api/src/repository/team_seats.rs',
+                 'backend/api/src/repository/team_analytics_entitlement.rs',
+                 'backend/api/src/services/team_trial.rs',
+                 'backend/api/src/services/team_stripe_portal.rs',
+                 'backend/api/src/services/team_subscription_cancellation.rs',
+                 'backend/api/src/services/team_subscription_cancellation_lifecycle.rs',
+                 'backend/api/src/services/team_subscription_cancellation_lifecycle_tests.rs',
+                 'backend/api/src/repository/team_subscription_cancellation.rs',
+                 'backend/api/src/repository/team_subscription_cancellation_control.rs',
+                 'backend/api/src/repository/team_subscription_cancellation_dispatch.rs',
+                 'backend/api/src/repository/team_subscription_cancellation_projection.rs',
+                 'backend/api/src/repository/team_subscription_cancellation_projection_tests.rs',
+                 'backend/api/src/services/team_subscription_cancellation_projection.rs',
+                 'backend/api/src/services/team_subscription_cancellation_projection_tests.rs',
+                 'backend/api/migrations/postgres/059_team_cancellation_projection_predecessors.sql',
+                 'backend/api/migrations/postgres/060_team_cancellation_result_projections.sql',
+                 'backend/api/src/repository/team_subscription_cancellation_preparation.rs',
+                 'backend/api/src/repository/team_subscription_cancellation_status.rs',
+                 'backend/api/src/repository/team_subscription_cancellation_tests.rs',
+                 'backend/api/migrations/postgres/057_team_subscription_cancellations.sql',
+                 'backend/api/migrations/postgres/058_team_subscription_cancellation_exchanges.sql',
+                 'backend/api/src/services/team_subscription_cancellation_tests.rs',
+                 'backend/api/src/repository/team_stripe_portal.rs',
+                 'backend/api/src/services/billing.rs',
+                 'backend/api/src/handlers/v2/team_stripe.rs',
+                 'backend/api/src/repository/team_financial_transaction_recovery.rs',
                  'backend/api/src/repository/team_financial_recovery_tests.rs',
                  'backend/api/src/infrastructure/team_financial_plan.rs',
                  'backend/api/src/infrastructure/mod.rs',
@@ -125,6 +161,8 @@ def main():
                  'backend/api/migrations/postgres/043_team_stripe_invoice_observations.sql',
                  'backend/api/src/services/team_stripe_invoice.rs',
                  'backend/api/src/services/team_stripe_worker.rs',
+                 'backend/api/src/services/team_stripe_cancellation_worker.rs',
+                 'backend/api/src/bin/billing-reconciliation.rs',
                  'backend/api/src/bin/billing-reconciliation.rs',
                  'backend/api/src/services/team_stripe.rs', 'backend/api/src/repository/team_stripe.rs',
                  'backend/api/src/services/billing.rs', 'backend/api/src/infrastructure/stripe.rs',
@@ -172,7 +210,7 @@ def main():
             'financial_inventory_own_transaction_writes_checkpoint_rollback_and_commit': 'passed',
             'financial_inventory_staged_unknown_schema_and_json_rejected': 'passed',
             'financial_transaction_sql_boundary_pending_rollback_and_lost_confirmation': 'passed',
-            'financial_transaction_coordinator_production_writers': 'signed_ingress_scheduler_reconciliation_quote_customer_create_dispatch_resolution_integrated_recovery_checkout_pending',
+            'financial_transaction_coordinator_production_writers': 'signed_ingress_scheduler_reconciliation_quote_customer_create_and_recovery_lookup_integrated_checkout_binding_pending',
             'financial_transaction_signed_ingress_exact_next_confirmation': 'passed',
             'financial_transaction_sql_rollback_never_replayed_as_new': 'passed',
             'financial_transaction_final_unbound_source_fence': 'passed',
@@ -181,12 +219,12 @@ def main():
             'financial_transaction_provider_observation_enrollment_atomic_history_and_lease': 'passed',
             'financial_transaction_quote_immutable_terms_history_owner_expiry_and_predecessor': 'passed',
             'financial_customer_acceptance_history_scope_legacy_races': 'passed',
-            'financial_customer_source_dispatch_and_outcome': 'create_dispatch_retention_exact_sql_resolution_local_passed_recovery_lookup_pending',
-            'financial_source_runtime_authorization': 'source_customer_create_and_projection_integrated_recovery_checkout_all_writer_coverage_pending',
+            'financial_customer_source_dispatch_and_outcome': 'create_dispatch_retention_and_recovery_lookup_local_passed',
+            'financial_source_runtime_authorization': 'source_customer_create_and_recovery_integrated_checkout_binding_all_writer_coverage_pending',
             'executed_tests': {name: 'passed' for name in tests},
             'financial_customer_exact_outcome_resolution_history_and_fences': 'passed',
             'financial_customer_recovery_authorization_original_identity_cas_audit_lost_confirm': 'passed',
-            'financial_customer_source_recovery_lookup': 'pending_explicit_claim_gate',
+            'financial_customer_source_recovery_lookup': 'local_http_receipt_projection_idle_retry_and_faults_passed',
             'financial_missing_authority_same_account_sql_checkpoint_fences': 'passed',
             'account_signed_ingress_runtime_sql_file_retry_unknown_commit_and_scope': 'passed',
             'account_ingress_operator_plan_apply_bootstrap_and_pending_recovery': 'passed',

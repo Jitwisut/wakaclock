@@ -53,6 +53,15 @@ impl CustomerClaim {
             .context("financial_customer_claim_proof_required")?
             .projection_request(self, guard)
     }
+    pub(crate) fn retain_lookup_observation(
+        &self,
+        result: crate::services::team_financial_source::CustomerLookupResult,
+    ) -> Result<()> {
+        self.financial
+            .as_ref()
+            .context("financial_customer_claim_proof_required")?
+            .retain_lookup(self, result)
+    }
     pub(crate) fn retain_provider_result(
         &self,
         customer: Option<&str>,
@@ -174,15 +183,27 @@ impl CustomerRepository {
         let mut db = self.pg.transaction_client().await?;
         let tx = db.transaction().await?;
         super::team_financial_ingress::lock(&tx, account).await?;
-        let pending=guard.read()?.snapshot.transactions.groups.values().any(|g| !g.committed && g.proposal.account==*account && matches!(g.proposal.writer,Some(crate::services::team_financial_transaction::Writer::CustomerRecoveryAuthorization { .. } | crate::services::team_financial_transaction::Writer::CustomerRequest { .. } | crate::services::team_financial_transaction::Writer::CustomerLifecycle { .. } | crate::services::team_financial_transaction::Writer::CustomerResolution { .. })));
+        let pending = guard
+            .read()?
+            .snapshot
+            .transactions
+            .groups
+            .values()
+            .any(|g| !g.committed && g.proposal.account == *account);
         if pending {
-            super::team_financial_transaction::reconcile_customer_request_history(
-                tx, guard, account,
-            )
-            .await?;
+            super::team_financial_transaction::reconcile_account_history(tx, guard, account)
+                .await?;
         } else {
             tx.rollback().await?;
         }
+        Ok(())
+    }
+    pub(super) fn seal_source_claim(
+        &self,
+        c: &mut CustomerClaim,
+        request: crate::services::team_financial_source::AcceptedRequest,
+    ) -> Result<()> {
+        c.financial = Some(dispatch::Proof::new(self, c, request, true)?);
         Ok(())
     }
     pub(super) fn guard_for_resolution(
@@ -335,6 +356,10 @@ impl CustomerRepository {
             .contains(&reason),
             "unsupported recovery reason"
         );
+        if c.lookup_only && c.financial.as_ref().is_some_and(|p| p.is_source()) {
+            super::team_stripe_customer_lookup::project_claim(self, c, None).await?;
+            return Ok(());
+        }
         let mut db = self.pg.transaction_client().await?;
         let tx = db.transaction().await?;
         let scope = crate::services::team_financial_ingress::Scope {
@@ -475,6 +500,14 @@ impl CustomerRepository {
             // external observation does not itself authorize its projection.
             proof.retain(c, Some(customer), true)?;
             if proof.is_source() {
+                if c.lookup_only {
+                    return super::team_stripe_customer_lookup::project_claim(
+                        self,
+                        c,
+                        Some(customer),
+                    )
+                    .await;
+                }
                 return super::team_stripe_customer_resolution::complete(self, c, customer).await;
             }
         }

@@ -177,12 +177,23 @@ pub struct MergedCost {
     pub with_cost: Metric<u64>,
     pub without_cost: Metric<u64>,
     pub complete_prs: Metric<u64>,
+    pub observed_average_microusd: Metric<u64>,
+    pub fully_priced_observed_prs: Metric<u64>,
+    pub fully_priced_observed_cost_microusd: Metric<u64>,
+    pub observed_cost_scope: &'static str,
+    pub capture_completeness: &'static str,
+    pub average_rounding: &'static str,
     pub pricing_versions: Vec<String>,
     pub calculation_version: &'static str,
     #[serde(skip)]
     pub people: BTreeSet<Uuid>,
     #[serde(skip)]
     pub admitted: BTreeSet<(Uuid, String)>,
+    #[serde(skip)]
+    pub average_admitted: BTreeSet<(Uuid, String)>,
+    #[serde(skip)]
+    pub count_support:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, BTreeSet<Uuid>>>,
 }
 impl MergedCost {
     pub fn withheld(reason: &'static str) -> Self {
@@ -192,10 +203,18 @@ impl MergedCost {
             with_cost: Metric::unavailable(reason),
             without_cost: Metric::unavailable(reason),
             complete_prs: Metric::unavailable(reason),
+            observed_average_microusd: Metric::unavailable(reason),
+            fully_priced_observed_prs: Metric::unavailable(reason),
+            fully_priced_observed_cost_microusd: Metric::unavailable(reason),
+            observed_cost_scope: "received_confirmed_linked_facts_until_merge",
+            capture_completeness: "unconfirmed",
+            average_rounding: "floor_to_integer_microusd",
             pricing_versions: vec![],
             calculation_version: "confirmed_observed_usage_to_merge_v1",
             people: BTreeSet::new(),
             admitted: BTreeSet::new(),
+            average_admitted: BTreeSet::new(),
+            count_support: Default::default(),
         }
     }
 }

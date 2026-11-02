@@ -82,6 +82,24 @@ impl StateProof {
         current.snapshot.verify(org, state)?;
         Ok(Some(current.organization_token(org)?))
     }
+    fn retained_birth(
+        &self,
+    ) -> Result<Option<crate::services::team_organization_birth::BirthEntry>> {
+        let Some(guard) = &self.guard else {
+            return Ok(None);
+        };
+        let current = guard.read()?;
+        ensure!(
+            Some(current.organization_token(self.organization)?) == self.token,
+            "financial_guard_changed_during_transaction"
+        );
+        if current.snapshot.births.contains_key(&self.organization) {
+            current.snapshot.confirmed_birth(self.organization)?;
+            Ok(current.snapshot.births.get(&self.organization).cloned())
+        } else {
+            Ok(None)
+        }
+    }
     fn validate(&self) -> Result<()> {
         let current = runtime_guard(self.state.is_some())?;
         ensure!(
@@ -104,11 +122,19 @@ impl StateProof {
 /// Short file locks never encompass a SQL await.
 pub(crate) struct TransactionProof(StateProof);
 impl TransactionProof {
-    pub(crate) fn capture(
+    pub(crate) async fn capture(
+        tx: &tokio_postgres::Transaction<'_>,
         org: Uuid,
         state: Option<&crate::services::team_analytics_entitlement::State>,
     ) -> Result<Self> {
-        Ok(Self(StateProof::capture(org, state)?))
+        let proof = StateProof::capture(org, state)?;
+        if let Some(birth) = proof.retained_birth()? {
+            // Same transaction as admission; these immutable rows stay locked
+            // through receipt minting and SQL commit, including the final fence.
+            super::team_organization_birth::verify_entry(tx, &birth).await?;
+        }
+        proof.validate()?;
+        Ok(Self(proof))
     }
     pub(crate) fn validate(&self) -> Result<()> {
         self.0.validate()
@@ -132,11 +158,31 @@ impl TransactionProof {
 /// job row, not billing locks; authoritative admission rechecks in the right order.
 pub(crate) struct HintProof(StateProof);
 impl HintProof {
-    pub(crate) fn capture(
+    pub(crate) async fn capture(
+        pg: &PostgresClient,
         org: Uuid,
         state: Option<&crate::services::team_analytics_entitlement::State>,
     ) -> Result<Self> {
-        Ok(Self(StateProof::capture(org, state)?))
+        let proof = StateProof::capture(org, state)?;
+        if let Some(birth) = proof.retained_birth()? {
+            super::team_organization_birth::verify_readonly(pg, &birth).await?;
+        }
+        proof.validate()?;
+        Ok(Self(proof))
+    }
+    pub(crate) async fn capture_in(
+        tx: &tokio_postgres::Transaction<'_>,
+        org: Uuid,
+        state: Option<&crate::services::team_analytics_entitlement::State>,
+    ) -> Result<Self> {
+        let proof = StateProof::capture(org, state)?;
+        if let Some(birth) = proof.retained_birth()? {
+            // A scheduler owns a job row, not billing. Never acquire later org
+            // row locks in this hint path; authoritative capture rechecks it.
+            super::team_organization_birth::verify_hint(tx, &birth).await?;
+        }
+        proof.validate()?;
+        Ok(Self(proof))
     }
     pub(crate) fn validate(&self) -> Result<()> {
         self.0.validate()
@@ -236,6 +282,19 @@ async fn read_with_guard(
         .as_ref()
         .map(|r| r.organization_token(org))
         .transpose()?;
+    if let Some(before) = &before {
+        if before.snapshot.births.contains_key(&org) {
+            super::team_organization_birth::verify_readonly(
+                pg,
+                before
+                    .snapshot
+                    .births
+                    .get(&org)
+                    .context("onboarding_birth_missing")?,
+            )
+            .await?;
+        }
+    }
     let row = pg
         .query_opt(
             "SELECT e.revision,e.state FROM organizations o LEFT JOIN team_analytics_entitlements e ON e.organization_id=o.id WHERE o.id=$1 AND o.deleted_at IS NULL",
@@ -305,6 +364,8 @@ pub async fn inspect(
         namespace: expected_namespace,
         enrollment: if proof.state.is_some() {
             "enrolled"
+        } else if guard.read()?.snapshot.births.contains_key(&org) {
+            "fresh_unenrolled"
         } else {
             "explicit_legacy"
         }
@@ -515,13 +576,20 @@ mod tests {
         {
             let _environment = guard.environment();
             assert_eq!(read(&pg, org).await.unwrap(), enrolled);
-            let transaction = TransactionProof::capture(org, Some(&state)).unwrap();
+            let mut db = pg.transaction_client().await.unwrap();
+            let tx = db.transaction().await.unwrap();
+            super::super::team_seats::lock(&tx, org).await.unwrap();
+            let transaction = TransactionProof::capture(&tx, org, Some(&state))
+                .await
+                .unwrap();
             std::env::set_var("ATOAXIS_TEAM_FINANCIAL_GUARD_REQUIRED", "false");
             assert!(
                 read(&pg, org).await.is_err(),
                 "a journal without commercial deployment mode cannot authorize enrolled reads"
             );
-            assert!(TransactionProof::capture(org, Some(&state)).is_err());
+            assert!(TransactionProof::capture(&tx, org, Some(&state))
+                .await
+                .is_err());
             assert!(
                 transaction.validate().is_err(),
                 "changing only the required flag invalidates the captured proof"

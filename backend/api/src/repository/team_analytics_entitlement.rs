@@ -28,15 +28,45 @@ pub async fn start_trial(
     seats: i32,
     deployment: &CommercialDeployment,
 ) -> Result<State> {
+    start_trial_inner(pg, org, actor, seats, deployment, false).await
+}
+pub async fn start_self_service_trial(
+    pg: &PostgresClient,
+    org: Uuid,
+    actor: Uuid,
+    seats: i32,
+    deployment: &CommercialDeployment,
+) -> Result<State> {
+    start_trial_inner(pg, org, actor, seats, deployment, true).await
+}
+async fn start_trial_inner(
+    pg: &PostgresClient,
+    org: Uuid,
+    actor: Uuid,
+    seats: i32,
+    deployment: &CommercialDeployment,
+    self_service: bool,
+) -> Result<State> {
     let guard = deployment.guard();
     let mut db = pg.transaction_client().await?;
     let tx = db.transaction().await?;
+    if self_service {
+        tx.batch_execute("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='15s'")
+            .await?;
+    }
     super::team_seats::lock(&tx, org).await?;
     AuthorizationService::require_locked_billing_owner(&tx, actor, org).await?;
+    if self_service {
+        super::team_trial::require_rollout(&tx, org, deployment).await?;
+    }
     let now: DateTime<Utc> = tx.query_one("SELECT clock_timestamp()", &[]).await?.get(0);
     let existing = load(&tx, org).await?;
+    super::team_organization_birth::verify_retained(&tx, org, &guard.read()?).await?;
     let proof = verify_guard(Some(guard), org, existing.as_ref())?;
     if let Some(existing) = existing {
+        if self_service {
+            initial_trial_committed(&tx, org, &existing).await?;
+        }
         ensure!(
             existing.package_seats == seats,
             "trial activation terms changed"
@@ -46,10 +76,16 @@ pub async fn start_trial(
             next: None,
             proof,
         };
+        if self_service {
+            super::team_trial::require_rollout(&tx, org, deployment).await?;
+        }
         prepare_change(Some(guard), org, &change)?;
         tx.commit().await?;
         confirm_change(Some(guard), org, &change, None)?;
         return Ok(existing);
+    }
+    if self_service {
+        super::team_trial::validate_new_capacity(&tx, org, seats).await?;
     }
     let state = State::trial(seats, now)?;
     save(&tx, org, &state, "trial_started", now).await?;
@@ -64,6 +100,9 @@ pub async fn start_trial(
         next: Some(state.clone()),
         proof,
     };
+    if self_service {
+        super::team_trial::require_rollout(&tx, org, deployment).await?;
+    }
     let pending = prepare_change(Some(guard), org, &change)?;
     tx.commit()
         .await
@@ -201,11 +240,45 @@ pub async fn reconcile_trial(
     transition_id: Uuid,
     guard: &FinancialGuard,
 ) -> Result<State> {
+    reconcile_trial_inner(pg, org, actor, transition_id, guard, None).await
+}
+pub async fn reconcile_self_service_trial(
+    pg: &PostgresClient,
+    org: Uuid,
+    actor: Uuid,
+    transition_id: Uuid,
+    deployment: &CommercialDeployment,
+) -> Result<State> {
+    reconcile_trial_inner(
+        pg,
+        org,
+        actor,
+        transition_id,
+        deployment.guard(),
+        Some(deployment),
+    )
+    .await
+}
+async fn reconcile_trial_inner(
+    pg: &PostgresClient,
+    org: Uuid,
+    actor: Uuid,
+    transition_id: Uuid,
+    guard: &FinancialGuard,
+    self_service: Option<&CommercialDeployment>,
+) -> Result<State> {
     guard.namespace()?;
     let mut db = pg.transaction_client().await?;
     let tx = db.transaction().await?;
+    if self_service.is_some() {
+        tx.batch_execute("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='15s'")
+            .await?;
+    }
     super::team_seats::lock(&tx, org).await?;
     AuthorizationService::require_locked_billing_owner(&tx, actor, org).await?;
+    if let Some(deployment) = self_service {
+        super::team_trial::require_rollout(&tx, org, deployment).await?;
+    }
     let current = load(&tx, org)
         .await?
         .ok_or_else(|| anyhow::anyhow!("trial_commit_not_confirmed"))?;
@@ -215,13 +288,14 @@ pub async fn reconcile_trial(
     );
     let external = guard.read()?;
     let token = external.organization_token(org)?;
+    super::team_organization_birth::verify_retained(&tx, org, &external).await?;
     let entry = external
         .snapshot
         .organizations
         .get(&org)
         .ok_or_else(|| anyhow::anyhow!("financial_guard_unknown_organization"))?;
     match (&entry.head, &entry.pending) {
-        (Head::Legacy, Some(p)) => ensure!(
+        (Head::Legacy | Head::FreshUnenrolled { .. }, Some(p)) => ensure!(
             p.transition_id == transition_id && p.state.as_ref() == &current,
             "trial_transition_mismatch"
         ),
@@ -231,23 +305,39 @@ pub async fn reconcile_trial(
         ),
         _ => anyhow::bail!("trial_transition_unconfirmed"),
     }
-    let history=tx.query_opt("SELECT reason,state FROM team_analytics_entitlement_history WHERE organization_id=$1 AND revision=1", &[&org]).await?.ok_or_else(||anyhow::anyhow!("trial_history_missing"))?;
-    ensure!(
-        history.get::<_, String>(0) == "trial_started"
-            && serde_json::from_value::<State>(history.get(1))? == current,
-        "trial_history_conflict"
-    );
-    ensure!(tx.query_opt("SELECT 1 FROM audit_logs WHERE organization_id=$1 AND action='team.trial.started' AND resource_id=$1 AND metadata->>'entitlement_revision'='1' AND metadata->>'package_seats'=$2 FOR SHARE", &[&org,&current.package_seats.to_string()]).await?.is_some(),"trial_audit_missing");
+    initial_trial_committed(&tx, org, &current).await?;
     ensure!(
         guard.read()?.organization_token(org)? == token,
         "financial_guard_changed_during_trial_reconciliation"
     );
+    if let Some(deployment) = self_service {
+        super::team_trial::require_rollout(&tx, org, deployment).await?;
+    }
     tx.commit().await?;
     guard
         .confirm_committed(org, transition_id, &current)
         .map_err(|_| anyhow::anyhow!("financial_guard_commit_reconciliation_required"))?;
     verify_guard(Some(guard), org, Some(&current))?;
     Ok(current)
+}
+
+pub(super) async fn initial_trial_committed(
+    tx: &Transaction<'_>,
+    org: Uuid,
+    current: &State,
+) -> Result<()> {
+    ensure!(
+        *current == State::trial(current.package_seats, current.activated_at)?,
+        "trial_reconciliation_cannot_confirm_provider_state"
+    );
+    let history=tx.query_opt("SELECT reason,state FROM team_analytics_entitlement_history WHERE organization_id=$1 AND revision=1", &[&org]).await?.ok_or_else(||anyhow::anyhow!("trial_history_missing"))?;
+    ensure!(
+        history.get::<_, String>(0) == "trial_started"
+            && serde_json::from_value::<State>(history.get(1))? == *current,
+        "trial_history_conflict"
+    );
+    ensure!(tx.query_opt("SELECT 1 FROM audit_logs WHERE organization_id=$1 AND action='team.trial.started' AND resource_id=$1 AND metadata->>'entitlement_revision'='1' AND metadata->>'package_seats'=$2 FOR SHARE", &[&org,&current.package_seats.to_string()]).await?.is_some(),"trial_audit_missing");
+    Ok(())
 }
 
 pub(crate) async fn load(tx: &Transaction<'_>, org: Uuid) -> Result<Option<State>> {

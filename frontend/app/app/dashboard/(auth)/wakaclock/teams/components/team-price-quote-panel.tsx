@@ -10,16 +10,19 @@ import { WakaclockError } from '@/lib/wakaclock/client';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { createTeamPriceQuote, getTeamPriceQuote } from '@/lib/wakaclock/team-billing-endpoints';
 import { formatStripePrice } from '@/lib/wakaclock/team-billing-money';
+import { reportTeamBillingAccessFailure } from '@/lib/wakaclock/team-billing-recovery';
 
 import { TeamTestCheckoutConfirmation } from './team-test-checkout-confirmation';
 
 type Intent = { customer: string; id: string; seats: number };
 export function TeamPriceQuotePanel({
   customer,
+  onAccessLost,
   organizationId,
   userId,
 }: {
   customer: string | undefined;
+  onAccessLost?: (error: unknown) => void;
   organizationId: string;
   userId: string;
 }) {
@@ -28,14 +31,18 @@ export function TeamPriceQuotePanel({
   const [now, setNow] = useState(() => Date.now());
   const create = useMutation({
     mutationFn: (request: Intent) =>
-      createTeamPriceQuote(organizationId, request.id, request.seats),
+      reportTeamBillingAccessFailure(
+        createTeamPriceQuote(organizationId, request.id, request.seats),
+        onAccessLost
+      ),
     retry: false,
   });
   const matches = Boolean(customer && intent?.customer === customer && intent?.seats === seats);
   const id = matches && create.isSuccess && create.variables === intent ? create.data.id : '';
   const quote = useQuery({
     queryKey: wakaclockKeys.teamPriceQuote(userId, organizationId, id),
-    queryFn: ({ signal }) => getTeamPriceQuote(organizationId, id, signal),
+    queryFn: ({ signal }) =>
+      reportTeamBillingAccessFailure(getTeamPriceQuote(organizationId, id, signal), onAccessLost),
     enabled: Boolean(customer && id),
     retry: false,
     staleTime: 0,
@@ -111,6 +118,7 @@ export function TeamPriceQuotePanel({
             {data.test_checkout_confirmation_available && amount ? (
               <TeamTestCheckoutConfirmation
                 key={`${userId}:${organizationId}:${customer}:${data.id}`}
+                onAccessLost={onAccessLost}
                 organizationId={organizationId}
                 quote={data}
                 userId={userId}

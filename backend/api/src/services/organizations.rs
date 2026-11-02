@@ -120,12 +120,46 @@ impl OrganizationsService {
         owner_user_id: Uuid,
         request: CreateOrganizationRequest,
     ) -> Result<Organization> {
+        let request = match request {
+            CreateOrganizationRequest::Create(request) => request,
+            CreateOrganizationRequest::Recovery(action) => {
+                let postgres = self.required()?;
+                let deployment = crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+                return crate::repository::team_organization_recovery::execute(postgres, owner_user_id, action, &deployment)
+                    .await.map_err(|_| anyhow!("onboarding_recovery_unconfirmed"));
+            }
+        };
         let name = request.name.trim();
         if name.is_empty() || name.len() > 160 {
             return Err(anyhow!("organization name must contain 1-160 characters"));
         }
         let slug = normalize_slug(request.slug.as_deref().unwrap_or(name))?;
         let postgres = self.required()?;
+        if super::team_organization_birth::enabled()? {
+            let deployment = crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+            return crate::repository::team_organization_birth::create(
+                postgres,
+                owner_user_id,
+                name,
+                &slug,
+                request
+                    .creation_request_id
+                    .filter(|id| !id.is_nil())
+                    .context("onboarding_request_id_required")?,
+                &deployment,
+            )
+            .await
+            .map_err(|error| {
+                if error.to_string() == "organization slug is already in use" {
+                    error
+                } else {
+                    anyhow!("onboarding_creation_unconfirmed")
+                }
+            });
+        }
+        if request.creation_request_id.is_some() {
+            return Err(anyhow!("onboarding_disabled"));
+        }
         let id = Uuid::now_v7();
         let mut client = postgres.transaction_client().await?;
         let tx = client.transaction().await?;
@@ -1125,6 +1159,8 @@ fn organization_from_row(row: Row) -> Result<Organization> {
         personal_owner_id: row.try_get("personal_owner_id")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        creation_receipt: None,
+        creation_recovery: None,
     })
 }
 

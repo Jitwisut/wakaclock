@@ -109,7 +109,8 @@ async fn admit_inner(
     let state = super::team_analytics_entitlement::load(&tx, org)
         .await?
         .context("organization not enrolled in commercial analytics")?;
-    let financial = super::team_financial_guard::TransactionProof::capture(org, Some(&state))?;
+    let financial =
+        super::team_financial_guard::TransactionProof::capture(&tx, org, Some(&state)).await?;
     let scan_deadline = if let Some(scan) = scan {
         Some(super::team_usage_scan::lock_claim(&tx, scan).await?)
     } else {

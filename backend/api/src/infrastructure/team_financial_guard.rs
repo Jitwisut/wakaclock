@@ -148,6 +148,11 @@ pub struct Read {
     pub sequence: u64,
     pub chain: String,
 }
+/// Derived transport directive, not a provider identity/acceptance receipt.
+pub(crate) struct ProviderCooldown {
+    pub detail: crate::services::team_stripe_checkout_receipt::FailureDetail,
+    pub observed_at: chrono::DateTime<Utc>,
+}
 /// Journal disposition only. Neither variant proves that SQL committed or that
 /// the current heads are still ready; retained exact retries may be historical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +200,16 @@ impl Read {
             .organizations
             .get(&org)
             .context("financial_guard_unknown_organization")?;
+        if let Some(birth) = self.snapshot.births.get(&org) {
+            return fingerprint(&(
+                "organization_birth_v1",
+                self.snapshot.namespace,
+                org,
+                entry,
+                birth,
+                self.snapshot.transactions.history_for_org(org),
+            ));
+        }
         fingerprint(&(
             self.snapshot.namespace,
             org,
@@ -210,10 +225,42 @@ impl FinancialGuard {
         &self,
         event: crate::services::team_financial_transaction::Event,
     ) -> Result<TransactionRecord> {
+        ensure!(
+            !matches!(
+                &event,
+                crate::services::team_financial_transaction::Event::ConfirmReviewed { .. }
+            ),
+            "financial_transaction_review_fence_required"
+        );
+        self.record_transaction_inner(event, None)
+    }
+    /// Compare the reviewed account/source/enrollment observation while holding
+    /// the same short file lock used for the confirmation append. SQL readback
+    /// has already committed; a changed journal leaves the intent pending.
+    pub(crate) fn record_reviewed_transaction(
+        &self,
+        event: crate::services::team_financial_transaction::Event,
+        expected: &str,
+    ) -> Result<TransactionRecord> {
+        ensure!(
+            matches!(
+                &event,
+                crate::services::team_financial_transaction::Event::ConfirmReviewed { .. }
+            ),
+            "financial_transaction_review_event_required"
+        );
+        self.record_transaction_inner(event, Some(expected))
+    }
+    fn record_transaction_inner(
+        &self,
+        event: crate::services::team_financial_transaction::Event,
+        expected: Option<&str>,
+    ) -> Result<TransactionRecord> {
         #[cfg(test)]
         if matches!(
             &event,
             crate::services::team_financial_transaction::Event::Confirm { .. }
+                | crate::services::team_financial_transaction::Event::ConfirmReviewed { .. }
         ) && self
             .sync_failures
             .fetch_and(!32, std::sync::atomic::Ordering::SeqCst)
@@ -227,10 +274,45 @@ impl FinancialGuard {
         let state = self.load()?;
         let id = match &event {
             crate::services::team_financial_transaction::Event::Prepare { proposal } => proposal.id,
-            crate::services::team_financial_transaction::Event::Confirm { transaction, .. } => {
-                *transaction
-            }
+            crate::services::team_financial_transaction::Event::Confirm { transaction, .. }
+            | crate::services::team_financial_transaction::Event::ConfirmReviewed {
+                transaction,
+                ..
+            } => *transaction,
         };
+        if let Some(expected) = expected {
+            if let crate::services::team_financial_transaction::Event::ConfirmReviewed {
+                review,
+                ..
+            } = &event
+            {
+                let now = Utc::now();
+                ensure!(
+                    now >= review.reviewed_at && now < review.expires_at,
+                    "financial_transaction_review_expired_or_clock_changed"
+                );
+            }
+            let known = state
+                .snapshot
+                .transactions
+                .groups
+                .get(&id)
+                .context("financial_transaction_unknown")?;
+            let organizations = known
+                .proposal
+                .sources
+                .iter()
+                .map(|s| s.scope.organization)
+                .collect::<Vec<_>>();
+            ensure!(
+                crate::services::team_financial_transaction::observation_hash(
+                    &state.snapshot,
+                    &known.proposal.account,
+                    &organizations
+                )? == expected,
+                "financial_transaction_review_evidence_changed"
+            );
+        }
         let event = Event::FinancialTransaction {
             event: Box::new(event),
         };
@@ -354,19 +436,7 @@ impl FinancialGuard {
         // Retain this already received result across brief writer contention.
         // No SQL transaction or provider request is held while waiting; a real
         // storage/long-lock failure still returns error without claiming an ACK.
-        let started = std::time::Instant::now();
-        let _lock = loop {
-            match self.lock(false) {
-                Ok(lock) => break lock,
-                Err(e)
-                    if e.to_string() == "financial_guard_busy"
-                        && started.elapsed() < std::time::Duration::from_secs(2) =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(2))
-                }
-                Err(e) => return Err(e),
-            }
-        };
+        let _lock = self.evidence_lock()?;
         let state = self.load()?;
         // Legacy lookup completion must not manufacture a new source baseline.
         // Test current footprint under this same file lock, so a migration that
@@ -419,6 +489,465 @@ impl FinancialGuard {
                 source::Event::Outcome { scope, outcome }
             } else {
                 source::Event::RejectedOutcome { scope, outcome }
+            }),
+        };
+        let mut proposed = state.snapshot.clone();
+        proposed.apply(&event)?;
+        if proposed.sources != state.snapshot.sources {
+            self.append(&state, event)?;
+        }
+        Ok(Some(id))
+    }
+    /// A normalized Checkout observation and its identity Outcome are retained
+    /// in one fsynced frame before GET/binding can consume the result.
+    pub(crate) fn retain_checkout_observation(
+        &self,
+        scope: crate::services::team_financial_source::Scope,
+        request: &crate::services::team_financial_source::AcceptedRequest,
+        attempt: crate::services::team_stripe_checkout_receipt::Attempt,
+        kind: crate::services::team_stripe_checkout_receipt::ObservationKind,
+        evidence: &crate::services::team_stripe_checkout::SessionEvidence,
+    ) -> Result<Option<Uuid>> {
+        use crate::services::{
+            team_financial_source as source, team_stripe_checkout_receipt as receipt,
+        };
+        let namespace = self.namespace()?;
+        let _lock = self.evidence_lock()?;
+        let state = self.load()?;
+        if !attempt.source_claim
+            && !state
+                .snapshot
+                .sources
+                .scopes
+                .values()
+                .any(|entry| entry.scope.account == scope.account && entry.scope.live == scope.live)
+        {
+            return Ok(None);
+        }
+        ensure!(
+            evidence.operation == request.operation,
+            "financial_checkout_observation_operation_changed"
+        );
+        let metadata = receipt::Session::from_evidence(evidence);
+        metadata.validate(&scope)?;
+        let identity = metadata.identity();
+        let evidence_hash = receipt::result_hash(&scope, request.operation, &identity)?;
+        let outcome_id = Uuid::new_v5(
+            &namespace,
+            fingerprint(&(
+                &scope,
+                request.operation,
+                &request.request_hash,
+                &evidence_hash,
+            ))?
+            .as_bytes(),
+        );
+        let entry = state.snapshot.sources.scopes.get(&scope.key()?);
+        let outcome = source::Outcome {
+            id: outcome_id,
+            operation: request.operation,
+            request_hash: request.request_hash.clone(),
+            evidence_hash,
+            observed_at: entry
+                .and_then(|e| e.outcomes.get(&outcome_id))
+                .map_or(evidence.observed_at, |o| o.observed_at),
+            identity: Some(identity),
+        };
+        let id = Uuid::new_v5(
+            &namespace,
+            fingerprint(&(
+                &scope,
+                request.operation,
+                &request.request_hash,
+                &attempt,
+                &kind,
+                &metadata,
+                outcome_id,
+            ))?
+            .as_bytes(),
+        );
+        let observation = receipt::Observation {
+            id,
+            operation: request.operation,
+            request_hash: request.request_hash.clone(),
+            actor: attempt.actor,
+            revision: attempt.revision,
+            lease: attempt.lease,
+            source_claim: attempt.source_claim,
+            kind,
+            observed_at: entry
+                .and_then(|e| e.checkout_observations.get(&id))
+                .map_or(evidence.observed_at, |o| o.observed_at),
+            session: metadata,
+            outcome: outcome_id,
+        };
+        let event = Event::FinancialSource {
+            event: Box::new(source::Event::CheckoutObservation {
+                scope,
+                observation,
+                outcome,
+            }),
+        };
+        let mut next = state.snapshot.clone();
+        next.apply(&event)?;
+        if next.sources != state.snapshot.sources {
+            self.append(&state, event)?;
+        }
+        Ok(Some(id))
+    }
+    /// Receiver-first cancellation evidence: one fsynced frame retains the
+    /// allowlisted observation and deduplicated identity, even after an Owner or
+    /// lease changes. It does not authorize SQL projection, another POST or access.
+    pub fn retain_cancellation_observation(
+        &self,
+        request: &crate::services::team_subscription_cancellation::FrozenCancellation,
+        attempt: crate::services::team_subscription_cancellation::Attempt,
+        kind: crate::services::team_subscription_cancellation::ObservationKind,
+        metadata: &crate::services::team_subscription_cancellation::Subscription,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Uuid> {
+        use crate::services::{
+            team_financial_source as source, team_subscription_cancellation as cancellation,
+        };
+        request.validate()?;
+        let scope = request.scope();
+        metadata.validate(scope)?;
+        let accepted = request.accepted_request()?;
+        let namespace = self.namespace()?;
+        let _lock = self.evidence_lock()?;
+        let state = self.load()?;
+        let evidence_hash =
+            cancellation::result_hash(scope, request.operation(), &attempt, &kind, metadata)?;
+        let outcome_id = Uuid::new_v5(
+            &namespace,
+            fingerprint(&(
+                "subscription_cancellation_outcome_v1",
+                scope,
+                request.operation(),
+                &accepted.request_hash,
+                &evidence_hash,
+            ))?
+            .as_bytes(),
+        );
+        let entry = state.snapshot.sources.scopes.get(&scope.key()?);
+        let outcome = source::Outcome {
+            id: outcome_id,
+            operation: request.operation(),
+            request_hash: accepted.request_hash.clone(),
+            evidence_hash,
+            observed_at: entry
+                .and_then(|e| e.outcomes.get(&outcome_id))
+                .map_or(observed_at, |o| o.observed_at),
+            identity: Some(metadata.identity()),
+        };
+        let id = Uuid::new_v5(
+            &namespace,
+            fingerprint(&(
+                "subscription_cancellation_observation_v1",
+                request,
+                &attempt,
+                &kind,
+                metadata,
+                outcome_id,
+            ))?
+            .as_bytes(),
+        );
+        let observation = cancellation::Observation {
+            id,
+            request: request.clone(),
+            attempt,
+            kind,
+            observed_at: entry
+                .and_then(|e| e.cancellation_observations.get(&id))
+                .map_or(observed_at, |o| o.observed_at),
+            subscription: metadata.clone(),
+            outcome: outcome_id,
+        };
+        let event = Event::FinancialSource {
+            event: Box::new(source::Event::CancellationObservation {
+                scope: scope.clone(),
+                observation,
+                outcome,
+            }),
+        };
+        let mut next = state.snapshot.clone();
+        next.apply(&event)?;
+        if next.sources != state.snapshot.sources {
+            self.append(&state, event)?;
+        }
+        Ok(id)
+    }
+    /// Failure receipts contain only closed reason codes and transport metadata.
+    /// They introduce no provider identity and cannot authorize a retry or grant.
+    pub(crate) fn retain_checkout_failure(
+        &self,
+        scope: crate::services::team_financial_source::Scope,
+        request: &crate::services::team_financial_source::AcceptedRequest,
+        attempt: crate::services::team_stripe_checkout_receipt::Attempt,
+        detail: crate::services::team_stripe_checkout_receipt::FailureDetail,
+    ) -> Result<Option<Uuid>> {
+        use crate::services::{
+            team_financial_source as source, team_stripe_checkout_receipt as receipt,
+        };
+        let namespace = self.namespace()?;
+        let _lock = self.evidence_lock()?;
+        let state = self.load()?;
+        if !attempt.source_claim
+            && !state
+                .snapshot
+                .sources
+                .scopes
+                .values()
+                .any(|entry| entry.scope.account == scope.account && entry.scope.live == scope.live)
+        {
+            return Ok(None);
+        }
+        let id = Uuid::new_v5(
+            &namespace,
+            fingerprint(&(
+                "checkout_failure_v1",
+                &scope,
+                request.operation,
+                &request.request_hash,
+                &attempt,
+                &detail,
+            ))?
+            .as_bytes(),
+        );
+        let observed_at = state
+            .snapshot
+            .sources
+            .scopes
+            .get(&scope.key()?)
+            .and_then(|entry| entry.checkout_failures.get(&id))
+            .map_or_else(Utc::now, |value| value.observed_at);
+        let observation = receipt::FailureObservation {
+            id,
+            operation: request.operation,
+            request_hash: request.request_hash.clone(),
+            attempt,
+            observed_at,
+            detail,
+        };
+        let event = Event::FinancialSource {
+            event: Box::new(source::Event::CheckoutFailure { scope, observation }),
+        };
+        let mut next = state.snapshot.clone();
+        next.apply(&event)?;
+        if next.sources != state.snapshot.sources {
+            self.append(&state, event)?;
+        }
+        Ok(Some(id))
+    }
+    pub(crate) fn retain_cancellation_failure(
+        &self,
+        request: &crate::services::team_subscription_cancellation::FrozenCancellation,
+        attempt: crate::services::team_subscription_cancellation::Attempt,
+        detail: crate::services::team_stripe_checkout_receipt::FailureDetail,
+    ) -> Result<Uuid> {
+        use crate::services::{
+            team_financial_source as source, team_subscription_cancellation as cancellation,
+        };
+        request.validate()?;
+        let namespace = self.namespace()?;
+        let _lock = self.evidence_lock()?;
+        let state = self.load()?;
+        let scope = request.scope();
+        let id = Uuid::new_v5(
+            &namespace,
+            fingerprint(&("cancellation_failure_v1", request, &attempt, &detail))?.as_bytes(),
+        );
+        let observed_at = state
+            .snapshot
+            .sources
+            .scopes
+            .get(&scope.key()?)
+            .and_then(|entry| entry.cancellation_failures.get(&id))
+            .map_or_else(Utc::now, |old| old.observed_at);
+        let observation = cancellation::FailureObservation {
+            id,
+            request: request.clone(),
+            attempt,
+            observed_at,
+            detail,
+        };
+        let event = Event::FinancialSource {
+            event: Box::new(source::Event::CancellationFailure {
+                scope: scope.clone(),
+                observation,
+            }),
+        };
+        let mut next = state.snapshot.clone();
+        next.apply(&event)?;
+        if next.sources != state.snapshot.sources {
+            self.append(&state, event)?;
+        }
+        Ok(id)
+    }
+    /// A crash before SQL cooldown persistence must not erase Retry-After. The
+    /// directive covers this provider account, including its other organizations.
+    pub(crate) fn checkout_retry_after(
+        &self,
+        account: &str,
+        live: bool,
+    ) -> Result<Option<chrono::DateTime<Utc>>> {
+        Ok(self
+            .checkout_cooldown(account, live)?
+            .and_then(|failure| failure.detail.retry_after))
+    }
+    pub(crate) fn checkout_cooldown(
+        &self,
+        account: &str,
+        live: bool,
+    ) -> Result<Option<ProviderCooldown>> {
+        self.namespace()?;
+        let state = self.read()?.snapshot;
+        let checkout=state.sources.scopes.values().filter(|entry| entry.scope.account == account && entry.scope.live == live)
+            .flat_map(|entry| entry.checkout_failures.values().filter(|failure| failure.attempt.source_claim
+                && entry.accepted.get(&failure.operation).is_some_and(|request|
+                    request.kind == crate::services::team_financial_source::OperationKind::CreateCheckout
+                        && request.request_hash == failure.request_hash)))
+            .filter(|failure| failure.detail.retry_after.is_some())
+            .map(|failure|ProviderCooldown {detail:failure.detail.clone(),observed_at:failure.observed_at});
+        let cancellation = state
+            .sources
+            .scopes
+            .values()
+            .filter(|entry| entry.scope.account == account && entry.scope.live == live)
+            .flat_map(|entry| {
+                entry.cancellation_failures.values().filter(|failure| {
+                    failure.attempt.source_claim
+                        && failure.request.accepted_request().is_ok_and(|request| {
+                            entry.accepted.get(&request.operation) == Some(&request)
+                        })
+                })
+            })
+            .filter(|failure| failure.detail.retry_after.is_some())
+            .map(|failure| ProviderCooldown {
+                detail: failure.detail.clone(),
+                observed_at: failure.observed_at,
+            });
+        Ok(checkout.chain(cancellation).max_by_key(|failure| {
+            (
+                failure.detail.retry_after,
+                failure.detail.http_status.is_some(),
+                failure.observed_at,
+            )
+        }))
+    }
+    fn evidence_lock(&self) -> Result<File> {
+        let started = std::time::Instant::now();
+        loop {
+            match self.lock(false) {
+                Ok(lock) => return Ok(lock),
+                Err(e)
+                    if e.to_string() == "financial_guard_busy"
+                        && started.elapsed() < std::time::Duration::from_secs(2) =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(2))
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    /// One durable frame for a fresh lookup receipt and its deduplicated positive
+    /// customer fact. No caller-provided time/ID can refresh existing evidence.
+    pub(crate) fn retain_customer_lookup(
+        &self,
+        scope: crate::services::team_financial_source::Scope,
+        request: &crate::services::team_financial_source::AcceptedRequest,
+        attempt: crate::services::team_financial_source::CustomerLookupAttempt,
+        mut result: crate::services::team_financial_source::CustomerLookupResult,
+        source_claim: bool,
+    ) -> Result<Option<Uuid>> {
+        use crate::services::team_financial_source as source;
+        let namespace = self.namespace()?;
+        let _lock = self.evidence_lock()?;
+        let state = self.load()?;
+        if !source_claim
+            && !state
+                .snapshot
+                .sources
+                .scopes
+                .values()
+                .any(|s| s.scope.account == scope.account && s.scope.live == scope.live)
+        {
+            return Ok(None);
+        }
+        let entry = state.snapshot.sources.scopes.get(&scope.key()?);
+        let outcome = if let source::CustomerLookupResult::Verified {
+            customer,
+            outcome: id,
+        } = &mut result
+        {
+            let identity = Some(source::ProviderIdentity::Customer {
+                customer: customer.clone(),
+            });
+            let evidence_hash = crate::services::team_stripe_customer_request::result_hash(
+                &scope,
+                request.operation,
+                &identity,
+                true,
+            )?;
+            let actual = Uuid::new_v5(
+                &namespace,
+                fingerprint(&(
+                    &scope,
+                    request.operation,
+                    &request.request_hash,
+                    &evidence_hash,
+                ))?
+                .as_bytes(),
+            );
+            // A placeholder is replaced by the same ID used for create results;
+            // a conflicting reference may never select a different outcome.
+            ensure!(
+                id.is_nil() || *id == actual,
+                "financial_customer_lookup_outcome_conflict"
+            );
+            *id = actual;
+            Some(source::Outcome {
+                id: actual,
+                operation: request.operation,
+                request_hash: request.request_hash.clone(),
+                evidence_hash,
+                observed_at: entry
+                    .and_then(|e| e.outcomes.get(&actual))
+                    .map_or_else(Utc::now, |o| o.observed_at),
+                identity,
+            })
+        } else {
+            None
+        };
+        let id = Uuid::new_v5(
+            &namespace,
+            fingerprint(&(
+                "customer_lookup_receipt_v1",
+                &scope,
+                request,
+                &attempt,
+                &result,
+            ))?
+            .as_bytes(),
+        );
+        let observation = source::CustomerLookup {
+            id,
+            operation: request.operation,
+            request_hash: request.request_hash.clone(),
+            actor: attempt.actor,
+            authorization_revision: attempt.revision,
+            authorization_hash: attempt.authorization_hash,
+            lease: attempt.lease,
+            observed_at: entry
+                .and_then(|e| e.customer_lookups.get(&id))
+                .map_or_else(Utc::now, |r| r.observed_at),
+            result,
+        };
+        let event = Event::FinancialSource {
+            event: Box::new(source::Event::CustomerLookup {
+                scope,
+                observation,
+                outcome,
             }),
         };
         let mut proposed = state.snapshot.clone();
@@ -525,6 +1054,11 @@ impl FinancialGuard {
             std::env::set_var(key, value);
         }
         TestEnvironment { previous }
+    }
+    #[cfg(test)]
+    pub(crate) fn fail_birth_confirmation_once(&self) {
+        self.sync_failures
+            .fetch_or(64, std::sync::atomic::Ordering::SeqCst);
     }
     #[cfg(test)]
     pub(crate) fn fail_commit_confirmation_once(&self) {
@@ -736,6 +1270,95 @@ impl FinancialGuard {
     pub fn read(&self) -> Result<Read> {
         let _lock = self.lock(false)?;
         self.load()
+    }
+    /// An already initialized, pinned journal is required. Never infer a fresh
+    /// workspace from a restored SQL row. The SQL coordinator owns commit proof.
+    pub(crate) fn prepare_organization_birth(
+        &self,
+        birth: &crate::services::team_organization_birth::OrganizationBirth,
+    ) -> Result<()> {
+        ensure!(
+            self.expected_namespace.is_some(),
+            "financial_guard_namespace_pin_required"
+        );
+        let _lock = self.lock(false)?;
+        let state = self.load()?;
+        let event = Event::PrepareOrganizationBirth {
+            birth: Box::new(birth.clone()),
+        };
+        let mut next = state.snapshot.clone();
+        next.apply(&event)?;
+        if next == state.snapshot {
+            return Ok(());
+        }
+        self.append(&state, event)
+    }
+    pub(crate) fn confirm_organization_birth(
+        &self,
+        birth: &crate::services::team_organization_birth::OrganizationBirth,
+    ) -> Result<()> {
+        ensure!(
+            self.expected_namespace.is_some(),
+            "financial_guard_namespace_pin_required"
+        );
+        let _lock = self.lock(false)?;
+        let state = self.load()?;
+        let event = Event::ConfirmOrganizationBirth {
+            organization: birth.organization,
+            creation: birth.creation,
+            metadata_hash: birth.digest()?,
+        };
+        let mut next = state.snapshot.clone();
+        next.apply(&event)?;
+        if next == state.snapshot {
+            return Ok(());
+        }
+        #[cfg(test)]
+        if self
+            .sync_failures
+            .fetch_and(!64, std::sync::atomic::Ordering::SeqCst)
+            & 64
+            != 0
+        {
+            anyhow::bail!("fixture_birth_confirmation_lost");
+        }
+        self.append(&state, event)
+    }
+    /// SQL approval is already committed and revalidated by the coordinator.
+    /// This final short lock fences its exact observation; it performs no SQL.
+    pub(crate) fn confirm_reviewed_birth(
+        &self,
+        confirmation: &crate::services::team_organization_birth::BirthConfirmation,
+        expected_token: &str,
+    ) -> Result<()> {
+        ensure!(
+            self.expected_namespace.is_some(),
+            "financial_guard_namespace_pin_required"
+        );
+        let _lock = self.lock(false)?;
+        let state = self.load()?;
+        ensure!(
+            state.organization_token(confirmation.organization)? == expected_token,
+            "onboarding_history_changed"
+        );
+        let event = Event::ConfirmOrganizationBirthReviewed {
+            confirmation: Box::new(confirmation.clone()),
+        };
+        let mut next = state.snapshot.clone();
+        next.apply(&event)?;
+        if next == state.snapshot {
+            return Ok(());
+        }
+        #[cfg(test)]
+        if self
+            .sync_failures
+            .fetch_and(!64, std::sync::atomic::Ordering::SeqCst)
+            & 64
+            != 0
+        {
+            anyhow::bail!("fixture_birth_confirmation_lost");
+        }
+        self.append(&state, event)
     }
     pub fn register_legacy(&self, organization: Uuid) -> Result<()> {
         ensure!(

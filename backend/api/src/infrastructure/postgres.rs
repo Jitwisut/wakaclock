@@ -401,6 +401,44 @@ impl PostgresClient {
                 "Independent account financial ingress",
                 include_str!("../../migrations/postgres/056_team_financial_ingress.sql"),
             ),
+            (
+                "Durable end-period subscription cancellation",
+                include_str!("../../migrations/postgres/057_team_subscription_cancellations.sql"),
+            ),
+            (
+                "Prepared subscription cancellation exchanges",
+                include_str!(
+                    "../../migrations/postgres/058_team_subscription_cancellation_exchanges.sql"
+                ),
+            ),
+            (
+                "Cancellation observation predecessors",
+                include_str!(
+                    "../../migrations/postgres/059_team_cancellation_projection_predecessors.sql"
+                ),
+            ),
+            (
+                "Cancellation result projection audit",
+                include_str!(
+                    "../../migrations/postgres/060_team_cancellation_result_projections.sql"
+                ),
+            ),
+            (
+                "Durable original subscription upgrade preview requests",
+                include_str!("../../migrations/postgres/061_team_upgrade_preview_requests.sql"),
+            ),
+            (
+                "Independent fresh organization identity receipts",
+                include_str!("../../migrations/postgres/062_team_organization_birth.sql"),
+            ),
+            (
+                "Explicit Owner confirmation of committed organization birth",
+                include_str!("../../migrations/postgres/063_team_organization_birth_confirmations.sql"),
+            ),
+            (
+                "Private observed PR cost publication equations",
+                include_str!("../../migrations/postgres/064_team_cost_equations.sql"),
+            ),
         ] {
             client
                 .batch_execute(sql)

@@ -772,25 +772,40 @@ impl TeamInsightsService {
     }
 
     pub async fn readiness(&self, actor: Uuid, org: Uuid) -> Result<serde_json::Value> {
-        self.authorization
+        let authority = self
+            .authorization
             .require(actor, org, OrganizationAction::ManageSecurity, None)
             .await?;
-        let evidence = self.repo()?.release_evidence(org).await?;
+        let snapshot = self.repo()?.readiness_snapshot(org).await?;
+        let evidence = snapshot
+            .evidence
+            .iter()
+            .filter(|r| r.scope == "external")
+            .map(|r| (r.gate.clone(), (r.passed, r.evidence_ref.clone())))
+            .collect();
         let financial_deployment = match crate::infrastructure::team_financial_guard::CommercialDeployment::from_environment() {
             Ok(Some(_)) => "commercial_guard_configured",
             Ok(None) => "precommercial",
             Err(_) => "unconfirmed",
         };
-        let local = self.repo()?.postgres.query("SELECT gate,passed,evidence_ref,checked_at,build FROM team_release_evidence WHERE organization_id=$1 AND evidence_scope='local' ORDER BY gate",&[&org]).await?.into_iter().map(|row|serde_json::json!({"gate":row.get::<_,String>(0),"passed":row.get::<_,bool>(1),"evidence_ref":row.get::<_,String>(2),"checked_at":row.get::<_,DateTime<Utc>>(3),"build":row.get::<_,Option<String>>(4)})).collect::<Vec<_>>();
-        Ok(serde_json::json!({
+        let local=snapshot.evidence.iter().filter(|r|r.scope=="local")
+            .map(|r|serde_json::json!({"gate":r.gate,"passed":r.passed,"evidence_ref":r.evidence_ref,"checked_at":r.checked_at,"build":r.build})).collect::<Vec<_>>();
+        let now = Utc::now();
+        let details = super::team_release::evidence_details(
+            &snapshot.evidence,
+            option_env!("ATOAXIS_BUILD_REVISION"),
+            now,
+        );
+        let result = serde_json::json!({
             "receiver_enabled": self.enabled,
-            "organization_enabled": self.repo()?.enabled(org).await?,
+            "organization_enabled": snapshot.organization_enabled,
             "production_ready": false,
             "checkout_available": false,
             "financial_deployment": {"status": financial_deployment, "scope":"enrollment_entitlement_only", "financial_sources":"unconfirmed", "public_activation_enabled":false},
             "implementation_stage": "team_trust_local_verification",
             "evidence_scope": {"local": local, "external": "unconfirmed"},
-            "evaluated_at": Utc::now(),
+            "evidence_details": details,
+            "evaluated_at": now,
             "build": option_env!("ATOAXIS_BUILD_REVISION"),
             "version": env!("CARGO_PKG_VERSION"),
             "weekly_aggregates": true,
@@ -799,13 +814,24 @@ impl TeamInsightsService {
             "weekly_comparison": super::team_comparison::enabled(),
             "improvement_actions": super::team_comparison::enabled(),
             "weekly_summary": super::team_comparison::enabled(),
-            "report_timezone": crate::repository::team_trust::TeamTrustRepository::new(self.repo()?.postgres.clone()).policy(org).await?,
+            "report_timezone": snapshot.timezone.as_deref().unwrap_or("Asia/Bangkok"),
+            "report_timezone_source": if snapshot.timezone.is_some(){"configured"}else{"default_unconfirmed"},
             "gates": crate::services::team_release::release_gates(&evidence),
             "billing_packages": crate::services::team_billing::PACKAGES,
             "trial_days": crate::services::team_billing::TRIAL_DAYS,
             "payment_grace_days": crate::services::team_billing::GRACE_DAYS,
             "reason": "integration_reconciliation_and_commercial_runtime_pending"
-        }))
+        });
+        anyhow::ensure!(
+            self.repo()?.readiness_snapshot(org).await? == snapshot,
+            TeamError::ProjectionChanged
+        );
+        let current = self
+            .authorization
+            .require(actor, org, OrganizationAction::ManageSecurity, None)
+            .await?;
+        anyhow::ensure!(current.role == authority.role, TeamError::ProjectionChanged);
+        Ok(result)
     }
 
     pub async fn insights(
@@ -864,11 +890,7 @@ impl TeamInsightsService {
 
         // Hash metadata in memory only. The registry stores no raw usage or credentials.
         use sha2::{Digest, Sha256};
-        let fingerprint = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&(&facts, &cumulative, &merged_links))?)
-        );
-        let mut people: BTreeSet<Uuid> = facts
+        let weekly_scope = facts
             .iter()
             .filter(|f| {
                 scope
@@ -881,14 +903,14 @@ impl TeamInsightsService {
                                 .is_some_and(|at| at >= c.aggregate_from)
                     })
             })
-            .map(|f| f.user_id)
-            .collect();
+            .collect::<Vec<_>>();
+        let mut people: BTreeSet<Uuid> = weekly_scope.iter().map(|f|f.user_id).collect();
+        let weekly_membership = weekly_scope.iter().map(|f|(f.user_id,f.usage_event_id.clone())).collect();
 
         if merged.cost_microusd.value.is_some()
             && !crate::services::team_merged_cost::joint_partition(
                 &cumulative,
-                (from as u32, to as u32),
-                &people,
+                &weekly_membership,
                 &merged,
             )
         {
@@ -907,17 +929,19 @@ impl TeamInsightsService {
                 .map(|(user, event)| usage_identity(*user, event)),
         );
         people.extend(merged.people.iter().copied());
+        let equations = cost_equations(&weekly_scope, &cumulative, &projection, &merged)?;
+        let fingerprint = format!("{:x}",Sha256::digest(serde_json::to_vec(&(
+            super::team_cost_equations::VERSION, &facts, &cumulative, &merged_links, &equations,
+            merged.observed_average_microusd.value, merged.fully_priced_observed_prs.value,
+            merged.fully_priced_observed_cost_microusd.value,
+        ))?));
         if (projection.0.value.is_some() || merged.cost_microusd.value.is_some())
             && !trust
-                .release_with_facts(
-                    org,
-                    range.start,
-                    &team.map_or_else(|| "organization".into(), |id| id.to_string()),
-                    scope.generation,
-                    &fingerprint,
-                    &people,
-                    Some(&publication_facts),
-                )
+                .release_cost_publication(crate::repository::team_trust::CostPublication {
+                    org,week:range.start,key:&team.map_or_else(|| "organization".into(), |id|id.to_string()),
+                    generation:scope.generation,fingerprint:&fingerprint,contributors:&people,
+                    facts:Some(&publication_facts),equations:Some(&equations),
+                })
                 .await?
         {
             projection = (Metric::unavailable("privacy_suppressed"), vec![]);
@@ -1507,6 +1531,107 @@ fn usage_identity(user: Uuid, event: &str) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(format!("{user}:{event}").as_bytes()))
 }
+fn cost_equations(
+    weekly: &[&AiUsageEventRow],
+    cumulative: &[AiUsageEventRow],
+    projection: &CostProjection,
+    merged: &MergedCost,
+) -> Result<super::team_cost_equations::Equations> {
+    let mut latest = BTreeMap::new();
+    for f in cumulative {
+        let key = (f.user_id, f.usage_event_id.clone());
+        if latest
+            .get(&key)
+            .is_none_or(|old: &&AiUsageEventRow| old.version < f.version)
+        {
+            latest.insert(key, f);
+        }
+    }
+    // Two reads must not pair an older weekly value with a corrected merged
+    // numerator on the same identity. New identities have distinct membership
+    // in joint_partition; a one-person inter-read remainder is suppressed.
+    for f in weekly {
+        let current = latest
+            .get(&(f.user_id, f.usage_event_id.clone()))
+            .context(TeamError::ProjectionChanged)?;
+        anyhow::ensure!(
+            f.version == current.version
+                && f.event_payload_hash == current.event_payload_hash
+                && f.estimated_cost_microusd == current.estimated_cost_microusd
+                && f.pricing_version == current.pricing_version
+                && f.ai_provider == current.ai_provider
+                && f.ai_model == current.ai_model
+                && f.project_id == current.project_id
+                && f.event_time == current.event_time
+                && f.project_attribution_method == current.project_attribution_method,
+            TeamError::ProjectionChanged
+        );
+    }
+    let priced = |f: &AiUsageEventRow| {
+        f.estimated_cost_microusd.is_some()
+            && f.pricing_version.is_some()
+            && f.ai_provider.is_some()
+            && f.ai_model.is_some()
+    };
+    let mut costs = BTreeMap::new();
+    if projection.0.value.is_some() {
+        costs.insert(
+            "weekly_total".into(),
+            weekly
+                .iter()
+                .filter(|f| priced(f))
+                .map(|f| usage_identity(f.user_id, &f.usage_event_id))
+                .collect(),
+        );
+    }
+    for cell in &projection.1 {
+        if cell.cost_microusd.value.is_some() {
+            let name = format!(
+                "provider_model:{}",
+                super::team_financial_guard::fingerprint(&(&cell.provider, &cell.model))?
+            );
+            costs.insert(
+                name,
+                weekly
+                    .iter()
+                    .filter(|f| {
+                        priced(f)
+                            && f.ai_provider.as_ref() == Some(&cell.provider)
+                            && f.ai_model.as_ref() == Some(&cell.model)
+                    })
+                    .map(|f| usage_identity(f.user_id, &f.usage_event_id))
+                    .collect(),
+            );
+        }
+    }
+    if merged.cost_microusd.value.is_some() {
+        costs.insert(
+            "merged_total".into(),
+            latest
+                .iter()
+                .filter(|(key, f)| merged.admitted.contains(*key) && priced(f))
+                .map(|(_, f)| usage_identity(f.user_id, &f.usage_event_id))
+                .collect(),
+        );
+    }
+    if merged.observed_average_microusd.value.is_some() {
+        costs.insert(
+            "fully_priced_observed_numerator".into(),
+            merged
+                .average_admitted
+                .iter()
+                .map(|(u, e)| usage_identity(*u, e))
+                .collect(),
+        );
+    }
+    Ok(super::team_cost_equations::Equations {
+        schema_version: 1,
+        calculation_version: super::team_cost_equations::VERSION.into(),
+        costs,
+        counts: merged.count_support.clone(),
+    })
+}
+
 #[cfg(test)]
 fn receipt_cost(
     facts: &[AiUsageEventRow],

@@ -1,52 +1,94 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { Button } from '@/components/ui/button';
 import { QueryState } from '@/components/wakaclock/query-state';
+import { WakaclockError } from '@/lib/wakaclock/client';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import {
   getTeamCustomer,
   prepareTeamCustomer,
   recoverTeamCustomer,
 } from '@/lib/wakaclock/team-billing-endpoints';
+import {
+  reportTeamBillingAccessFailure,
+  teamBillingRecoveryGuidance,
+} from '@/lib/wakaclock/team-billing-recovery';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
+import {
+  TeamBillingOwnerBoundary,
+  useTeamBillingOwnerBoundary,
+} from './team-billing-owner-boundary';
+import { TeamCancellationPanel } from './team-cancellation-panel';
 import { TeamCheckoutStatusPanel } from './team-checkout-status-panel';
+import { TeamPortalLink } from './team-portal-link';
 import { TeamPriceQuotePanel } from './team-price-quote-panel';
+import { TeamTrialPanel } from './team-trial-panel';
 
 export function TeamBillingSetupPanel({ organizationId }: { organizationId: string }) {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   return (
-    <BillingScope
-      key={`${userId}:${organizationId}`}
-      organizationId={organizationId}
-      userId={userId}
-    />
+    <TeamBillingOwnerBoundary key={`${userId}:${organizationId}`}>
+      <TeamTrialPanel organizationId={organizationId} userId={userId} />
+      <BillingScope organizationId={organizationId} userId={userId} />
+    </TeamBillingOwnerBoundary>
   );
 }
 function BillingScope({ organizationId, userId }: { organizationId: string; userId: string }) {
   const [open, setOpen] = useState(false);
   const [confirmed, setConfirmed] = useState('');
+  const boundary = useTeamBillingOwnerBoundary();
+  const reportAccessFailure = boundary.report;
+  const [ownerObservation, setOwnerObservation] = useState(0);
+  const reportedError = useRef<unknown>(null);
+  const onAccessLost = useCallback(
+    (error: unknown) => {
+      setConfirmed('');
+      reportAccessFailure(error);
+    },
+    [reportAccessFailure]
+  );
   const client = useQueryClient();
   const key = wakaclockKeys.teamBillingCustomer(userId, organizationId);
   const status = useQuery({
     queryKey: key,
-    queryFn: ({ signal }) => getTeamCustomer(organizationId, signal),
+    queryFn: async ({ signal }) => {
+      const result = await getTeamCustomer(organizationId, signal);
+      // A monotonic local observation avoids reusing a confirmation when two
+      // successful checks share a millisecond or the wall clock moves backward.
+      setOwnerObservation((n) => n + 1);
+      return result;
+    },
     enabled: open && Boolean(userId),
     retry: false,
     staleTime: 0,
     gcTime: 0,
     refetchInterval: open ? 15_000 : false,
   });
+  useEffect(() => {
+    if (status.error !== reportedError.current) {
+      reportedError.current = status.error;
+      if (status.error instanceof WakaclockError && [401, 403].includes(status.error.status ?? 0)) {
+        onAccessLost(status.error);
+      }
+    }
+  }, [status.error, onAccessLost]);
   const change = useMutation({
     mutationFn: async (
       action: { kind: 'prepare' } | { kind: 'recover'; operation: string; revision: number }
     ) => {
-      if (action.kind === 'prepare') await prepareTeamCustomer(organizationId);
-      else await recoverTeamCustomer(organizationId, action.operation, action.revision);
+      if (action.kind === 'prepare') {
+        await reportTeamBillingAccessFailure(prepareTeamCustomer(organizationId), onAccessLost);
+      } else {
+        await reportTeamBillingAccessFailure(
+          recoverTeamCustomer(organizationId, action.operation, action.revision),
+          onAccessLost
+        );
+      }
     },
     onSuccess: async () => {
       setConfirmed('');
@@ -54,12 +96,25 @@ function BillingScope({ organizationId, userId }: { organizationId: string; user
     },
     retry: false,
   });
-  const available = status.isSuccess && !status.isFetching && !change.isPending && !change.isError;
+  const available =
+    !boundary.error &&
+    status.isSuccess &&
+    !status.isFetching &&
+    !change.isPending &&
+    !change.isError;
   const data = available ? status.data : undefined;
-  const confirmation = data ? `${data.operation_id}:${data.revision}` : '';
+  const confirmation = data
+    ? `${data.operation_id}:${data.revision}:${ownerObservation}:${boundary.revision}`
+    : '';
   return (
     <section aria-label="Billing customer setup" className="space-y-2 rounded border p-3">
-      <Button onClick={() => setOpen(!open)} variant="outline">
+      <Button
+        onClick={() => {
+          setOpen(!open);
+          setConfirmed('');
+        }}
+        variant="outline"
+      >
         {open ? 'Close billing setup' : 'Billing setup (Owner)'}
       </Button>
       {open && (
@@ -70,17 +125,17 @@ function BillingScope({ organizationId, userId }: { organizationId: string; user
           </p>
           <Button
             disabled={status.isFetching || change.isPending}
-            onClick={() => {
+            onClick={async () => {
               change.reset();
               setConfirmed('');
-              void status.refetch();
+              await boundary.reload(() => status.refetch());
             }}
             variant="outline"
           >
             Reload billing status
           </Button>
           <QueryState
-            error={status.error ?? change.error}
+            error={boundary.error ?? status.error ?? change.error}
             isLoading={status.isLoading || status.isFetching || change.isPending}
           >
             {available && data === null && (
@@ -105,7 +160,7 @@ function BillingScope({ organizationId, userId }: { organizationId: string; user
                     Next eligible attempt: {data.retry_at}
                   </p>
                 )}
-                {data.last_error_code && <p>Reason: {data.last_error_code}</p>}
+                {data.last_error_code && <p>{teamBillingRecoveryGuidance(data.last_error_code)}</p>}
                 {data.observed_at && <p>Last observation: {data.observed_at}</p>}
                 {(data.disposition === 'owner_changed' ||
                   data.disposition === 'recovery_required') && (
@@ -140,9 +195,31 @@ function BillingScope({ organizationId, userId }: { organizationId: string; user
               </>
             )}
           </QueryState>
-          <TeamCheckoutStatusPanel organizationId={organizationId} userId={userId} />
+          <TeamCheckoutStatusPanel
+            authority={{ available, observation: `${ownerObservation}:${boundary.revision}` }}
+            onAccessLost={onAccessLost}
+            organizationId={organizationId}
+            userId={userId}
+          />
+          <TeamPortalLink
+            customer={
+              data?.disposition === 'verified' ? `${data.operation_id}:${data.revision}` : undefined
+            }
+            onAccessLost={onAccessLost}
+            organizationId={organizationId}
+            userId={userId}
+          />
+          <TeamCancellationPanel
+            authority={{ available, observation: `${ownerObservation}:${boundary.revision}` }}
+            onAccessLost={onAccessLost}
+            organizationId={organizationId}
+            userId={userId}
+          />
           <TeamPriceQuotePanel
-            customer={data?.disposition === 'verified' ? confirmation : undefined}
+            customer={
+              data?.disposition === 'verified' ? `${data.operation_id}:${data.revision}` : undefined
+            }
+            onAccessLost={onAccessLost}
             organizationId={organizationId}
             userId={userId}
           />

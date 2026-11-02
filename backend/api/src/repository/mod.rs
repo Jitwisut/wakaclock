@@ -44,22 +44,36 @@ mod copilot_reports_tests;
 
 #[cfg(test)]
 mod team_cost_tests;
+#[cfg(test)]
+mod team_cost_equations_tests;
+#[cfg(test)]
+mod team_readiness_tests;
 
 pub mod team_stripe;
 #[cfg(test)]
 mod team_stripe_tests;
 
 pub mod team_stripe_customer;
+mod team_stripe_customer_lookup;
 mod team_stripe_customer_recovery;
 mod team_stripe_customer_resolution;
 
 pub mod team_stripe_quote;
 
 pub mod team_stripe_checkout;
+pub mod team_stripe_checkout_control;
+pub mod team_stripe_checkout_projection;
 
 pub mod team_seats;
 
 pub mod team_analytics_entitlement;
+pub mod team_stripe_portal;
+pub mod team_subscription_cancellation;
+pub mod team_trial;
+pub mod team_organization_birth;
+pub mod team_organization_recovery;
+pub mod team_pilot;
+pub mod team_upgrade_preview;
 
 pub mod team_usage_admissions;
 
@@ -72,6 +86,7 @@ pub mod team_financial_ingress;
 pub mod team_financial_inventory;
 
 pub mod team_financial_recovery;
+pub mod team_financial_transaction_recovery;
 
 mod team_financial_locks;
 

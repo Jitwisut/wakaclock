@@ -19,6 +19,36 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Read-only exact-next review of a retained typed transaction. No SQL replay.
+    PrepareTransactionRecovery {
+        path: PathBuf,
+        #[arg(long)]
+        namespace: Uuid,
+        #[arg(long)]
+        account: String,
+        #[arg(long)]
+        live: bool,
+        #[arg(long)]
+        evidence_hash: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Confirm already-committed SQL after explicit review of the unchanged plan.
+    ApplyTransactionRecovery {
+        path: PathBuf,
+        #[arg(long)]
+        namespace: Uuid,
+        #[arg(long)]
+        account: String,
+        #[arg(long)]
+        live: bool,
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        approve_plan: String,
+        #[arg(long)]
+        acknowledge_readback_only: bool,
+    },
     /// Save an immutable private review plan. No baseline/provider mutation.
     PrepareIngressRecovery {
         path: PathBuf,
@@ -102,6 +132,63 @@ async fn main() {
 }
 async fn execute(args: Args) -> Result<()> {
     match args.command {
+        Command::PrepareTransactionRecovery {
+            path,
+            namespace,
+            account,
+            live,
+            evidence_hash,
+            output,
+        } => {
+            let guard = FinancialGuard::new(path)?.pin_namespace(namespace)?;
+            guard.namespace()?;
+            let scope = wakaclock_server::services::team_financial_ingress::Scope { account, live };
+            scope.key()?;
+            let pg = PostgresClient::connect(&PostgresConfig {
+                url: Some(std::env::var("POSTGRES_URL")?),
+                max_connections: 2,
+            })
+            .await?;
+            let plan = wakaclock_server::repository::team_financial_transaction_recovery::prepare(
+                &pg,
+                &guard,
+                &scope,
+                &evidence_hash,
+            )
+            .await?;
+            wakaclock_server::infrastructure::team_financial_plan::write(&output, &plan)?;
+            println!("{}", plan.summary());
+        }
+        Command::ApplyTransactionRecovery {
+            path,
+            namespace,
+            account,
+            live,
+            plan,
+            approve_plan,
+            acknowledge_readback_only,
+        } => {
+            let guard = FinancialGuard::new(path)?.pin_namespace(namespace)?;
+            guard.namespace()?;
+            let scope = wakaclock_server::services::team_financial_ingress::Scope { account, live };
+            scope.key()?;
+            let plan = wakaclock_server::infrastructure::team_financial_plan::read(&plan)?;
+            let approval = wakaclock_server::services::team_financial_recovery::Approval::reviewed_transaction(
+                &plan, namespace, &scope, &approve_plan, acknowledge_readback_only,
+            )?;
+            let pg = PostgresClient::connect(&PostgresConfig {
+                url: Some(std::env::var("POSTGRES_URL")?),
+                max_connections: 2,
+            })
+            .await?;
+            println!(
+                "{}",
+                wakaclock_server::repository::team_financial_transaction_recovery::apply(
+                    &pg, &guard, &plan, &approval,
+                )
+                .await?
+            );
+        }
         Command::PrepareIngressRecovery {
             path,
             namespace,
@@ -213,11 +300,13 @@ async fn execute(args: Args) -> Result<()> {
             let state = FinancialGuard::new(path)?.read()?;
             let mut legacy = 0;
             let mut enrolled = 0;
+            let mut fresh = 0;
             let mut closed = 0;
             let mut pending = 0;
             for e in state.snapshot.organizations.values() {
                 match e.head {
                     Head::Legacy => legacy += 1,
+                    Head::FreshUnenrolled { .. } => fresh += 1,
                     Head::Enrolled { .. } => enrolled += 1,
                     _ => closed += 1,
                 };
@@ -227,7 +316,7 @@ async fn execute(args: Args) -> Result<()> {
             }
             println!(
                 "{}",
-                serde_json::json!({"namespace":state.snapshot.namespace,"sequence":state.sequence,"legacy":legacy,"enrolled":enrolled,"closed":closed,"pending":pending,"scope":"enrollment_entitlement_only","financial_sources":"unconfirmed","financial_transactions":state.snapshot.transactions.diagnostic(),"product_authorization_enabled":false})
+                serde_json::json!({"namespace":state.snapshot.namespace,"sequence":state.sequence,"legacy":legacy,"fresh_unenrolled":fresh,"pending_births":state.snapshot.births.values().filter(|b| !b.confirmed).count(),"enrolled":enrolled,"closed":closed,"pending":pending,"scope":"enrollment_entitlement_only","financial_sources":"unconfirmed","financial_transactions":state.snapshot.transactions.diagnostic(),"product_authorization_enabled":false})
             );
         }
         Command::VerifyDatabase {

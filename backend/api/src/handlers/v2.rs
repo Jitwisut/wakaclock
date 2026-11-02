@@ -391,6 +391,11 @@ pub struct WakaTimeImportJob {
 
 pub fn router(app_state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/organizations/:organization_id/billing/trial", get(team_stripe::trial_status).post(team_stripe::trial_start))
+        .route("/organizations/:organization_id/billing/trial/recover", post(team_stripe::trial_recover))
+        .route("/organizations/:organization_id/billing/portal", post(team_stripe::portal_destination))
+        .route("/organizations/:organization_id/billing/cancellation", get(team_stripe::cancellation_view).post(team_stripe::accept_cancellation))
+        .route("/organizations/:organization_id/billing/cancellation/recover", post(team_stripe::recover_cancellation))
         .route("/team/webhooks/github", post(team_webhooks::github))
         .route("/organizations/:organization_id/billing/checkout", get(team_stripe::checkout_status).post(team_stripe::checkout_prepare))
         .route("/organizations/:organization_id/billing/checkout/recover", post(team_stripe::checkout_recover))

@@ -32,7 +32,56 @@ pub struct TeamInsightsRepository {
     clickhouse: Arc<ClickHouseClient>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadinessSnapshot {
+    pub organization_enabled: bool,
+    pub generation: i64,
+    pub timezone: Option<String>,
+    pub evidence: Vec<crate::services::team_release::EvidenceRecord>,
+}
+
+pub(crate) async fn read_readiness_snapshot(
+    pg: &PostgresClient,
+    org: Uuid,
+) -> Result<ReadinessSnapshot> {
+    let mut connection = pg.transaction_client().await?;
+    let tx = connection
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+        .read_only(true)
+        .start()
+        .await?;
+    tx.batch_execute("SET LOCAL statement_timeout='10s'")
+        .await?;
+    let row=tx.query_opt("SELECT COALESCE(r.enabled,FALSE),COALESCE(r.generation,0),p.timezone FROM organizations o LEFT JOIN team_rollouts r ON r.organization_id=o.id LEFT JOIN team_report_policies p ON p.organization_id=o.id WHERE o.id=$1 AND o.deleted_at IS NULL",&[&org]).await?.context("readiness_organization_unavailable")?;
+    let rows=tx.query("SELECT gate,evidence_scope,passed,evidence_ref,checked_at,build FROM team_release_evidence WHERE organization_id=$1 ORDER BY gate,evidence_scope LIMIT 1001",&[&org]).await?;
+    anyhow::ensure!(rows.len() <= 1000, "readiness_evidence_limit_exceeded");
+    let evidence = rows
+        .into_iter()
+        .map(|r| crate::services::team_release::EvidenceRecord {
+            gate: r.get(0),
+            scope: r.get(1),
+            passed: r.get(2),
+            evidence_ref: r.get(3),
+            checked_at: r.get(4),
+            build: r.get(5),
+        })
+        .collect();
+    let snapshot = ReadinessSnapshot {
+        organization_enabled: row.get(0),
+        generation: row.get(1),
+        timezone: row.get(2),
+        evidence,
+    };
+    tx.commit().await?;
+    Ok(snapshot)
+}
+
 impl TeamInsightsRepository {
+    /// One read-only snapshot; readiness must not initialize a report policy.
+    pub async fn readiness_snapshot(&self, org: Uuid) -> Result<ReadinessSnapshot> {
+        read_readiness_snapshot(&self.postgres, org).await
+    }
     pub async fn personal_project(&self, user: Uuid, project: Uuid) -> Result<bool> {
         Ok(self.clickhouse.get_client().query("SELECT count() FROM wakaclock.project_identities FINAL WHERE user_id = ? AND project_id = ?").bind(user).bind(project).fetch_one::<u64>().await? > 0)
     }

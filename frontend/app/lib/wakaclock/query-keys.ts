@@ -2,6 +2,8 @@
  * Every key includes userId so switching users in the header never serves
  * stale cached data from another uuid.
  */
+import { getSessionObservation } from './session';
+
 const TEAM_GITHUB_KEY = 'team-github';
 export const wakaclockKeys = {
   all: ['wakaclock'] as const,
@@ -23,6 +25,12 @@ export const wakaclockKeys = {
   // No userId: describes the server deployment, not an account — see useCapabilities.
   capabilities: () => [...wakaclockKeys.all, 'capabilities'] as const,
   organizations: (userId: string) => ['organizations', userId] as const,
+  teamOrganizationBirth: (userId: string, org: string, sessionToken?: null | string) => {
+    const prefix = [...wakaclockKeys.all, 'organization-birth', userId, org] as const;
+    return sessionToken === undefined
+      ? prefix
+      : ([...prefix, getSessionObservation(sessionToken)] as const);
+  },
   teamReceipt: (
     userId: string,
     organizationId: string,
@@ -45,8 +53,20 @@ export const wakaclockKeys = {
     [...wakaclockKeys.all, 'team-billing-checkout', userId, organizationId] as const,
   teamBillingCustomer: (userId: string, organizationId: string) =>
     [...wakaclockKeys.all, 'team-billing-customer', userId, organizationId] as const,
+  teamTrial: (userId: string, organizationId: string) =>
+    [...wakaclockKeys.all, 'team-trial', userId, organizationId] as const,
+  teamCancellation: (userId: string, organizationId: string, operation?: string) =>
+    [...wakaclockKeys.all, 'team-cancellation', userId, organizationId, operation] as const,
   teamHealth: (userId: string, organizationId: string) =>
     [...wakaclockKeys.all, 'team-health', userId, organizationId] as const,
+  teamReadiness: (userId: string, organizationId: string, session: null | string) =>
+    [
+      ...wakaclockKeys.all,
+      'team-readiness',
+      userId,
+      organizationId,
+      getSessionObservation(session),
+    ] as const,
   teamConsent: (userId: string, organizationId: string) =>
     [...wakaclockKeys.all, 'team-consent', userId, organizationId] as const,
   teamInsights: (
