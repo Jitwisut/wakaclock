@@ -179,7 +179,7 @@ pub async fn scim_users_create(
     let organization_id = scim_org(&state, &headers).await?;
     let row = state
         .enterprise_service
-        .scim_upsert_user(organization_id, None, input)
+        .scim_create_user(organization_id, input)
         .await
         .map_err(client_or_service_error)?;
     Ok((StatusCode::CREATED, Json(scim_user_json(row))))
@@ -417,6 +417,15 @@ fn v2_envelope(data: impl Serialize) -> Value {
 }
 
 fn service_error(error: anyhow::Error) -> (StatusCode, Json<Value>) {
+    use crate::services::organizations::OrganizationRequestError;
+    if let Some(typed) = error.downcast_ref::<OrganizationRequestError>() {
+        let status = match typed {
+            OrganizationRequestError::Conflict(_) => StatusCode::CONFLICT,
+            OrganizationRequestError::Invalid(_) => StatusCode::BAD_REQUEST,
+            OrganizationRequestError::NotFound(_) => StatusCode::NOT_FOUND,
+        };
+        return (status, Json(json!({ "error": typed.to_string() })));
+    }
     (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(json!({ "error": error.to_string() })),
@@ -424,6 +433,12 @@ fn service_error(error: anyhow::Error) -> (StatusCode, Json<Value>) {
 }
 
 fn client_or_service_error(error: anyhow::Error) -> (StatusCode, Json<Value>) {
+    if error
+        .downcast_ref::<crate::services::organizations::OrganizationRequestError>()
+        .is_some()
+    {
+        return service_error(error);
+    }
     let message = error.to_string();
     let status = if message.contains("required")
         || message.contains("invalid")

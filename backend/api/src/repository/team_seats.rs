@@ -13,6 +13,16 @@ pub async fn lock(tx: &Transaction<'_>, org: Uuid) -> Result<()> {
     .await?;
     Ok(())
 }
+pub(crate) async fn try_lock(tx: &Transaction<'_>, org: Uuid) -> Result<bool> {
+    Ok(tx
+        .query_one(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))",
+            &[&format!("team-billing:{org}")],
+        )
+        .await?
+        .get(0))
+}
+
 /// Caller holds `lock`. Invitations reserve no seat until accepted. Inactive user
 /// accounts retain their membership seat until explicitly removed/deactivated.
 pub async fn admit(
@@ -22,6 +32,16 @@ pub async fn admit(
     role: &str,
     seat: &str,
 ) -> Result<()> {
+    if role == "owner" {
+        tx.query_opt(
+            "SELECT id FROM users WHERE id=$1 AND is_active AND deleted_at IS NULL FOR SHARE",
+            &[&user],
+        )
+        .await?
+        .ok_or(OrganizationRequestError::Conflict(
+            "an active account is required for ownership",
+        ))?;
+    }
     if role == "viewer" || seat != "developer" {
         return Ok(());
     }

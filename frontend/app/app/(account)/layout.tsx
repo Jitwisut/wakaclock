@@ -64,14 +64,14 @@ export default async function AccountLayout({
             `--text-family` references a `--font-*` variable and resolves to nothing if that
             variable is not defined where the declaration lives. */}
         <ActiveThemeProvider className={fontVariables} initialTheme={themeSettings}>
-          <QueryProvider>
-            <WakaclockUserProvider>
+          <WakaclockUserProvider>
+            <QueryProvider>
               <div className="wakaclock-auth bg-background text-foreground min-h-screen font-sans">
                 {children}
               </div>
               <Toaster position="top-center" richColors />
-            </WakaclockUserProvider>
-          </QueryProvider>
+            </QueryProvider>
+          </WakaclockUserProvider>
         </ActiveThemeProvider>
       </ThemeProvider>
     </RootDocument>

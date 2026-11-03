@@ -65,6 +65,8 @@ pub enum OrganizationRequestError {
     NotFound(&'static str),
     #[error("{0}")]
     Invalid(&'static str),
+    #[error("{0}")]
+    Conflict(&'static str),
 }
 
 /// The team role to store, defaulting to `member`.
@@ -169,6 +171,12 @@ impl OrganizationsService {
         let id = Uuid::now_v7();
         let mut client = postgres.transaction_client().await?;
         let tx = client.transaction().await?;
+        tx.query_opt(
+            "SELECT 1 FROM users WHERE id=$1 AND is_active AND deleted_at IS NULL FOR SHARE",
+            &[&owner_user_id],
+        )
+        .await?
+        .ok_or(OrganizationRequestError::Invalid("active owner required"))?;
         let row = tx
             .query_one(
                 "INSERT INTO organizations (id, slug, name, personal_owner_id)
@@ -301,11 +309,8 @@ impl OrganizationsService {
                 None,
             )
             .await?;
-        let role = request.role.unwrap_or_else(|| "member".to_string());
-        let seat_type = request.seat_type.unwrap_or_else(|| "developer".to_string());
-        if !ROLES.contains(&role.as_str()) || !SEAT_TYPES.contains(&seat_type.as_str()) {
-            return Err(anyhow!("invalid organization role or seat_type"));
-        }
+        let (role, seat_type) =
+            member_role_and_seat(request.role.as_deref(), request.seat_type.as_deref())?;
         let postgres = self.required()?;
         let mut db = postgres.transaction_client().await?;
         let tx = db.transaction().await?;
@@ -317,6 +322,7 @@ impl OrganizationsService {
             OrganizationAction::ManageMembers,
         )
         .await?;
+        require_editable_member(&tx, organization_id, request.user_id).await?;
         if tx
             .query_opt(
                 "SELECT 1 FROM users WHERE id=$1 AND is_active AND deleted_at IS NULL FOR SHARE",
@@ -372,6 +378,65 @@ impl OrganizationsService {
         Ok(member)
     }
 
+    /// Only the current Owner can hand authority to an existing active member.
+    pub async fn transfer_ownership(&self, actor: Uuid, org: Uuid, successor: Uuid) -> Result<()> {
+        let mut db = self.required()?.transaction_client().await?;
+        let tx = db.transaction().await?;
+        crate::repository::team_seats::lock(&tx, org).await?;
+        AuthorizationService::require_locked_action(
+            &tx,
+            actor,
+            org,
+            OrganizationAction::ManageSecurity,
+        )
+        .await?;
+        if actor == successor {
+            return Err(
+                OrganizationRequestError::Invalid("choose a different active member").into(),
+            );
+        }
+        let personal: bool = tx
+            .query_one(
+                "SELECT personal_owner_id IS NOT NULL FROM organizations WHERE id=$1",
+                &[&org],
+            )
+            .await?
+            .get(0);
+        if personal {
+            return Err(OrganizationRequestError::Conflict(
+                "personal workspace ownership is fixed",
+            )
+            .into());
+        }
+        let target = tx
+            .query_opt(
+                "SELECT m.seat_type FROM organization_members m JOIN users u ON u.id=m.user_id
+             WHERE m.organization_id=$1 AND m.user_id=$2 AND m.deactivated_at IS NULL
+               AND u.is_active AND u.deleted_at IS NULL FOR UPDATE OF m FOR SHARE OF u",
+                &[&org, &successor],
+            )
+            .await?
+            .ok_or(OrganizationRequestError::Invalid(
+                "successor must be an active organization member",
+            ))?;
+        let seat: String = target.get(0);
+        crate::repository::team_seats::admit(&tx, org, successor, "owner", &seat).await?;
+        tx.execute(
+            "UPDATE organization_members SET role='owner' WHERE organization_id=$1 AND user_id=$2",
+            &[&org, &successor],
+        )
+        .await?;
+        tx.execute(
+            "UPDATE organization_members SET role='admin' WHERE organization_id=$1 AND user_id=$2",
+            &[&org, &actor],
+        )
+        .await?;
+        tx.execute("INSERT INTO audit_logs(id,organization_id,actor_user_id,action,resource_type,resource_id)
+                    VALUES($1,$2,$3,'organization.ownership_transferred','user',$4)", &[&Uuid::now_v7(), &org, &actor, &successor]).await?;
+        tx.commit().await?;
+        self.mirror_team_privacy().await
+    }
+
     pub async fn remove_member(
         &self,
         actor: Uuid,
@@ -397,6 +462,7 @@ impl OrganizationsService {
             OrganizationAction::ManageMembers,
         )
         .await?;
+        require_editable_member(&tx, organization_id, member_user_id).await?;
         let changed = tx
             .execute(
                 "UPDATE organization_members SET deactivated_at = now()
@@ -685,17 +751,12 @@ impl OrganizationsService {
         let org: Uuid = tx.query_opt("SELECT organization_id FROM organization_user_invites WHERE id=$1 AND invitee_user_id=$2", &[&invite_id,&user_id]).await?.ok_or(OrganizationRequestError::NotFound("invite not found or expired"))?.get(0);
         crate::repository::team_seats::lock(&tx, org).await?;
         let invite = tx.query_opt("SELECT i.role,i.seat_type FROM organization_user_invites i JOIN organizations o ON o.id=i.organization_id JOIN users u ON u.id=i.invitee_user_id WHERE i.id=$1 AND i.invitee_user_id=$2 AND i.organization_id=$3 AND i.status='pending' AND i.expires_at>clock_timestamp() AND o.deleted_at IS NULL AND u.is_active AND u.deleted_at IS NULL FOR UPDATE OF i FOR SHARE OF o,u", &[&invite_id,&user_id,&org]).await?.ok_or(OrganizationRequestError::NotFound("invite not found or expired"))?;
-        let old_owner = tx.query_opt("SELECT 1 FROM organization_members WHERE organization_id=$1 AND user_id=$2 AND role='owner'", &[&org,&user_id]).await?.is_some();
+        let old_owner = tx.query_opt("SELECT 1 FROM organization_members WHERE organization_id=$1 AND user_id=$2 AND role='owner' AND deactivated_at IS NULL", &[&org,&user_id]).await?.is_some();
         let role: String = invite.get(0);
         let seat: String = invite.get(1);
-        crate::repository::team_seats::admit(
-            &tx,
-            org,
-            user_id,
-            if old_owner { "owner" } else { &role },
-            &seat,
-        )
-        .await?;
+        if !old_owner {
+            crate::repository::team_seats::admit(&tx, org, user_id, &role, &seat).await?;
+        }
         let Some(row) = tx
             .query_opt(
                 "WITH invite AS (
@@ -709,9 +770,10 @@ impl OrganizationsService {
                         (organization_id, user_id, role, seat_type, deactivated_at)
                      SELECT organization_id, $2, role, seat_type, NULL FROM invite
                      ON CONFLICT (organization_id, user_id) DO UPDATE SET
-                        role = CASE WHEN organization_members.role = 'owner'
+                        role = CASE WHEN organization_members.role = 'owner' AND organization_members.deactivated_at IS NULL
                                     THEN organization_members.role ELSE EXCLUDED.role END,
-                        seat_type = EXCLUDED.seat_type,
+                        seat_type = CASE WHEN organization_members.role = 'owner' AND organization_members.deactivated_at IS NULL
+                                         THEN organization_members.seat_type ELSE EXCLUDED.seat_type END,
                         deactivated_at = NULL
                      RETURNING organization_id, role, seat_type
                  )
@@ -1170,6 +1232,74 @@ impl OrganizationsService {
     }
 }
 
+/// Caller holds the organization seat lock. Generic membership operations
+/// cannot change an Owner, even when several Owners exist.
+pub(super) async fn require_editable_member(
+    tx: &tokio_postgres::Transaction<'_>,
+    org: Uuid,
+    user: Uuid,
+) -> Result<()> {
+    let owner = tx
+        .query_opt(
+            "SELECT 1 FROM organization_members
+         WHERE organization_id=$1 AND user_id=$2 AND role='owner' FOR SHARE",
+            &[&org, &user],
+        )
+        .await?;
+    if owner.is_some() {
+        return Err(OrganizationRequestError::Conflict(
+            "transfer ownership before changing or removing an owner",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// The caller holds the account row FOR UPDATE, so a new ownership transfer
+/// cannot install this account while its closure is in progress.
+pub(super) async fn prepare_owned_workspaces_for_deletion(
+    tx: &tokio_postgres::Transaction<'_>,
+    user: Uuid,
+) -> Result<()> {
+    let rows = tx.query("SELECT m.organization_id FROM organization_members m JOIN organizations o ON o.id=m.organization_id
+        WHERE m.user_id=$1 AND m.role='owner' AND m.deactivated_at IS NULL AND o.deleted_at IS NULL ORDER BY m.organization_id", &[&user]).await?;
+    for row in rows {
+        let org: Uuid = row.get(0);
+        // Membership writers acquire the organization lock before the user row.
+        // A busy writer must be retried instead of waiting in the reverse order.
+        if !crate::repository::team_seats::try_lock(tx, org).await? {
+            return Err(OrganizationRequestError::Conflict(
+                "organization membership is changing; retry account deletion",
+            )
+            .into());
+        }
+        let other = tx.query_one("SELECT
+            EXISTS(SELECT 1 FROM organization_members m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND m.user_id<>$2 AND m.role='owner' AND m.deactivated_at IS NULL AND u.is_active AND u.deleted_at IS NULL),
+            EXISTS(SELECT 1 FROM organization_members WHERE organization_id=$1 AND user_id<>$2 AND deactivated_at IS NULL)",
+            &[&org,&user]).await?;
+        if other.get::<_, bool>(0) {
+            continue;
+        }
+        if !other.get::<_, bool>(1) {
+            let closed = tx
+                .execute(
+                    "UPDATE organizations SET deleted_at=now(), updated_at=now()
+                 WHERE id=$1 AND personal_owner_id=$2 AND deleted_at IS NULL",
+                    &[&org, &user],
+                )
+                .await?;
+            if closed == 1 {
+                continue;
+            }
+        }
+        return Err(OrganizationRequestError::Conflict(
+            "transfer organization ownership before deleting this account",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn normalize_slug(value: &str) -> Result<String> {
     let slug = value
         .trim()
@@ -1294,3 +1424,7 @@ mod tests {
         assert!(normalize_slug("!!!").is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "team_owner_security_tests.rs"]
+mod owner_security_tests;

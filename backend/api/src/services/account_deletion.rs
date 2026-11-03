@@ -228,6 +228,7 @@ impl AccountDeletionService {
         if !is_active || deleted_at.is_some() {
             anyhow::bail!("account is already unavailable for deletion");
         }
+        super::organizations::prepare_owned_workspaces_for_deletion(&tx, account_id).await?;
         let team_proof_required = team_action_deletion_required(&tx, account_id).await?;
 
         tx.execute(

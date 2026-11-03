@@ -609,6 +609,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             get(organization_get).patch(organization_update),
         )
         .route(
+            "/organizations/:organization_id/ownership/:successor",
+            post(organization_transfer_ownership),
+        )
+        .route(
             "/organizations/:organization_id/members",
             get(organization_members).post(organization_add_member),
         )
@@ -980,6 +984,12 @@ pub async fn account_delete(
         .request(user_id)
         .await
         .map_err(|error| {
+            if let Some(crate::services::organizations::OrganizationRequestError::Conflict(
+                message,
+            )) = error.downcast_ref()
+            {
+                return ApiError::conflict(*message);
+            }
             let message = error.to_string();
             if message.contains("not enabled") || message.contains("requires") {
                 ApiError::service_unavailable("account deletion is unavailable")
@@ -2685,17 +2695,24 @@ pub async fn organization_add_member(
         .organizations_service
         .add_member(user_id, organization_id, input)
         .await
-        .map_err(|error| {
-            if error.to_string().contains("invalid")
-                || error.to_string().contains("not found")
-                || error.to_string().contains("permission")
-            {
-                ApiError::bad_request(error.to_string())
-            } else {
-                ApiError::service_unavailable(error)
-            }
-        })?;
+        .map_err(organization_error)?;
     Ok((StatusCode::CREATED, Json(envelope(member, "UTC", None))))
+}
+
+async fn organization_transfer_ownership(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((org, successor)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    let actor = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    state
+        .organizations_service
+        .transfer_ownership(actor, org, successor)
+        .await
+        .map_err(organization_error)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn organization_remove_member(
@@ -2710,7 +2727,7 @@ pub async fn organization_remove_member(
         .organizations_service
         .remove_member(user_id, organization_id, member_user_id)
         .await
-        .map_err(ApiError::service_unavailable)?
+        .map_err(organization_error)?
     {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -2769,6 +2786,7 @@ fn organization_error(error: anyhow::Error) -> ApiError {
     match error.downcast_ref::<OrganizationRequestError>() {
         Some(OrganizationRequestError::NotFound(message)) => ApiError::not_found(*message),
         Some(OrganizationRequestError::Invalid(message)) => ApiError::bad_request(*message),
+        Some(OrganizationRequestError::Conflict(message)) => ApiError::conflict(*message),
         None => ApiError::service_unavailable(error),
     }
 }

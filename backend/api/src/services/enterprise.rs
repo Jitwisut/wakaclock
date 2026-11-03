@@ -282,7 +282,7 @@ impl EnterpriseService {
             .client()
             .query(
                 "SELECT u.id, u.username, u.display_name,
-                        COALESCE(e.email, u.email) AS email, u.is_active, u.created_at, u.updated_at
+                        COALESCE(e.email, u.email) AS email, (u.is_active AND u.deleted_at IS NULL AND m.deactivated_at IS NULL) AS is_active, u.created_at, u.updated_at
                  FROM organization_members m JOIN users u ON u.id = m.user_id
                  LEFT JOIN user_emails e ON e.user_id = u.id AND e.is_primary
                  WHERE m.organization_id = $1
@@ -309,7 +309,7 @@ impl EnterpriseService {
             .client()
             .query_opt(
                 "SELECT u.id, u.username, u.display_name,
-                        COALESCE(e.email, u.email) AS email, u.is_active, u.created_at, u.updated_at
+                        COALESCE(e.email, u.email) AS email, (u.is_active AND u.deleted_at IS NULL AND m.deactivated_at IS NULL) AS is_active, u.created_at, u.updated_at
                  FROM organization_members m JOIN users u ON u.id = m.user_id
                  LEFT JOIN user_emails e ON e.user_id = u.id AND e.is_primary
                  WHERE m.organization_id = $1 AND u.id = $2",
@@ -320,10 +320,9 @@ impl EnterpriseService {
         row.map(scim_user_from_row).transpose()
     }
 
-    pub async fn scim_upsert_user(
+    pub async fn scim_create_user(
         &self,
         organization_id: Uuid,
-        user_id: Option<Uuid>,
         input: ScimUserInput,
     ) -> Result<ScimUserRecord> {
         super::require_runtime_feature(super::RuntimeFeature::Scim)?;
@@ -347,31 +346,21 @@ impl EnterpriseService {
             return Err(anyhow!("SCIM email is too long"));
         }
         let postgres = self.required()?;
-        let id = user_id.unwrap_or_else(Uuid::now_v7);
+        let id = Uuid::now_v7();
+        let active = input.active.unwrap_or(true);
         let mut db = postgres.transaction_client().await?;
         let tx = db.transaction().await?;
         crate::repository::team_seats::lock(&tx, organization_id).await?;
-        let existing = tx.query_opt("SELECT role,seat_type FROM organization_members WHERE organization_id=$1 AND user_id=$2", &[&organization_id,&id]).await?;
-        let (role, seat) = existing
-            .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1)))
-            .unwrap_or(("member".into(), "developer".into()));
-        crate::repository::team_seats::admit(&tx, organization_id, id, &role, &seat).await?;
+        if active {
+            crate::repository::team_seats::admit(&tx, organization_id, id, "member", "developer")
+                .await?;
+        }
         let row = tx
             .query_one(
                 "INSERT INTO users (id, username, email, display_name, is_active)
                  VALUES ($1, $2, $3, $4, $5)
-                 ON CONFLICT (id) DO UPDATE SET
-                    username = EXCLUDED.username, email = EXCLUDED.email,
-                    display_name = EXCLUDED.display_name, is_active = EXCLUDED.is_active,
-                    updated_at = now()
                  RETURNING id, username, display_name, email, is_active, created_at, updated_at",
-                &[
-                    &id,
-                    &username,
-                    &email,
-                    &input.display_name,
-                    &input.active.unwrap_or(true),
-                ],
+                &[&id, &username, &email, &input.display_name, &active],
             )
             .await
             .context("failed to provision SCIM user")?;
@@ -387,10 +376,9 @@ impl EnterpriseService {
                 .context("failed to provision SCIM email")?;
         }
         tx.execute(
-            "INSERT INTO organization_members (organization_id, user_id, role, seat_type)
-                 VALUES ($1, $2, 'member', 'developer')
-                 ON CONFLICT (organization_id, user_id) DO UPDATE SET deactivated_at = NULL",
-            &[&organization_id, &id],
+            "INSERT INTO organization_members (organization_id, user_id, role, seat_type, deactivated_at)
+                 VALUES ($1, $2, 'member', 'developer', CASE WHEN $3 THEN NULL ELSE now() END)",
+            &[&organization_id, &id, &active],
         )
         .await
         .context("failed to attach SCIM user to organization")?;
@@ -405,9 +393,6 @@ impl EnterpriseService {
         input: crate::model::enterprise::ScimPatchRequest,
     ) -> Result<Option<ScimUserRecord>> {
         super::require_runtime_feature(super::RuntimeFeature::Scim)?;
-        if self.scim_user(organization_id, user_id).await?.is_none() {
-            return Ok(None);
-        }
         let email = input
             .emails
             .as_ref()
@@ -419,27 +404,42 @@ impl EnterpriseService {
             })
             .map(|email| email.value.trim().to_string());
         let postgres = self.required()?;
-        let row = postgres
-            .client()
-            .query_one(
-                "UPDATE users SET
-                    display_name = COALESCE($3, display_name),
-                    email = COALESCE($4, email),
-                    is_active = COALESCE($5, is_active), updated_at = now()
-                 WHERE id = $1 AND EXISTS (
-                    SELECT 1 FROM organization_members WHERE organization_id = $2 AND user_id = $1
-                 )
-                 RETURNING id, username, display_name, email, is_active, created_at, updated_at",
-                &[
-                    &user_id,
-                    &organization_id,
-                    &input.display_name,
-                    &email,
-                    &input.active,
-                ],
-            )
-            .await
-            .context("failed to patch SCIM user")?;
+        let mut db = postgres.transaction_client().await?;
+        let tx = db.transaction().await?;
+        crate::repository::team_seats::lock(&tx, organization_id).await?;
+        let Some(member) = tx.query_opt(
+            "SELECT m.role, m.seat_type FROM organization_members m JOIN users u ON u.id=m.user_id
+             WHERE m.organization_id=$1 AND m.user_id=$2 AND u.deleted_at IS NULL FOR UPDATE OF m,u",
+            &[&organization_id, &user_id],
+        ).await? else { return Ok(None); };
+        if let Some(active) = input.active {
+            if active {
+                crate::repository::team_seats::admit(
+                    &tx,
+                    organization_id,
+                    user_id,
+                    member.get(0),
+                    member.get(1),
+                )
+                .await?;
+            } else {
+                super::organizations::require_editable_member(&tx, organization_id, user_id)
+                    .await?;
+            }
+            tx.execute("UPDATE organization_members SET deactivated_at=CASE WHEN $3 THEN NULL ELSE COALESCE(deactivated_at, now()) END WHERE organization_id=$1 AND user_id=$2",
+                &[&organization_id, &user_id, &active]).await?;
+        }
+        // SCIM active is tenant-scoped. Only a sole-tenant identity can have its
+        // global inactive flag restored (including accounts provisioned before this fix).
+        let row = tx.query_one(
+            "UPDATE users u SET display_name=COALESCE($3,display_name), email=COALESCE($4,email),
+             is_active=u.is_active OR ($5 IS TRUE AND NOT EXISTS (
+                 SELECT 1 FROM organization_members WHERE user_id=$1 AND organization_id<>$2)),
+             updated_at=now() FROM organization_members m WHERE u.id=$1 AND m.user_id=u.id AND m.organization_id=$2
+             RETURNING u.id,u.username,u.display_name,u.email,(u.is_active AND m.deactivated_at IS NULL) AS is_active,u.created_at,u.updated_at",
+            &[&user_id,&organization_id,&input.display_name,&email,&input.active],
+        ).await?;
+        tx.commit().await?;
         scim_user_from_row(row).map(Some)
     }
 
@@ -450,8 +450,11 @@ impl EnterpriseService {
     ) -> Result<bool> {
         super::require_runtime_feature(super::RuntimeFeature::Scim)?;
         let postgres = self.required()?;
-        let changed = postgres
-            .client()
+        let mut db = postgres.transaction_client().await?;
+        let tx = db.transaction().await?;
+        crate::repository::team_seats::lock(&tx, organization_id).await?;
+        super::organizations::require_editable_member(&tx, organization_id, user_id).await?;
+        let changed = tx
             .execute(
                 "UPDATE organization_members SET deactivated_at = now()
                  WHERE organization_id = $1 AND user_id = $2 AND deactivated_at IS NULL",
@@ -459,6 +462,7 @@ impl EnterpriseService {
             )
             .await
             .context("failed to deprovision SCIM user")?;
+        tx.commit().await?;
         Ok(changed == 1)
     }
 

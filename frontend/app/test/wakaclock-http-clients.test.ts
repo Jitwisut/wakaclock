@@ -41,6 +41,7 @@ it.each([wakaclockClient, wakaclockV2Client])(
   'surfaces HTTP errors and ends rejected sessions',
   async (client) => {
     const logout = vi.fn();
+    setCurrentToken('active-session');
     setUnauthorizedHandler(logout);
     server.use(
       http.get('http://client.test/api/:version/me', () =>
@@ -97,5 +98,42 @@ it.each([wakaclockClient, wakaclockV2Client])(
       status: 503,
       message: 'Request failed with status code 503',
     });
+  }
+);
+
+it.each([wakaclockClient, wakaclockV2Client])(
+  'isolates concurrent responses across refresh, logout and A-B-A switches',
+  async (client) => {
+    const logout = vi.fn();
+    setUnauthorizedHandler(logout);
+    for (const transitions of [['B'], ['A-refreshed'], ['B', 'A'], [null, 'A']]) {
+      setCurrentToken('A');
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const adapter = async (config: import('axios').InternalAxiosRequestConfig) => {
+        expect(config.headers.Authorization).toBe('Bearer A');
+        await pending;
+        const response = { config, status: 200, statusText: 'OK', headers: {}, data: 'private' };
+        if (config.url === '/late-401') {
+          throw new AxiosError('expired', 'ERR_BAD_REQUEST', config, undefined, {
+            ...response,
+            status: 401,
+          });
+        }
+        return response;
+      };
+      const rejected = expect(client.get('/late-401', { adapter })).rejects.toMatchObject({
+        status: 401,
+      });
+      const stale = expect(client.get('/late-success', { adapter })).rejects.toMatchObject({
+        code: 'ERR_CANCELED',
+      });
+      for (const token of transitions) setCurrentToken(token);
+      release();
+      await Promise.all([rejected, stale]);
+      expect(logout).not.toHaveBeenCalled();
+    }
   }
 );

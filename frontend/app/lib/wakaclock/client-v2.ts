@@ -3,7 +3,7 @@ import axios from 'axios';
 import { env } from '@/lib/env';
 
 import { WakaclockError } from './client';
-import { getCurrentToken, notifyUnauthorized } from './session';
+import { acceptSessionResponse, bindRequestSession, rejectRequestSession } from './session-request';
 
 import type { ApiErrorBody, V2Envelope } from './types';
 import type { AxiosError, AxiosResponse } from 'axios';
@@ -19,16 +19,10 @@ export const wakaclockV2Client = axios.create({
   timeout: 15_000,
 });
 
-wakaclockV2Client.interceptors.request.use((config) => {
-  const token = getCurrentToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+wakaclockV2Client.interceptors.request.use(bindRequestSession, undefined, { synchronous: true });
 
 wakaclockV2Client.interceptors.response.use(
-  (response) => response,
+  acceptSessionResponse,
   (error: AxiosError<ApiErrorBody>) => {
     const status = error.response?.status ?? null;
     const payload = error.response?.data?.error;
@@ -39,7 +33,7 @@ wakaclockV2Client.interceptors.response.use(
         : error.message);
 
     if (status === 401) {
-      notifyUnauthorized();
+      rejectRequestSession(error.config);
     }
 
     return Promise.reject(new WakaclockError(message, status));

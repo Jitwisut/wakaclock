@@ -1176,15 +1176,6 @@ impl TeamInsightsService {
             let repo = self.repo()?;
             self.validate_own_response(actor, org, repo.generation(org).await?)
                 .await?;
-            let work_team = repo
-                .work_item_team(org, repository, item)
-                .await?
-                .ok_or(TeamError::NotFound)?;
-            if let Some(t) = work_team {
-                self.authorization
-                    .require_team_read(actor, org, Some(t))
-                    .await?;
-            }
             repo
         } else {
             self.readable(actor, org, team).await?
@@ -1192,6 +1183,20 @@ impl TeamInsightsService {
         let financial_fence =
             crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
         let mut scope = repo.scope(org, team).await?;
+        // Resolve the actual work item after capturing the generation. A scope
+        // change after this lookup is rejected by the final generation check.
+        let work_team = repo
+            .work_item_team(org, repository, item)
+            .await?
+            .ok_or(TeamError::NotFound)?;
+        if team.is_some() && team != work_team {
+            return Err(TeamError::NotFound.into());
+        }
+        if owner_only && work_team.is_some() {
+            self.authorization
+                .require_team_read(actor, org, work_team)
+                .await?;
+        }
         if owner_only {
             scope.contributors.retain(|c| c.user_id == actor);
         }
@@ -1360,7 +1365,14 @@ impl TeamInsightsService {
         self.authorization
             .require(actor, org, OrganizationAction::ReadSelf, None)
             .await?;
-        self.repo()?.links(org, actor).await
+        let repo = self.repo()?;
+        let generation = repo.generation(org).await?;
+        self.validate_own_response(actor, org, generation).await?;
+        let financial = crate::repository::team_financial_guard::fence(&repo.postgres, org).await?;
+        let links = repo.links(org, actor).await?;
+        self.validate_financial_response(org, &financial).await?;
+        self.validate_own_response(actor, org, generation).await?;
+        Ok(links)
     }
 
     pub async fn propose(&self, actor: Uuid, org: Uuid, request: LinkRequest) -> Result<WorkLink> {

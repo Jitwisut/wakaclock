@@ -224,6 +224,18 @@ async fn consent_lifecycle_and_webhook_durability() {
         .await
         .unwrap()
         .is_some());
+    // Organization-wide individual opt-in does not put a contributor on this team.
+    assert!(links
+        .receipt_links(org, repo_id, 1, Some(team))
+        .await
+        .unwrap()
+        .is_empty());
+    pg.execute(
+        "INSERT INTO team_members(team_id,user_id,role) VALUES($1,$2,'member')",
+        &[&team, &user],
+    )
+    .await
+    .unwrap();
     assert_eq!(
         links
             .receipt_links(org, repo_id, 1, Some(team))
@@ -326,6 +338,41 @@ async fn consent_lifecycle_and_webhook_durability() {
             .allocation_targets,
         1
     );
+    pg.execute(
+        "DELETE FROM team_members WHERE team_id=$1 AND user_id=$2",
+        &[&team, &user],
+    )
+    .await
+    .unwrap();
+    assert!(links
+        .receipt_links(org, repo_id, 1, Some(team))
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        links
+            .receipt_links(org, repo_id, 1, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    pg.execute(
+        "INSERT INTO team_members(team_id,user_id,role) VALUES($1,$2,'member')",
+        &[&team, &user],
+    )
+    .await
+    .unwrap();
+    pg.execute(
+        "DELETE FROM team_members WHERE team_id=$1 AND user_id=$2",
+        &[&team, &member],
+    )
+    .await
+    .unwrap();
+    assert!(authorization
+        .require_team_read(member, org, Some(team))
+        .await
+        .is_err());
     pg.execute(
         "UPDATE organization_analytics_consents SET share_aggregate=false,share_individual=false
         WHERE organization_id=$1 AND user_id=$2",

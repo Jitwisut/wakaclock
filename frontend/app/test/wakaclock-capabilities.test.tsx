@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { AxiosError } from 'axios';
 
 import { RequiresPostgres } from '@/components/wakaclock/requires-postgres';
 import { unwrapV2, wakaclockV2Client } from '@/lib/wakaclock/client-v2';
@@ -102,17 +103,24 @@ describe('wakaclockV2Client', () => {
     const onUnauthorized = vi.fn();
     setUnauthorizedHandler(onUnauthorized);
 
-    // @ts-expect-error — as above.
-    const rejected = wakaclockV2Client.interceptors.response.handlers[0].rejected({
-      config: { url: '/me/goals' },
-      response: { data: { error: 'authentication required' }, status: 401 },
+    setCurrentToken('current-session');
+    const rejected = wakaclockV2Client.get('/me/goals', {
+      adapter: async (config) => {
+        throw new AxiosError('unauthorized', 'ERR_BAD_REQUEST', config, undefined, {
+          config,
+          data: { error: 'authentication required' },
+          status: 401,
+          statusText: 'Unauthorized',
+          headers: {},
+        });
+      },
     });
-
     await expect(rejected).rejects.toMatchObject({
       message: 'authentication required',
       status: 401,
     });
     expect(onUnauthorized).toHaveBeenCalledOnce();
     setUnauthorizedHandler(null);
+    setCurrentToken(null);
   });
 });
