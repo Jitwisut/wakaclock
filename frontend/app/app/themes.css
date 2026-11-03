@@ -374,6 +374,12 @@ body {
     pointer-events: none;
   }
 
+  /* Attention pulses (sync status) draw the eye a few times, then rest; the dot's colour
+     keeps signalling the state, and an idle page does no animation work. */
+  & [data-sync-tone] .animate-ping {
+    animation-iteration-count: 4;
+  }
+
   & [data-slot='site-header'] {
     background: var(--material-bar);
     -webkit-backdrop-filter: var(--material-blur);

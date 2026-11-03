@@ -80,6 +80,30 @@ a small interface, imported only after `chooseTimeQuality` allows 3D; otherwise 
 table stands alone.
 Only a project filter can apply to them; any other filter hides them with a note.
 
+### Motion Native — default theme preset
+
+`[data-theme-preset='motion-native']` in `app/themes.css` is the dashboard default
+(`lib/themes.ts` `DEFAULT_THEME`); the other presets, Retro Pixel 3D included, stay
+selectable in the theme customizer. Owner decision 2026-11-03.
+
+- All visual values are tokens in that block (colour, type, radius, `--elevation-*`,
+  `--material-*`, `--motion-*` durations, `--ease-*` curves, layers) with light and dark
+  values. Components read tokens; the skin below the tokens restyles shadcn primitives by
+  `data-slot`, as the Retro preset does.
+- Page-level art in CSS modules (overview, settings, timeline, heatmap, time-machine
+  city, insights) has `:global([data-theme-preset='motion-native'])` overrides at the end
+  of each file. New page art should read the preset tokens rather than fixed colours.
+- Motion rules: transform/opacity only; material blur only on small floating surfaces;
+  no infinite animation on an idle page (attention pulses run a few iterations). Measured
+  on a production build: zero infinite animations after 6 s idle on the audited routes.
+- Appearance is Light / Dark / System (`components/layout/header/theme-switch.tsx`);
+  the dashboard and account layouts default to System.
+- `app/dashboard/(auth)/template.tsx` gives every dashboard route a short entrance; the
+  toolbar shows a breadcrumb (`toolbar-breadcrumb.tsx`); the sidebar's current-page
+  highlight glides between items (`nav-main.tsx`, visible only when a preset opts in).
+- Marketing pages (`app/(marketing)`, `marketing.css`) are a separate art-directed
+  system and do not use presets; they were not redesigned in this pass.
+
 ### Settings shell and 3D tilt — Teams page
 
 `components/wakaclock/settings-shell.tsx` is a settings-style split view (section list

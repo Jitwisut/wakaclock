@@ -185,7 +185,7 @@ function SignalPanel({ mode }: { mode: AuthMode }) {
   return (
     <aside
       aria-labelledby="auth-panel-heading"
-      className="bg-primary text-primary-foreground relative isolate hidden flex-col justify-between overflow-hidden px-12 py-14 lg:flex"
+      className="auth-brand-panel bg-primary text-primary-foreground relative isolate hidden flex-col justify-between overflow-hidden px-12 py-14 lg:flex"
     >
       <div className="auth-grid pointer-events-none absolute inset-0 -z-10" />
 

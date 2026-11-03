@@ -402,3 +402,6 @@
   border-radius: calc(var(--radius) * 1.2);
   box-shadow: var(--elevation-raised);
 }
+:global([data-theme-preset='motion-native']) .screen svg {
+  animation-iteration-count: 2;
+}
