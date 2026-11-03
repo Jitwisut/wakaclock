@@ -55,7 +55,7 @@ export default async function DashboardLayout({
 
   return (
     <RootDocument lang="en">
-      <ThemeProvider attribute="class" defaultTheme="light" disableTransitionOnChange enableSystem>
+      <ThemeProvider attribute="class" defaultTheme="system" disableTransitionOnChange enableSystem>
         {/*
         `fontVariables` has to sit on the same element as the theme attributes. A preset
         declares `--text-family: var(--font-space-mono), …`, and a var() whose variable is

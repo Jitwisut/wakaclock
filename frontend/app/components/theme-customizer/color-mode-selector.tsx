@@ -15,6 +15,8 @@ export type ColorModeSelectorLabels = {
   label?: string;
   /** Label for light mode option */
   light?: string;
+  /** Label for the follow-the-system option */
+  system?: string;
 };
 
 /**
@@ -57,6 +59,7 @@ const ColorModeSelector = React.forwardRef<HTMLDivElement, ColorModeSelectorProp
     const label = labels?.label ?? 'Color mode:';
     const light = labels?.light ?? 'Light';
     const dark = labels?.dark ?? 'Dark';
+    const system = labels?.system ?? 'System';
 
     return (
       <div
@@ -96,6 +99,14 @@ const ColorModeSelector = React.forwardRef<HTMLDivElement, ColorModeSelectorProp
             variant="outline"
           >
             {dark}
+          </ToggleGroupItem>
+          <ToggleGroupItem
+            className="data-[variant=outline]:border-l-1"
+            data-testid="color-mode-selector-system"
+            value="system"
+            variant="outline"
+          >
+            {system}
           </ToggleGroupItem>
         </ToggleGroup>
       </div>

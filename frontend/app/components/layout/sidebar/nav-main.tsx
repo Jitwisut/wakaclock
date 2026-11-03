@@ -3,6 +3,7 @@
 import * as React from 'react';
 
 import { ChevronRight } from 'lucide-react';
+import { motion } from 'motion/react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 
@@ -114,6 +115,22 @@ export function preserveAnalyticsQuery(pathname: string, queryString: string, hr
  * <NavMain items={navItems} labels={{ newBadge: 'NEW' }} />
  * ```
  */
+/**
+ * The current-page highlight. One shared `layoutId` lets it glide from the previous item
+ * to the new one on navigation; only themes that opt in (Motion Native) make it visible,
+ * the others keep their own active treatment.
+ */
+function NavActiveIndicator() {
+  return (
+    <motion.span
+      aria-hidden
+      className="nav-active-indicator"
+      layoutId="sidebar-active-indicator"
+      transition={{ type: 'spring', stiffness: 500, damping: 40, mass: 0.8 }}
+    />
+  );
+}
+
 const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
   { items = navItems, labels, testId = 'nav-main' },
   ref
@@ -190,7 +207,11 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
                         <CollapsibleContent>
                           <SidebarMenuSub>
                             {item?.items?.map((subItem) => (
-                              <SidebarMenuSubItem key={subItem.href}>
+                              <SidebarMenuSubItem className="relative" key={subItem.href}>
+                                {(pathname === subItem.href ||
+                                  pathname.startsWith(`${subItem.href}/`)) && (
+                                  <NavActiveIndicator />
+                                )}
                                 <SidebarMenuSubButton
                                   aria-current={
                                     pathname === subItem.href ||
@@ -223,21 +244,24 @@ const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
                       </Collapsible>
                     </>
                   ) : (
-                    <SidebarMenuButton
-                      aria-current={pathname === item.href ? 'page' : undefined}
-                      asChild
-                      className="hover:text-foreground active:text-foreground hover:bg-[var(--primary)]/10 active:bg-[var(--primary)]/10"
-                      isActive={pathname === item.href}
-                      tooltip={item.title}
-                    >
-                      <Link href={item.href} target={item.newTab ? '_blank' : ''}>
-                        {item.icon && <item.icon />}
-                        <span>
-                          {item.title}
-                          <LinkPending label={labels?.loading ?? 'Loading page'} />
-                        </span>
-                      </Link>
-                    </SidebarMenuButton>
+                    <>
+                      {pathname === item.href && <NavActiveIndicator />}
+                      <SidebarMenuButton
+                        aria-current={pathname === item.href ? 'page' : undefined}
+                        asChild
+                        className="hover:text-foreground active:text-foreground hover:bg-[var(--primary)]/10 active:bg-[var(--primary)]/10"
+                        isActive={pathname === item.href}
+                        tooltip={item.title}
+                      >
+                        <Link href={item.href} target={item.newTab ? '_blank' : ''}>
+                          {item.icon && <item.icon />}
+                          <span>
+                            {item.title}
+                            <LinkPending label={labels?.loading ?? 'Loading page'} />
+                          </span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </>
                   )}
                   {!!item.isComing && (
                     <SidebarMenuBadge
