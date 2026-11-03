@@ -84,6 +84,40 @@ pub fn invoice(
     livemode: bool,
     at: DateTime<Utc>,
 ) -> Result<Invoice> {
+    invoice_for_reference(
+        v,
+        snapshot.latest_invoice_id.as_deref(),
+        &snapshot.customer_id,
+        &snapshot.subscription_id,
+        livemode,
+        at,
+    )
+}
+/// A historical invoice must be pinned by the retained result of the original
+/// operation, independently of the subscription's current latest invoice. This
+/// parser supplies metadata only, never proof of that operation or paid access.
+pub(crate) fn invoice_for_operation(
+    v: &Value,
+    invoice_id: &str,
+    customer: &str,
+    subscription: &str,
+    livemode: bool,
+    at: DateTime<Utc>,
+) -> Result<Invoice> {
+    ensure!(
+        id(invoice_id, "in_") && id(customer, "cus_") && id(subscription, "sub_"),
+        "invoice operation reference invalid"
+    );
+    invoice_for_reference(v, Some(invoice_id), customer, subscription, livemode, at)
+}
+fn invoice_for_reference(
+    v: &Value,
+    expected_id: Option<&str>,
+    expected_customer: &str,
+    expected_subscription: &str,
+    livemode: bool,
+    at: DateTime<Utc>,
+) -> Result<Invoice> {
     ensure!(
         v["object"] == "invoice" && v["livemode"].as_bool() == Some(livemode),
         "invoice scope mismatch"
@@ -103,9 +137,9 @@ pub fn invoice(
         .or(legacy)
         .context("invoice subscription unavailable")?;
     ensure!(
-        snapshot.latest_invoice_id.as_deref() == Some(&invoice_id)
-            && customer == snapshot.customer_id
-            && sub == snapshot.subscription_id,
+        expected_id == Some(invoice_id.as_str())
+            && customer == expected_customer
+            && sub == expected_subscription,
         "invoice scope mismatch"
     );
     let status = v["status"].as_str().map(String::from);

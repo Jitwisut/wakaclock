@@ -52,7 +52,7 @@
 | `team_work_items` | cutoff ของ provider_updated_at; อ่านผ่าน scopes/consent projection |
 | `audit_logs` ขององค์กร | 12 เดือน; read cutoff บังคับทันที |
 | `team_consent_history` | ล้างรุ่นเก่าเกินอายุ; คงรุ่นปัจจุบันเป็นหลักฐานสิทธิ์ขั้นต่ำ |
-| `team_weekly_publications` | ตัวเลขไม่ได้เก็บ; เกินอายุล้าง contributors/fingerprint เหลือ week barrier |
+| `team_weekly_publications` | Copilot มี optional numeric projection/source revisions; cost เก็บ private equation fact/PR/contributor support (migration064) โดยไม่สำเนาต้นทุน เกินอายุล้าง projection/source revisions/contributors/fingerprint/equation support เหลือ week barrier |
 | GitHub `team_webhook_inbox` | เกินอายุ: pending/dead letter ต้องมี disposition ก่อนล้าง metadata; processed ใช้เหตุผล retention |
 | `team_webhook_dispositions` | เก็บ delivery ID/hash/reason ขั้นต่ำ ป้องกัน redelivery และ restore นำข้อมูลกลับ |
 | CH `member_daily`, `organization_daily` | allowlist เฉพาะ rollup องค์กร ล้าง batch 100 keys; cutoff และ consent; sum เก่าที่ไม่มี contributor ledger ล้างเมื่อ generation เปลี่ยน |

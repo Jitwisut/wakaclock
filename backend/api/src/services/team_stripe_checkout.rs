@@ -264,6 +264,48 @@ impl FrozenRequest {
         CheckoutPolicy::origin(&request.return_origin)?;
         Ok(request)
     }
+    /// Bind acceptance to the frozen provider contract and the exact quoted
+    /// terms. Recovery may change the current actor, never this original fact.
+    pub(crate) fn accepted(
+        &self,
+        scope: &super::team_financial_source::Scope,
+        actor: Uuid,
+        quote: Uuid,
+        expected: &ExpectedSession<'_>,
+        at: DateTime<Utc>,
+    ) -> Result<super::team_financial_source::AcceptedRequest> {
+        use super::{
+            team_financial_guard::fingerprint,
+            team_financial_source::{AcceptedRequest, OperationKind},
+        };
+        scope.key()?;
+        ensure!(
+            !actor.is_nil() && !quote.is_nil() && expected.live == scope.live,
+            "checkout acceptance scope invalid"
+        );
+        Self::restore(&serde_json::to_value(self)?, &self.digest()?, expected)?;
+        let idempotency_hash = fingerprint(&format!("atoaxis-checkout-v1-{}", self.operation))?;
+        Ok(AcceptedRequest {
+            operation: self.operation,
+            kind: OperationKind::CreateCheckout,
+            actor,
+            request_hash: fingerprint(&(
+                "stripe_checkout_request_v1",
+                scope,
+                actor,
+                quote,
+                1_i64,
+                "POST",
+                "/v1/checkout/sessions",
+                self.digest()?,
+                expected.currency,
+                expected.amount_minor,
+                &idempotency_hash,
+            ))?,
+            idempotency_hash,
+            accepted_at: at,
+        })
+    }
     pub fn form(&self) -> std::collections::BTreeMap<String, String> {
         let op = self.operation.to_string();
         [

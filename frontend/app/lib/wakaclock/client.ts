@@ -2,7 +2,7 @@ import axios from 'axios';
 
 import { env } from '@/lib/env';
 
-import { getCurrentToken, notifyUnauthorized } from './session';
+import { acceptSessionResponse, bindRequestSession, rejectRequestSession } from './session-request';
 
 import type { ApiErrorBody } from './types';
 import type { AxiosError } from 'axios';
@@ -31,16 +31,10 @@ export const wakaclockClient = axios.create({
 // A logged-in session's Bearer token always overrides whatever `?user_id=` an
 // individual endpoint call still passes — the backend's resolve_user_id() does the same
 // override on its side, so this keeps the two in agreement.
-wakaclockClient.interceptors.request.use((config) => {
-  const token = getCurrentToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+wakaclockClient.interceptors.request.use(bindRequestSession, undefined, { synchronous: true });
 
 wakaclockClient.interceptors.response.use(
-  (response) => response,
+  acceptSessionResponse,
   (error: AxiosError<ApiErrorBody>) => {
     const status = error.response?.status ?? null;
     const payload = error.response?.data?.error;
@@ -59,7 +53,7 @@ wakaclockClient.interceptors.response.use(
     // and there's no session to end.
     const isAuthEndpoint = error.config?.url?.startsWith('/auth/') ?? false;
     if (status === 401 && !isAuthEndpoint) {
-      notifyUnauthorized();
+      rejectRequestSession(error.config);
     }
 
     return Promise.reject(new WakaclockError(message, status));

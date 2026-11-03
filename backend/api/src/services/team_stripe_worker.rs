@@ -5,6 +5,8 @@ use crate::{
 };
 use anyhow::Result;
 use std::time::{Duration, Instant};
+#[path = "team_stripe_cancellation_worker.rs"]
+mod cancellation;
 
 pub struct StripeWorker {
     repository: TeamStripeRepository,
@@ -116,7 +118,6 @@ impl StripeWorker {
                 ..Tick::default()
             });
         };
-        self.repository.schedule_bound(account, live).await?;
         let start = Instant::now();
         let mut tick = Tick::default();
         let mut observed = false;
@@ -160,6 +161,9 @@ impl StripeWorker {
                 }
             }
         }
+        // Retained customer results can block account-wide canonical writes.
+        // Reconcile them before scheduling another organization's subscription.
+        self.repository.schedule_bound(account, live).await?;
         for _ in 0..100 {
             if start.elapsed() >= Duration::from_secs(10) {
                 break;

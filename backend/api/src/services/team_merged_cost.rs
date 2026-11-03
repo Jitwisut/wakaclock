@@ -55,6 +55,7 @@ pub fn calculate(
         }
     }
     let mut groups = BTreeMap::<(Uuid, i64), (u64, usize, usize, bool, BTreeSet<Uuid>)>::new();
+    let mut group_facts = BTreeMap::<(Uuid, i64), BTreeSet<(Uuid, String)>>::new();
     let mut people = BTreeSet::new();
     let mut admitted = BTreeSet::new();
     let mut prices = BTreeSet::new();
@@ -84,6 +85,10 @@ pub fn calculate(
             if !admitted.insert(key.clone()) {
                 continue;
             }
+            group_facts
+                .entry((l.repository, l.item))
+                .or_default()
+                .insert(key.clone());
             g.1 += 1;
             people.insert(f.user_id);
             g.4.insert(f.user_id);
@@ -143,43 +148,125 @@ pub fn calculate(
     let sum = groups
         .values()
         .try_fold(0u64, |n, g| n.checked_add(g.0).context("AI cost overflow"))?;
-    // Completeness of received facts cannot prove complete capture. Publishing an
-    // average (and its denominator) would claim a coverage guarantee we do not have.
-    // It also creates a second cost equation that can reveal a small remainder.
+    // Legacy fields retain their old unavailable meaning. The additive metrics
+    // describe complete pricing of received facts, never complete capture.
     let average = Metric::unavailable("capture_completeness_unconfirmed");
+    let complete = groups
+        .iter()
+        .filter(|(_, g)| g.3 && g.1 > 0 && g.1 == g.2)
+        .collect::<Vec<_>>();
+    let complete_count = u64::try_from(complete.len())?;
+    let complete_sum = complete.iter().try_fold(0_u64, |sum, (_, g)| {
+        sum.checked_add(g.0).context("AI cost overflow")
+    })?;
+    let average_admitted = complete
+        .iter()
+        .flat_map(|(key, _)| group_facts.get(*key).into_iter().flatten().cloned())
+        .collect();
+    let observed_metric = |value| Metric {
+        value: Some(value),
+        status: "partial",
+        reason: Some("fully_priced_received_usage_only_capture_unconfirmed"),
+        coverage: Some(1.0),
+        provenance: "fully_priced_confirmed_received_usage_until_merge",
+        updated_at: updated,
+        calculation_version: "fully_priced_observed_pr_average_v1",
+    };
+    let (observed_average, observed_count, observed_sum) =
+        match complete_sum.checked_div(complete_count) {
+            Some(average) => (
+                observed_metric(average),
+                observed_metric(complete_count),
+                observed_metric(complete_sum),
+            ),
+            None => (
+                Metric::unavailable("no_fully_priced_observed_prs"),
+                Metric::unavailable("no_fully_priced_observed_prs"),
+                Metric::unavailable("no_fully_priced_observed_prs"),
+            ),
+        };
     let with = groups.values().filter(|g| g.2 > 0).count() as u64;
     let without = if groups.values().any(|g| g.4.is_empty()) {
         Metric::unavailable("unlinked_or_nonsharing_cohort_unconfirmed")
     } else {
         metric(groups.len() as u64 - with, 1.0, updated)
     };
+    let mut count_support = BTreeMap::new();
+    let key = |(repository, item): &(Uuid, i64)| {
+        crate::services::team_financial_guard::fingerprint(&(repository, item))
+    };
+    if complete_count > 0 {
+        count_support.insert(
+            "fully_priced_observed_prs".into(),
+            complete
+                .iter()
+                .map(|(id, g)| Ok((key(id)?, g.4.clone())))
+                .collect::<Result<BTreeMap<_, _>>>()?,
+        );
+    }
+    count_support.insert(
+        "merged_prs_with_cost".into(),
+        groups
+            .iter()
+            .filter(|(_, g)| g.2 > 0)
+            .map(|(id, g)| Ok((key(id)?, g.4.clone())))
+            .collect::<Result<BTreeMap<_, _>>>()?,
+    );
+    if without.value.is_some() {
+        count_support.insert(
+            "merged_prs_without_cost".into(),
+            groups
+                .iter()
+                .filter(|(_, g)| g.2 == 0)
+                .map(|(id, g)| Ok((key(id)?, g.4.clone())))
+                .collect::<Result<BTreeMap<_, _>>>()?,
+        );
+    }
     Ok(MergedCost {
         cost_microusd: metric(sum, known as f64 / events as f64, updated),
         average_microusd: average,
         with_cost: metric(with, known as f64 / events as f64, updated),
         without_cost: without,
         complete_prs: Metric::unavailable("capture_completeness_unconfirmed"),
+        observed_average_microusd: observed_average,
+        fully_priced_observed_prs: observed_count,
+        fully_priced_observed_cost_microusd: observed_sum,
+        observed_cost_scope: "received_confirmed_linked_facts_until_merge",
+        capture_completeness: "unconfirmed",
+        average_rounding: "floor_to_integer_microusd",
         pricing_versions: prices.into_iter().collect(),
         calculation_version: "confirmed_observed_usage_to_merge_v1",
         people,
         admitted,
+        average_admitted,
+        count_support,
     })
 }
 /// Compare equations by *fact membership*, not just whether the same five people appear.
 /// A one-person remainder remains suppressed even if both totals have five people.
 pub fn joint_partition(
     facts: &[AiUsageEventRow],
-    week: (u32, u32),
-    weekly_people: &BTreeSet<Uuid>,
+    weekly_membership: &BTreeSet<(Uuid, String)>,
     merged: &MergedCost,
 ) -> bool {
-    let mut cells =
-        BTreeMap::<(bool, bool, Option<String>, Option<String>, bool), BTreeSet<Uuid>>::new();
+    let mut cells = BTreeMap::<
+        (
+            bool,
+            bool,
+            bool,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+        BTreeSet<Uuid>,
+    >::new();
     for f in facts {
-        let w =
-            weekly_people.contains(&f.user_id) && f.event_time >= week.0 && f.event_time < week.1;
+        let w = weekly_membership.contains(&(f.user_id, f.usage_event_id.clone()));
         let m = merged
             .admitted
+            .contains(&(f.user_id, f.usage_event_id.clone()));
+        let a = merged
+            .average_admitted
             .contains(&(f.user_id, f.usage_event_id.clone()));
         if !w && !m {
             continue;
@@ -188,14 +275,40 @@ pub fn joint_partition(
             .entry((
                 w,
                 m,
+                a,
                 f.ai_provider.clone(),
                 f.ai_model.clone(),
-                f.estimated_cost_microusd.is_some() && f.pricing_version.is_some(),
+                f.pricing_version
+                    .clone()
+                    .filter(|_| f.estimated_cost_microusd.is_some()),
             ))
             .or_default()
             .insert(f.user_id);
     }
-    super::team_insights::publishable_partition(&cells.into_values().collect::<Vec<_>>())
+    let mut support = cells.into_values().collect::<Vec<_>>();
+    let mut count_cells = BTreeMap::<Vec<String>, BTreeSet<Uuid>>::new();
+    let prs = merged
+        .count_support
+        .values()
+        .flat_map(|items| items.keys().cloned())
+        .collect::<BTreeSet<_>>();
+    for pr in prs {
+        let signature = merged
+            .count_support
+            .iter()
+            .filter(|(_, items)| items.contains_key(&pr))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        let people = merged
+            .count_support
+            .values()
+            .filter_map(|items| items.get(&pr))
+            .flatten()
+            .copied();
+        count_cells.entry(signature).or_default().extend(people);
+    }
+    support.extend(count_cells.into_values());
+    super::team_insights::publishable_partition(&support)
 }
 
 #[cfg(test)]
@@ -254,6 +367,10 @@ mod tests {
             cost.average_microusd.reason,
             Some("capture_completeness_unconfirmed")
         );
+        assert_eq!(cost.observed_average_microusd.value, Some(2300));
+        assert_eq!(cost.fully_priced_observed_cost_microusd.value, Some(2300));
+        assert_eq!(cost.fully_priced_observed_prs.value, Some(1));
+        assert_eq!(cost.capture_completeness, "unconfirmed");
     }
     #[test]
     fn corrected_project_is_not_replaced_by_old_revision() {
@@ -295,15 +412,21 @@ mod tests {
         extra.usage_event_id = "weekly_only".into();
         extra.event_time = 150;
         facts.push(extra);
-        let people = facts.iter().map(|f| f.user_id).collect();
-        assert!(!joint_partition(&facts, (0, 200), &people, &merged));
+        let weekly = facts
+            .iter()
+            .map(|f| (f.user_id, f.usage_event_id.clone()))
+            .collect();
+        assert!(!joint_partition(&facts, &weekly, &merged));
     }
     #[test]
     fn five_person_shared_equations_and_calendar_cutoff() {
         let (facts, links) = fixture();
         let cost = calculate_test(&facts, &links);
-        let people = facts.iter().map(|f| f.user_id).collect();
-        assert!(joint_partition(&facts, (0, 200), &people, &cost));
+        let weekly = facts
+            .iter()
+            .map(|f| (f.user_id, f.usage_event_id.clone()))
+            .collect();
+        assert!(joint_partition(&facts, &weekly, &cost));
         assert_eq!(
             calculate(&facts, &links, DateTime::from_timestamp(101, 0).unwrap())
                 .unwrap()
@@ -311,5 +434,91 @@ mod tests {
                 .value,
             None
         );
+    }
+    #[test]
+    fn received_average_excludes_partial_prs_and_retains_exact_numerator_and_denominator() {
+        let (mut facts, mut links) = fixture();
+        for n in 1..=5 {
+            let user = Uuid::from_u128(n);
+            let project = Uuid::from_u128(100 + n);
+            for (item, name, cost) in [
+                (2, "complete", Some(100)),
+                (3, "partial", Some(100)),
+                (3, "partial", None),
+            ] {
+                let cost = if item == 2 && n == 1 { Some(101) } else { cost };
+                let mut f = fact(user, project, &format!("{name}-{n}-{cost:?}"), 100, cost);
+                f.ai_session_id = format!("ws1_{name}");
+                if cost.is_some() {
+                    links.push(MergedLink {
+                        repository: Uuid::from_u128(99),
+                        item,
+                        merged_at: DateTime::from_timestamp(200, 0).unwrap(),
+                        user: Some(user),
+                        session: Some(session(&f)),
+                        projects: vec![project],
+                        since: DateTime::from_timestamp(50, 0),
+                        targets: 1,
+                        visible: true,
+                    });
+                }
+                facts.push(f);
+            }
+        }
+        let cost = calculate_test(&facts, &links);
+        assert_eq!(cost.cost_microusd.value, Some(2501));
+        assert_eq!(cost.fully_priced_observed_cost_microusd.value, Some(2001));
+        assert_eq!(cost.fully_priced_observed_prs.value, Some(2));
+        assert_eq!(cost.observed_average_microusd.value, Some(1000));
+        let weekly = facts
+            .iter()
+            .map(|f| (f.user_id, f.usage_event_id.clone()))
+            .collect();
+        assert!(joint_partition(&facts, &weekly, &cost));
+    }
+    #[test]
+    fn five_people_with_five_independent_prs_are_a_valid_aggregate_not_five_private_cells() {
+        let (facts, mut links) = fixture();
+        for (n, l) in links.iter_mut().enumerate() {
+            l.item = n as i64 + 1;
+        }
+        let cost = calculate_test(&facts, &links);
+        assert_eq!(cost.fully_priced_observed_prs.value, Some(5));
+        assert_eq!(cost.observed_average_microusd.value, Some(300));
+        let weekly = facts
+            .iter()
+            .map(|f| (f.user_id, f.usage_event_id.clone()))
+            .collect();
+        assert!(joint_partition(&facts, &weekly, &cost));
+    }
+    #[test]
+    fn hidden_link_or_no_received_facts_cannot_become_a_fully_priced_zero_cost_pr() {
+        let (facts, mut links) = fixture();
+        let mut hidden = links[0].clone();
+        hidden.visible = false;
+        links.push(hidden);
+        let cost = calculate_test(&facts, &links);
+        assert_eq!(cost.observed_average_microusd.value, None);
+        let (facts, mut links) = fixture();
+        let mut empty = links[0].clone();
+        empty.item = 999;
+        empty.session = Some("missing_session".into());
+        links.push(empty);
+        let cost = calculate_test(&facts, &links);
+        assert_eq!(cost.fully_priced_observed_prs.value, Some(1));
+        assert_eq!(cost.observed_average_microusd.value, Some(1500));
+    }
+    #[test]
+    fn new_fact_between_weekly_and_cumulative_reads_is_not_assumed_in_the_weekly_equation() {
+        let (mut facts, links) = fixture();
+        let weekly = facts
+            .iter()
+            .map(|f| (f.user_id, f.usage_event_id.clone()))
+            .collect();
+        let mut late = facts[0].clone();
+        late.usage_event_id = "late_cumulative_only".into();
+        facts.push(late);
+        let cost = calculate_test(&facts, &links);
+        assert!(!joint_partition(&facts, &weekly, &cost));
     }
 }

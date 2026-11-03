@@ -26,8 +26,10 @@ async fn main() -> Result<()> {
         Some("true") | Some("1") => true,
         _ => anyhow::bail!("Checkout worker flag must be explicit"),
     };
+    let cancellation_enabled =
+        wakaclock_server::services::team_subscription_cancellation::enabled()?;
     anyhow::ensure!(
-        !checkout_enabled || deployment.is_some(),
+        !(checkout_enabled || cancellation_enabled) || deployment.is_some(),
         "financial_guard_commercial_deployment_required"
     );
     let account = stripe.account_id.clone();
@@ -42,6 +44,9 @@ async fn main() -> Result<()> {
         tokio::select! {
             _=tokio::signal::ctrl_c()=>return Ok(()),
             _=interval.tick()=>{
+                if cancellation_enabled && worker.cancellation_tick().await.is_err() {
+                    tracing::warn!("Cancellation worker unavailable; accepted operations and evidence retained");
+                }
                 if checkout_enabled {
                     match wakaclock_server::services::team_stripe_catalog::Catalog::from_env(&account,live) {
                         Ok(Some(catalog))=>{if worker.checkout_tick(&catalog).await.is_err(){tracing::warn!("Checkout worker unavailable; accepted operations retained");}},

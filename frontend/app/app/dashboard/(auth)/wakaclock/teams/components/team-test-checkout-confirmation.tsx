@@ -11,8 +11,10 @@ import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { confirmTeamTestCheckout } from '@/lib/wakaclock/team-billing-endpoints';
 import type { TeamPriceQuote } from '@/lib/wakaclock/team-billing-endpoints';
 import { formatStripePrice } from '@/lib/wakaclock/team-billing-money';
+import { reportTeamBillingAccessFailure } from '@/lib/wakaclock/team-billing-recovery';
 
 export function TeamTestCheckoutConfirmation(props: {
+  onAccessLost?: (error: unknown) => void;
   organizationId: string;
   quote: TeamPriceQuote;
   userId: string;
@@ -25,10 +27,12 @@ export function TeamTestCheckoutConfirmation(props: {
   );
 }
 function ConfirmationScope({
+  onAccessLost,
   organizationId,
   userId,
   quote,
 }: {
+  onAccessLost?: (error: unknown) => void;
   organizationId: string;
   quote: TeamPriceQuote;
   userId: string;
@@ -36,7 +40,11 @@ function ConfirmationScope({
   const [confirmed, setConfirmed] = useState(false);
   const client = useQueryClient();
   const send = useMutation({
-    mutationFn: () => confirmTeamTestCheckout(organizationId, quote.id),
+    mutationFn: () =>
+      reportTeamBillingAccessFailure(
+        confirmTeamTestCheckout(organizationId, quote.id),
+        onAccessLost
+      ),
     retry: false,
     onError: async (error) => {
       if (error instanceof WakaclockError && [400, 403, 404, 409].includes(error.status ?? 0)) {

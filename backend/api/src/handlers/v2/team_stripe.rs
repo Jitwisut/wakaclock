@@ -2,6 +2,236 @@ use super::*;
 use crate::services::team_stripe::WebhookFailure;
 use axum::body::Bytes;
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancellationQuery {
+    operation_id: Option<Uuid>,
+}
+fn cancellation_error(error: anyhow::Error) -> ApiError {
+    if error
+        .downcast_ref::<crate::services::authorization::AuthorizationDenied>()
+        .is_some()
+    {
+        return ApiError::forbidden("billing owner required");
+    }
+    match error.downcast_ref::<crate::services::team_insights::TeamError>() {
+        Some(crate::services::team_insights::TeamError::Invalid(reason)) => {
+            ApiError::bad_request(*reason)
+        }
+        Some(crate::services::team_insights::TeamError::ProjectionChanged) => {
+            ApiError::conflict("subscription or authority changed; reload the original operation")
+        }
+        Some(crate::services::team_insights::TeamError::Disabled) => {
+            ApiError::not_found("subscription cancellation unavailable")
+        }
+        _ => ApiError::service_unavailable(
+            "cancellation unconfirmed; inspect the original operation before retrying",
+        ),
+    }
+}
+pub async fn cancellation_view(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(org): Path<Uuid>,
+    Query(input): Query<CancellationQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !state.config.team_enabled {
+        return Err(ApiError::not_found("Team cancellation unavailable"));
+    }
+    let actor = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    if input.operation_id.is_some_and(|id| id.is_nil()) {
+        return Err(ApiError::bad_request(
+            "original operation identity required",
+        ));
+    }
+    let result = state
+        .billing_service
+        .team_cancellation_view(actor, org, input.operation_id)
+        .await
+        .map_err(cancellation_error)?;
+    Ok((
+        [("cache-control", "private, no-store")],
+        Json(envelope(result, "UTC", None)),
+    ))
+}
+pub async fn accept_cancellation(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(org): Path<Uuid>,
+    Json(input): Json<crate::services::team_subscription_cancellation::CancellationSelection>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !state.config.team_enabled {
+        return Err(ApiError::not_found("Team cancellation unavailable"));
+    }
+    let actor = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let result = state
+        .billing_service
+        .accept_team_cancellation(actor, org, input)
+        .await
+        .map_err(cancellation_error)?;
+    Ok((
+        [("cache-control", "private, no-store")],
+        Json(envelope(result, "UTC", None)),
+    ))
+}
+pub async fn recover_cancellation(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(org): Path<Uuid>,
+    Json(input): Json<crate::services::team_subscription_cancellation::RecoverCancellation>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !state.config.team_enabled {
+        return Err(ApiError::not_found("Team cancellation unavailable"));
+    }
+    let actor = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let result = state
+        .billing_service
+        .recover_team_cancellation(actor, org, input)
+        .await
+        .map_err(cancellation_error)?;
+    Ok((
+        [("cache-control", "private, no-store")],
+        Json(envelope(result, "UTC", None)),
+    ))
+}
+
+pub async fn portal_destination(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(org): Path<Uuid>,
+    Json(input): Json<crate::services::team_stripe_portal::PortalRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !state.config.team_enabled {
+        return Err(ApiError::not_found("Team portal unavailable"));
+    }
+    let actor = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let result = state
+        .billing_service
+        .stripe_portal_destination(actor, org, input)
+        .await
+        .map_err(|error| {
+            if error
+                .downcast_ref::<crate::services::authorization::AuthorizationDenied>()
+                .is_some()
+            {
+                return ApiError::forbidden("billing owner required");
+            }
+            match error.downcast_ref::<crate::services::team_insights::TeamError>() {
+                Some(crate::services::team_insights::TeamError::Invalid(reason)) => {
+                    ApiError::bad_request(*reason)
+                }
+                Some(crate::services::team_insights::TeamError::ProjectionChanged) => {
+                    ApiError::conflict("billing or portal policy changed; reload")
+                }
+                Some(crate::services::team_insights::TeamError::Disabled) => {
+                    ApiError::not_found("billing portal unavailable")
+                }
+                _ => ApiError::service_unavailable(
+                    "portal unavailable or unconfirmed; request a fresh check",
+                ),
+            }
+        })?;
+    Ok((
+        [("cache-control", "private, no-store")],
+        Json(envelope(result, "UTC", None)),
+    ))
+}
+
+fn trial_error(error: anyhow::Error) -> ApiError {
+    if error
+        .downcast_ref::<crate::services::authorization::AuthorizationDenied>()
+        .is_some()
+    {
+        return ApiError::forbidden("billing owner required");
+    }
+    match error.downcast_ref::<crate::services::team_insights::TeamError>() {
+        Some(crate::services::team_insights::TeamError::Invalid(reason)) => {
+            ApiError::bad_request(*reason)
+        }
+        Some(crate::services::team_insights::TeamError::ProjectionChanged) => {
+            ApiError::conflict("trial or organization changed; reload")
+        }
+        Some(crate::services::team_insights::TeamError::Disabled) => {
+            ApiError::not_found("self-service trial unavailable")
+        }
+        _ => ApiError::service_unavailable("trial unconfirmed; reload status before retrying"),
+    }
+}
+
+pub async fn trial_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(org): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !state.config.team_enabled {
+        return Err(ApiError::not_found("Team trial unavailable"));
+    }
+    let actor = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let result = state
+        .billing_service
+        .team_trial_status(actor, org)
+        .await
+        .map_err(trial_error)?;
+    Ok((
+        [("cache-control", "private, no-store")],
+        Json(envelope(result, "UTC", None)),
+    ))
+}
+pub async fn trial_start(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(org): Path<Uuid>,
+    Json(input): Json<crate::services::team_trial::StartTrial>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !state.config.team_enabled {
+        return Err(ApiError::not_found("Team trial unavailable"));
+    }
+    let actor = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let result = state
+        .billing_service
+        .start_team_trial(actor, org, input)
+        .await
+        .map_err(trial_error)?;
+    Ok((
+        [("cache-control", "private, no-store")],
+        Json(envelope(result, "UTC", None)),
+    ))
+}
+pub async fn trial_recover(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(org): Path<Uuid>,
+    Json(input): Json<crate::services::team_trial::RecoverTrial>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !state.config.team_enabled {
+        return Err(ApiError::not_found("Team trial unavailable"));
+    }
+    let actor = auth::require_session_user(&state, &headers)
+        .await
+        .ok_or_else(ApiError::unauthorized)?;
+    let result = state
+        .billing_service
+        .recover_team_trial(actor, org, input)
+        .await
+        .map_err(trial_error)?;
+    Ok((
+        [("cache-control", "private, no-store")],
+        Json(envelope(result, "UTC", None)),
+    ))
+}
+
 /// Stripe signs the exact bytes. This provider route does not accept user/org identity.
 pub async fn webhook(
     State(state): State<Arc<AppState>>,

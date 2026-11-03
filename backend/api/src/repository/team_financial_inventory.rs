@@ -67,6 +67,9 @@ fn observations(
     let token = fingerprint(&(state.namespace, &entries))?;
     let mut identities = Vec::new();
     for entry in entries {
+        // Receipt IDs alone do not establish provider ownership. Positive
+        // lookups use their linked Outcome; negative projection must preserve
+        // the existing SQL identity rather than introduce a newly observed ID.
         for outcome in entry
             .outcomes
             .values()
@@ -74,6 +77,10 @@ fn observations(
         {
             let identity = match outcome.identity.as_ref() {
                 Some(ProviderIdentity::Customer { customer }) => Some((customer.clone(), None)),
+                Some(ProviderIdentity::Subscription {
+                    customer,
+                    subscription,
+                }) => Some((customer.clone(), Some(subscription.clone()))),
                 Some(ProviderIdentity::Checkout {
                     customer,
                     subscription,
@@ -104,6 +111,8 @@ identities AS (
  UNION ALL SELECT organization_id,customer_id,NULL FROM team_stripe_quotes WHERE account_id={account} AND livemode={live}
  UNION ALL SELECT c.organization_id,q.customer_id,c.subscription_id FROM team_stripe_checkout_intents c JOIN team_stripe_quotes q ON q.id=c.quote_id WHERE c.account_id={account} AND c.livemode={live}
  UNION ALL SELECT organization_id,customer_id,subscription_id FROM team_stripe_bindings WHERE account_id={account} AND livemode={live}
+ UNION ALL SELECT organization_id,customer_id,subscription_id FROM team_subscription_cancellations WHERE account_id={account} AND livemode={live}
+ UNION ALL SELECT organization_id,customer_id,subscription_id FROM team_subscription_upgrade_previews WHERE account_id={account} AND livemode={live}
  UNION ALL SELECT organization_id,customer_id,subscription_id FROM team_financial_source_tombstones WHERE account_id={account} AND livemode={live}
  UNION ALL SELECT * FROM observed
 ), owners AS (
@@ -126,6 +135,38 @@ pub(super) fn account_source_token(
     account.key()?;
     guard.namespace()?;
     Ok(observations(&guard.read()?.snapshot, &account.account, account.live)?.1)
+}
+/// A read continuation can observe its own retained result without adopting a
+/// new SQL root or another operation's evidence. Exact selection/SQL proof is
+/// still mandatory; this observation fence is never a write authorization.
+pub(super) fn checkout_claim_token(
+    guard: &FinancialGuard,
+    scope: &Scope,
+    operation: Uuid,
+) -> Result<String> {
+    guard.namespace()?;
+    let mut state = guard.read()?.snapshot;
+    let entry = state
+        .sources
+        .scopes
+        .get_mut(&scope.key()?)
+        .context("financial_source_uninitialized")?;
+    let pending: Vec<_> = entry
+        .outcomes
+        .values()
+        .filter(|o| o.operation == operation && entry.unapplied_outcomes.contains(&o.id))
+        .map(|o| o.id)
+        .collect();
+    for id in pending {
+        entry.outcomes.remove(&id);
+        entry.unapplied_outcomes.remove(&id);
+    }
+    entry
+        .checkout_observations
+        .retain(|_, value| value.operation != operation);
+    // Conflicts, freezes, accepted requests, dispatches, applied outcomes and
+    // every other operation/scope remain part of the captured fence.
+    Ok(observations(&state, &scope.account, scope.live)?.1)
 }
 /// Read-only; caller must hold account then participant billing locks and compare
 /// again after waiting. A current binding alone never proves historical ownership.
@@ -188,6 +229,32 @@ struct Table {
     from: &'static str,
 }
 const TABLES: &[Table] = &[
+    Table {tag:"upgrade_preview_request",table:"team_subscription_upgrade_previews",key:"x.quote_id::text",
+        columns:"quote_id organization_id account_id livemode actor_id customer_id subscription_id request_metadata request_sha256 idempotency_sha256 requested_at expires_at disposition revision observed_at last_observation_id",
+        operational:"retry_at attempts lease_id lease_until last_error_code last_http_status",times:"requested_at expires_at observed_at",
+        from:"team_subscription_upgrade_previews x WHERE x.organization_id=$1 AND x.account_id=$2 AND x.livemode=$3"},
+    Table {tag:"upgrade_preview_audit",table:"team_subscription_upgrade_preview_audit",key:"x.quote_id::text",
+        columns:"quote_id organization_id actor_id recorded_at request_sha256 action",operational:"",times:"recorded_at",
+        from:"team_subscription_upgrade_preview_audit x JOIN team_subscription_upgrade_previews p ON p.quote_id=x.quote_id WHERE p.organization_id=$1 AND p.account_id=$2 AND p.livemode=$3"},
+    Table { tag:"cancellation_projection",table:"team_subscription_cancellation_projections",key:"x.observation_id::text",
+        columns:"observation_id operation_id exchange_id projected_at projection_metadata metadata_sha256",operational:"",times:"projected_at",
+        from:"team_subscription_cancellation_projections x JOIN team_subscription_cancellations p ON p.operation_id=x.operation_id WHERE p.organization_id=$1 AND p.account_id=$2 AND p.livemode=$3" },
+    Table { tag:"cancellation_exchange", table:"team_subscription_cancellation_exchanges", key:"x.exchange_id::text",
+        columns:"exchange_id operation_id authorization_revision actor_id lease_id account_lease_id kind prepared_at first_attempt_at previous_observation_id authorization_sha256 metadata_sha256",operational:"",times:"prepared_at first_attempt_at",
+        from:"team_subscription_cancellation_exchanges x JOIN team_subscription_cancellations p ON p.operation_id=x.operation_id WHERE p.organization_id=$1 AND p.account_id=$2 AND p.livemode=$3" },
+    Table { tag:"cancellation_exchange_audit", table:"team_subscription_cancellation_exchange_audit", key:"x.exchange_id::text",
+        columns:"exchange_id operation_id actor_id recorded_at metadata_sha256",operational:"",times:"recorded_at",
+        from:"team_subscription_cancellation_exchange_audit x JOIN team_subscription_cancellations p ON p.operation_id=x.operation_id WHERE p.organization_id=$1 AND p.account_id=$2 AND p.livemode=$3" },
+    Table { tag:"cancellation", table:"team_subscription_cancellations", key:"x.operation_id::text",
+        columns:"operation_id organization_id account_id livemode actor_id customer_id subscription_id frozen_request request_sha256 idempotency_sha256 read_evidence read_sha256 accepted_at disposition revision first_attempt_at recovery_actor read_only last_observation_id observed_at",
+        operational:"retry_at attempts lease_id lease_until last_error_code last_http_status", times:"accepted_at first_attempt_at observed_at",
+        from:"team_subscription_cancellations x WHERE x.organization_id=$1 AND x.account_id=$2 AND x.livemode=$3" },
+    Table { tag:"cancellation_authorization", table:"team_subscription_cancellation_authorizations", key:"x.operation_id::text||':'||x.revision::text",
+        columns:"operation_id revision actor_id authorized_at action",operational:"",times:"authorized_at",
+        from:"team_subscription_cancellation_authorizations x JOIN team_subscription_cancellations p ON p.operation_id=x.operation_id WHERE p.organization_id=$1 AND p.account_id=$2 AND p.livemode=$3" },
+    Table { tag:"cancellation_audit", table:"team_subscription_cancellation_audit", key:"x.operation_id::text||':'||x.revision::text",
+        columns:"operation_id revision actor_id action recorded_at metadata_hash",operational:"",times:"recorded_at",
+        from:"team_subscription_cancellation_audit x JOIN team_subscription_cancellations p ON p.operation_id=x.operation_id WHERE p.organization_id=$1 AND p.account_id=$2 AND p.livemode=$3" },
     Table { tag:"customer", table:"team_stripe_customer_operations", key:"x.operation_id::text",
         columns:"operation_id organization_id requested_by account_id livemode disposition customer_id first_attempt_at created_at observed_at revision lookup_only",
         operational:"retry_at attempts lease_id lease_until last_error_code last_http_status", times:"first_attempt_at created_at observed_at",
@@ -314,6 +381,84 @@ struct Checkpoint {
     transition: Option<Uuid>,
 }
 fn normalize(tag: &str, data: &mut Value) -> Result<()> {
+    if tag == "upgrade_preview_request" {
+        use crate::services::team_stripe_change_payment::preview::PreviewRequest;
+        let request: PreviewRequest = serde_json::from_value(data["request_metadata"].clone())
+            .map_err(|_| anyhow::anyhow!("financial_inventory_upgrade_preview_request_invalid"))?;
+        request.validate()?;
+        let accepted = request.accepted_request()?;
+        ensure!(
+            serde_json::from_value::<Uuid>(data["quote_id"].clone())? == request.quote_id
+                && serde_json::from_value::<Uuid>(data["organization_id"].clone())?
+                    == request.scope.organization
+                && serde_json::from_value::<Uuid>(data["actor_id"].clone())? == request.actor
+                && data["account_id"].as_str() == Some(request.scope.account.as_str())
+                && data["livemode"].as_bool() == Some(request.scope.live)
+                && data["customer_id"].as_str() == Some(request.customer.as_str())
+                && data["subscription_id"].as_str() == Some(request.subscription.as_str())
+                && data["request_sha256"].as_str() == Some(accepted.request_hash.as_str())
+                && data["idempotency_sha256"].as_str() == Some(accepted.idempotency_hash.as_str())
+                && data["requested_at"].as_i64() == Some(request.requested_at.timestamp_micros())
+                && data["expires_at"].as_i64() == Some(request.expires_at.timestamp_micros()),
+            "financial_inventory_upgrade_preview_request_invalid"
+        );
+        data["request_metadata"] = typed_json::<PreviewRequest>(&data["request_metadata"])?;
+    }
+    if tag == "cancellation_projection" {
+        use crate::services::team_subscription_cancellation::projection::CancellationProjection;
+        let projection: CancellationProjection =
+            serde_json::from_value(data["projection_metadata"].clone()).map_err(|_| {
+                anyhow::anyhow!("financial_inventory_cancellation_projection_invalid")
+            })?;
+        projection.validate()?;
+        ensure!(
+            serde_json::from_value::<Uuid>(data["operation_id"].clone())?
+                == projection.request.operation()
+                && serde_json::from_value::<Uuid>(data["observation_id"].clone())?
+                    == projection.observation.id
+                && serde_json::from_value::<Uuid>(data["exchange_id"].clone())?
+                    == projection.exchange.id
+                && data["projected_at"].as_i64()
+                    == Some(projection.projected_at.timestamp_micros())
+                && data["metadata_sha256"].as_str() == Some(projection.audit_hash()?.as_str()),
+            "financial_inventory_cancellation_projection_invalid"
+        );
+        data["projection_metadata"] =
+            typed_json::<CancellationProjection>(&data["projection_metadata"])?;
+    }
+    // Preserve old exchange-root encoding when the additive predecessor is null.
+    if tag == "cancellation_exchange" && data["previous_observation_id"].is_null() {
+        data.as_object_mut()
+            .context("financial_inventory_contract_changed")?
+            .remove("previous_observation_id");
+    }
+    if tag == "cancellation" {
+        use crate::services::team_subscription_cancellation::{FrozenCancellation, ReadEvidence};
+        let request: FrozenCancellation = serde_json::from_value(data["frozen_request"].clone())
+            .map_err(|_| anyhow::anyhow!("financial_inventory_cancellation_contract_invalid"))?;
+        request.validate()?;
+        let read: ReadEvidence = serde_json::from_value(data["read_evidence"].clone())
+            .map_err(|_| anyhow::anyhow!("financial_inventory_cancellation_contract_invalid"))?;
+        read.validate(&request)?;
+        let accepted = request.accepted_request()?;
+        ensure!(
+            serde_json::from_value::<Uuid>(data["operation_id"].clone())? == request.operation()
+                && serde_json::from_value::<Uuid>(data["organization_id"].clone())?
+                    == request.scope().organization
+                && serde_json::from_value::<Uuid>(data["actor_id"].clone())? == request.actor()
+                && data["account_id"].as_str() == Some(request.scope().account.as_str())
+                && data["livemode"].as_bool() == Some(request.scope().live)
+                && data["customer_id"].as_str() == Some(request.customer())
+                && data["subscription_id"].as_str() == Some(request.subscription())
+                && data["request_sha256"].as_str() == Some(accepted.request_hash.as_str())
+                && data["idempotency_sha256"].as_str() == Some(accepted.idempotency_hash.as_str())
+                && data["read_sha256"].as_str() == Some(read.digest(&request)?.as_str())
+                && data["accepted_at"].as_i64() == Some(request.accepted_at().timestamp_micros()),
+            "financial_inventory_cancellation_contract_invalid"
+        );
+        data["frozen_request"] = typed_json::<FrozenCancellation>(&data["frozen_request"])?;
+        data["read_evidence"] = typed_json::<ReadEvidence>(&data["read_evidence"])?;
+    }
     if tag == "inbox" && !data["ingress_metadata"].is_null() {
         data["ingress_metadata"] = typed_json::<crate::services::team_financial_ingress::Receipt>(
             &data["ingress_metadata"],
@@ -428,6 +573,8 @@ pub(super) struct CustomerResolution {
     outcomes: std::collections::BTreeMap<Uuid, String>,
     scope: Scope,
     customer: String,
+    checkout_identity: Option<crate::services::team_financial_source::ProviderIdentity>,
+    cancellation: Option<crate::services::team_subscription_cancellation::FrozenCancellation>,
 }
 impl CustomerResolution {
     pub(super) fn state(&self) -> &crate::services::team_financial_guard::Snapshot {
@@ -444,6 +591,16 @@ impl CustomerResolution {
     }
     pub(super) fn scope(&self) -> &Scope {
         &self.scope
+    }
+    pub(super) fn checkout_identity(
+        &self,
+    ) -> Option<&crate::services::team_financial_source::ProviderIdentity> {
+        self.checkout_identity.as_ref()
+    }
+    pub(super) fn cancellation(
+        &self,
+    ) -> Option<&crate::services::team_subscription_cancellation::FrozenCancellation> {
+        self.cancellation.as_ref()
     }
     pub(super) fn customer(&self) -> &str {
         &self.customer
@@ -501,6 +658,62 @@ pub(super) async fn select_customer_resolution(
     operation: Uuid,
     customer: &str,
 ) -> Result<CustomerResolution> {
+    select_resolution(tx, guard, scope, operation, customer, None, None).await
+}
+pub(super) async fn select_checkout_resolution(
+    tx: &tokio_postgres::Transaction<'_>,
+    guard: &FinancialGuard,
+    scope: &Scope,
+    operation: Uuid,
+    session: &crate::services::team_stripe_checkout_receipt::Session,
+) -> Result<CustomerResolution> {
+    session.validate(scope)?;
+    select_resolution(
+        tx,
+        guard,
+        scope,
+        operation,
+        &session.customer,
+        Some(session.identity()),
+        None,
+    )
+    .await
+}
+pub(super) async fn select_cancellation_resolution(
+    tx: &tokio_postgres::Transaction<'_>,
+    guard: &FinancialGuard,
+    request: &crate::services::team_subscription_cancellation::FrozenCancellation,
+    observation: &crate::services::team_subscription_cancellation::Observation,
+) -> Result<CustomerResolution> {
+    request.validate()?;
+    observation.validate(request.scope())?;
+    ensure!(
+        observation.request == *request,
+        "financial_cancellation_original_request_changed"
+    );
+    select_resolution(
+        tx,
+        guard,
+        request.scope(),
+        request.operation(),
+        request.customer(),
+        None,
+        Some((request, observation)),
+    )
+    .await
+}
+async fn select_resolution(
+    tx: &tokio_postgres::Transaction<'_>,
+    guard: &FinancialGuard,
+    scope: &Scope,
+    operation: Uuid,
+    customer: &str,
+    checkout_identity: Option<crate::services::team_financial_source::ProviderIdentity>,
+    cancellation: Option<(
+        &crate::services::team_subscription_cancellation::FrozenCancellation,
+        &crate::services::team_subscription_cancellation::Observation,
+    )>,
+) -> Result<CustomerResolution> {
     use crate::services::team_financial_source::{OperationKind, ProviderIdentity};
     scope.key()?;
     ensure!(
@@ -535,24 +748,122 @@ pub(super) async fn select_customer_resolution(
         .context("financial_customer_request_unconfirmed")?
         .clone();
     ensure!(
-        request.kind == OperationKind::CreateCustomer,
+        request.kind
+            == if cancellation.is_some() {
+                OperationKind::CancelAtPeriodEnd
+            } else if checkout_identity.is_some() {
+                OperationKind::CreateCheckout
+            } else {
+                OperationKind::CreateCustomer
+            },
         "financial_resolution_operation_invalid"
     );
+    if let Some((original, observation)) = cancellation {
+        ensure!(
+            original.scope() == scope
+                && original.accepted_request()? == request
+                && entry.cancellation_observations.get(&observation.id) == Some(observation)
+                && entry.unapplied_outcomes.contains(&observation.outcome),
+            "financial_cancellation_selection_changed"
+        );
+    }
+    let checkout_identity = if let Some(ProviderIdentity::Checkout {
+        session,
+        customer,
+        subscription,
+    }) = checkout_identity
+    {
+        let known = crate::services::team_stripe_checkout_receipt::known_subscription(
+            entry, operation, &session, &customer,
+        )?;
+        ensure!(
+            subscription
+                .as_ref()
+                .zip(known.as_ref())
+                .is_none_or(|(a, b)| a == b),
+            "financial_checkout_subscription_conflict"
+        );
+        Some(ProviderIdentity::Checkout {
+            session,
+            customer,
+            subscription: known.or(subscription),
+        })
+    } else {
+        checkout_identity
+    };
     let identity = Some(ProviderIdentity::Customer {
         customer: customer.into(),
     });
-    let evidence_hash = crate::services::team_stripe_customer_request::result_hash(
-        scope, operation, &identity, true,
-    )?;
     let mut outcomes = std::collections::BTreeMap::new();
     for outcome in entry.outcomes.values().filter(|o| o.operation == operation) {
+        let valid = if let Some((original, _)) = cancellation {
+            outcome.identity
+                == Some(ProviderIdentity::Subscription {
+                    customer: original.customer().into(),
+                    subscription: original.subscription().into(),
+                })
+                && entry.cancellation_observations.values().any(|receipt| {
+                    receipt.request == *original
+                        && receipt.attempt.source_claim
+                        && receipt.outcome == outcome.id
+                        && Some(receipt.subscription.identity()) == outcome.identity
+                        && crate::services::team_subscription_cancellation::result_hash(
+                            scope,
+                            operation,
+                            &receipt.attempt,
+                            &receipt.kind,
+                            &receipt.subscription,
+                        )
+                        .is_ok_and(|hash| hash == outcome.evidence_hash)
+                })
+        } else if let Some(ProviderIdentity::Checkout {
+            session,
+            customer,
+            subscription,
+        }) = &checkout_identity
+        {
+            match &outcome.identity {
+                Some(
+                    value @ ProviderIdentity::Checkout {
+                        session: observed,
+                        customer: observed_customer,
+                        subscription: observed_subscription,
+                    },
+                ) => {
+                    observed == session
+                        && observed_customer == customer
+                        && subscription
+                            .as_ref()
+                            .zip(observed_subscription.as_ref())
+                            .is_none_or(|(a, b)| a == b)
+                        && outcome.evidence_hash
+                            == crate::services::team_stripe_checkout_receipt::result_hash(
+                                scope, operation, value,
+                            )?
+                        && entry.checkout_observations.values().any(|receipt| {
+                            receipt.source_claim
+                                && receipt.operation == operation
+                                && receipt.request_hash == request.request_hash
+                                && receipt.outcome == outcome.id
+                                && receipt.session.identity() == *value
+                        })
+                }
+                _ => false,
+            }
+        } else {
+            outcome.identity == identity
+                && outcome.evidence_hash
+                    == crate::services::team_stripe_customer_request::result_hash(
+                        scope, operation, &identity, true,
+                    )?
+        };
         ensure!(
-            outcome.request_hash == request.request_hash
-                && outcome.identity == identity
-                && outcome.evidence_hash == evidence_hash,
+            outcome.request_hash == request.request_hash && valid,
             "financial_resolution_outcome_conflict"
         );
-        if entry.unapplied_outcomes.contains(&outcome.id) {
+        if entry.unapplied_outcomes.contains(&outcome.id)
+            && cancellation.is_none_or(|(_, selected)| selected.outcome == outcome.id)
+        {
             outcomes.insert(outcome.id, fingerprint(outcome)?);
         }
     }
@@ -612,6 +923,8 @@ pub(super) async fn select_customer_resolution(
         outcomes,
         scope: scope.clone(),
         customer: customer.into(),
+        checkout_identity,
+        cancellation: cancellation.map(|(request, _)| request.clone()),
     };
     selected.unchanged(guard)?;
     Ok(selected)

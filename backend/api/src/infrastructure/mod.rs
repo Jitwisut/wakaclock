@@ -20,3 +20,4 @@ pub mod stripe;
 pub mod team_financial_guard;
 
 pub mod team_financial_plan;
+pub mod team_pilot_plan;

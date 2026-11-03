@@ -100,6 +100,22 @@ impl TeamStripeRepository {
             self.guard_configuration_error,
         )
     }
+    pub(crate) fn cancellations(
+        &self,
+    ) -> Result<super::team_subscription_cancellation::CancellationRepository> {
+        let deployment=crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+        ensure!(
+            self.ingress_guard()?
+                .is_some_and(|guard| guard.same_authority(deployment.guard())),
+            "cancellation_financial_authority_changed"
+        );
+        Ok(
+            super::team_subscription_cancellation::CancellationRepository::new(
+                self.pg.clone(),
+                deployment,
+            ),
+        )
+    }
     pub fn new(pg: Arc<PostgresClient>) -> Self {
         match crate::infrastructure::team_financial_guard::FinancialObservation::from_environment()
         {
@@ -583,8 +599,21 @@ impl TeamStripeRepository {
 impl TeamStripeRepository {
     pub async fn claim_scope(&self, account: &str, live: bool) -> Result<Option<Uuid>> {
         self.pg.execute("INSERT INTO team_stripe_runtime_status(account_id,livemode) VALUES($1,$2) ON CONFLICT DO NOTHING",&[&account,&live]).await?;
+        let cooldown = self
+            .ingress_guard()?
+            .map(|guard| guard.checkout_cooldown(account, live))
+            .transpose()?
+            .flatten();
+        let not_before = cooldown
+            .as_ref()
+            .and_then(|failure| failure.detail.retry_after);
+        if let Some(failure) = &cooldown {
+            // Rehydrate a lost SQL cooldown without claiming a provider success.
+            // A shorter directive must not hide an existing stronger error.
+            self.pg.execute("UPDATE team_stripe_runtime_status SET retry_at=GREATEST(retry_at,$3),last_error_code=CASE WHEN retry_at<=$3 THEN $4 ELSE last_error_code END,last_http_status=CASE WHEN retry_at<=$3 THEN $5 ELSE last_http_status END,last_tick_at=clock_timestamp() WHERE account_id=$1 AND livemode=$2 AND $3::timestamptz>clock_timestamp() AND (lease_until IS NULL OR lease_until<=clock_timestamp())", &[&account,&live,&not_before,&failure.detail.result.reason(),&failure.detail.http_status]).await?;
+        }
         let lease = Uuid::now_v7();
-        let row=self.pg.query_opt("UPDATE team_stripe_runtime_status SET lease_id=$3,lease_until=now()+interval '180 seconds',last_tick_at=now() WHERE account_id=$1 AND livemode=$2 AND retry_at<=now() AND (lease_until IS NULL OR lease_until<=now()) RETURNING lease_id",&[&account,&live,&lease]).await?;
+        let row=self.pg.query_opt("UPDATE team_stripe_runtime_status SET lease_id=$3,lease_until=now()+interval '180 seconds',last_tick_at=now() WHERE account_id=$1 AND livemode=$2 AND retry_at<=now() AND COALESCE($4::timestamptz,now())<=now() AND (lease_until IS NULL OR lease_until<=now()) RETURNING lease_id",&[&account,&live,&lease,&not_before]).await?;
         Ok(row.map(|r| r.get(0)))
     }
     pub async fn finish_scope(
@@ -594,16 +623,31 @@ impl TeamStripeRepository {
         lease: Uuid,
         provider_observed: bool,
     ) -> Result<bool> {
+        let cooldown = self
+            .ingress_guard()?
+            .map(|guard| guard.checkout_cooldown(account, live))
+            .transpose()?
+            .flatten();
+        let not_before = cooldown
+            .as_ref()
+            .and_then(|failure| failure.detail.retry_after);
+        let reason = cooldown
+            .as_ref()
+            .map(|failure| failure.detail.result.reason());
+        let status = cooldown
+            .as_ref()
+            .and_then(|failure| failure.detail.http_status);
         Ok(self
             .pg
             .execute(
                 "UPDATE team_stripe_runtime_status SET lease_id=NULL,lease_until=NULL,
             last_provider_success_at=CASE WHEN $4 THEN now() ELSE last_provider_success_at END,
-            last_error_code=CASE WHEN $4 THEN NULL ELSE last_error_code END,
-            last_http_status=CASE WHEN $4 THEN NULL ELSE last_http_status END,
-            attempts=CASE WHEN $4 THEN 0 ELSE attempts END
+            last_error_code=CASE WHEN $5::timestamptz>now() AND ($4 OR retry_at<=$5) THEN $6 WHEN $4 THEN NULL ELSE last_error_code END,
+            last_http_status=CASE WHEN $5::timestamptz>now() AND ($4 OR retry_at<=$5) THEN $7 WHEN $4 THEN NULL ELSE last_http_status END,
+            retry_at=GREATEST(retry_at,COALESCE($5::timestamptz,retry_at)),
+            attempts=CASE WHEN $4 AND NOT(COALESCE($5::timestamptz>now(),false)) THEN 0 ELSE attempts END
             WHERE account_id=$1 AND livemode=$2 AND lease_id=$3 AND lease_until>now()",
-                &[&account, &live, &lease, &provider_observed],
+                &[&account, &live, &lease, &provider_observed, &not_before, &reason, &status],
             )
             .await?
             == 1)

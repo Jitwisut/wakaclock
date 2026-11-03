@@ -57,6 +57,208 @@ fn confirm(p: &transaction::Proposal) -> transaction::Event {
 }
 
 #[test]
+fn financial_group_retains_late_atomic_evidence_without_unfencing_dispatch_or_confirmation() {
+    use crate::services::{
+        team_stripe_checkout as checkout, team_stripe_checkout_receipt as receipt,
+        team_subscription_cancellation as cancel,
+    };
+    for member in [true, false] {
+        let (request, mut metadata) = cancel::tests::fixture();
+        let other = Uuid::now_v7();
+        let f = TestLedger::new(&[request.scope().organization, other]);
+        let account = ingress::Scope {
+            account: request.scope().account.clone(),
+            live: false,
+        };
+        f.guard
+            .record_ingress(ingress::Event::Seed {
+                scope: account.clone(),
+                receipts: vec![],
+                review: Uuid::now_v7(),
+                review_hash: "a".repeat(64),
+            })
+            .unwrap();
+        let accepted = source::AcceptedRequest {
+            operation: Uuid::now_v7(),
+            kind: source::OperationKind::CreateCheckout,
+            actor: request.actor(),
+            request_hash: "b".repeat(64),
+            idempotency_hash: "c".repeat(64),
+            accepted_at: request.accepted_at(),
+        };
+        for org in [request.scope().organization, other] {
+            let scope = source::Scope {
+                organization: org,
+                account: account.account.clone(),
+                live: false,
+            };
+            f.guard
+                .record_source(source::Event::Seed {
+                    head: source::Root::empty(&scope).unwrap(),
+                    scope,
+                    review: source::Review {
+                        id: Uuid::now_v7(),
+                        kind: source::ReviewKind::ReviewedInventory,
+                        evidence_hash: "a".repeat(64),
+                        reviewed_at: request.accepted_at(),
+                    },
+                    accepted: if org == request.scope().organization {
+                        vec![request.accepted_request().unwrap(), accepted.clone()]
+                    } else {
+                        vec![]
+                    },
+                })
+                .unwrap();
+        }
+        for r in [request.accepted_request().unwrap(), accepted.clone()] {
+            f.guard
+                .record_source(source::Event::Dispatch {
+                    scope: request.scope().clone(),
+                    dispatch: source::Dispatch {
+                        operation: r.operation,
+                        request_hash: r.request_hash,
+                        idempotency_hash: r.idempotency_hash,
+                        first_attempt_at: request.accepted_at(),
+                    },
+                })
+                .unwrap();
+        }
+        let group_org = if member {
+            request.scope().organization
+        } else {
+            other
+        };
+        let p = proposal(
+            &f.guard.read().unwrap().snapshot,
+            &account,
+            &[group_org],
+            false,
+            false,
+        );
+        f.guard.record_transaction(prepare(&p)).unwrap();
+        metadata.cancel_at_period_end = true;
+        let attempt = cancel::Attempt {
+            actor: request.actor(),
+            revision: 1,
+            lease: Uuid::now_v7(),
+            exchange: Uuid::now_v7(),
+            source_claim: true,
+        };
+        let id = f
+            .guard
+            .retain_cancellation_observation(
+                &request,
+                attempt.clone(),
+                cancel::ObservationKind::MutationResponse,
+                &metadata,
+                request.accepted_at(),
+            )
+            .unwrap();
+        let checkout_attempt = receipt::Attempt {
+            actor: request.actor(),
+            revision: 1,
+            lease: Uuid::now_v7(),
+            source_claim: true,
+        };
+        let evidence = checkout::SessionEvidence {
+            operation: accepted.operation,
+            customer: "cus_late".into(),
+            price: "price_late".into(),
+            currency: "usd".into(),
+            amount_minor: 2500,
+            live: false,
+            id: "cs_test_late".into(),
+            status: "open".into(),
+            expires_at: request.period_end(),
+            subscription: None,
+            observed_at: request.accepted_at(),
+        };
+        f.guard
+            .retain_checkout_observation(
+                request.scope().clone(),
+                &accepted,
+                checkout_attempt.clone(),
+                receipt::ObservationKind::CreateResponse,
+                &evidence,
+            )
+            .unwrap()
+            .unwrap();
+        let failure = f
+            .guard
+            .retain_checkout_failure(
+                request.scope().clone(),
+                &accepted,
+                checkout_attempt,
+                receipt::FailureDetail {
+                    phase: receipt::FailurePhase::ResourceRead,
+                    result: receipt::FailureResult::Provider {
+                        code: receipt::FailureCode::ProviderUnavailable,
+                    },
+                    http_status: Some(503),
+                    retry_after: None,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        let retained = f.guard.read().unwrap();
+        assert_eq!(retained.snapshot.transactions.groups[&p.id].proposal, p);
+        assert!(!retained.snapshot.transactions.groups[&p.id].committed);
+        let entry = &retained.snapshot.sources.scopes[&request.scope().key().unwrap()];
+        assert_eq!(entry.cancellation_observations.len(), 1);
+        assert_eq!(entry.checkout_observations.len(), 1);
+        assert_eq!(entry.checkout_failures.len(), 1);
+        assert_eq!(entry.unapplied_outcomes.len(), 2);
+        assert_eq!(
+            f.guard
+                .retain_cancellation_observation(
+                    &request,
+                    attempt,
+                    cancel::ObservationKind::MutationResponse,
+                    &metadata,
+                    request.accepted_at()
+                )
+                .unwrap(),
+            id
+        );
+        assert_eq!(f.guard.read().unwrap().sequence, retained.sequence);
+        let mut conflict = entry.checkout_failures[&failure].clone();
+        conflict.detail.http_status = Some(500);
+        f.guard
+            .record_source(source::Event::CheckoutFailure {
+                scope: request.scope().clone(),
+                observation: conflict,
+            })
+            .unwrap();
+        assert!(f
+            .guard
+            .record_source(source::Event::Dispatch {
+                scope: request.scope().clone(),
+                dispatch: entry.dispatches[&request.operation()].clone()
+            })
+            .is_err());
+        assert!(f
+            .guard
+            .record_source(source::Event::Commit {
+                scope: p.sources[0].scope.clone(),
+                transition: p.id
+            })
+            .is_err());
+        assert!(f.guard.record_transaction(confirm(&p)).is_err());
+        let restarted = FinancialGuard::new(f.path().to_path_buf())
+            .unwrap()
+            .pin_namespace(f.guard.namespace().unwrap())
+            .unwrap();
+        let reopened = restarted.read().unwrap();
+        assert_eq!(reopened.snapshot.transactions.groups[&p.id].proposal, p);
+        let entry = &reopened.snapshot.sources.scopes[&request.scope().key().unwrap()];
+        assert_eq!(entry.conflicting_checkout_failures.len(), 1);
+        assert!(!entry.frozen.is_empty());
+        assert_eq!(entry.cancellation_observations.len(), 1);
+        assert_eq!(entry.checkout_observations.len(), 1);
+    }
+}
+
+#[test]
 fn financial_group_durable_restart_exact_receipts_and_tokens() {
     let (ledger, p) = ledger(false, false);
     let before = ledger.guard.read().unwrap();

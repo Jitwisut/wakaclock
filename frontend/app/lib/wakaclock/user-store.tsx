@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 
-import { setCurrentToken, setUnauthorizedHandler } from './session';
+import { getCurrentToken, setCurrentToken, setUnauthorizedHandler } from './session';
 
 const STORAGE_KEY = 'wakaclock-session';
 
@@ -83,45 +83,77 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
    */
   const [isHydrated, setIsHydrated] = React.useState(false);
 
-  React.useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as StoredShape;
-        if (parsed.userId && parsed.token && parsed.username && !isTokenExpired(parsed.token)) {
-          dispatch({
-            type: 'set',
-            userId: parsed.userId,
-            username: parsed.username,
-            token: parsed.token,
-          });
-        }
+  const applySession = React.useCallback((session: null | StoredShape) => {
+    setCurrentToken(session?.token ?? null);
+    if (session?.userId && session.token && session.username) {
+      dispatch({
+        type: 'set',
+        userId: session.userId,
+        username: session.username,
+        token: session.token,
+      });
+    } else {
+      dispatch({ type: 'clear' });
+    }
+  }, []);
+
+  const saveSession = React.useCallback(
+    (session: null | StoredShape) => {
+      applySession(session);
+      try {
+        window.localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(session ?? { userId: null, token: null, username: null })
+        );
+      } catch {
+        // Storage may be disabled. The in-memory session is already current.
       }
-    } catch {
-      // ignore malformed localStorage state
-    } finally {
-      setIsHydrated(true);
-    }
-  }, []);
+    },
+    [applySession]
+  );
 
   React.useEffect(() => {
-    setCurrentToken(state.token);
-    // The initial render still contains anonymous state. Wait for the hydration
-    // render before persisting, or it briefly overwrites a valid stored session.
-    if (!isHydrated) return;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // Storage may be unavailable in restricted browser contexts. The in-memory
-      // session and authorization token still follow login/logout immediately.
+    function restore() {
+      let stored: null | StoredShape = null;
+      try {
+        const parsed = JSON.parse(
+          window.localStorage.getItem(STORAGE_KEY) ?? 'null'
+        ) as null | StoredShape;
+        if (parsed?.userId && parsed.username && parsed.token && !isTokenExpired(parsed.token)) {
+          stored = parsed;
+        }
+      } catch {
+        // Treat unreadable or malformed storage as anonymous.
+      }
+      applySession(stored);
     }
-  }, [isHydrated, state]);
-
-  // Let the axios interceptor end the session when the server rejects our token.
-  React.useEffect(() => {
-    setUnauthorizedHandler(() => dispatch({ type: 'clear' }));
-    return () => setUnauthorizedHandler(null);
-  }, []);
+    restore();
+    setIsHydrated(true);
+    // Read current storage so queued events cannot replay an earlier session.
+    function onStorage(event: { key: null | string }) {
+      if (event.key === STORAGE_KEY || event.key === null) restore();
+    }
+    window.addEventListener('storage', onStorage);
+    setUnauthorizedHandler(() => {
+      // Another tab may have signed in before its storage event was delivered.
+      try {
+        const saved = JSON.parse(
+          window.localStorage.getItem(STORAGE_KEY) ?? 'null'
+        ) as null | StoredShape;
+        if (saved?.token && saved.token !== getCurrentToken()) {
+          restore();
+          return;
+        }
+      } catch {
+        // A rejected in-memory credential must still expire.
+      }
+      saveSession(null);
+    });
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      setUnauthorizedHandler(null);
+    };
+  }, [applySession, saveSession]);
 
   const value = React.useMemo<WakaclockUserState>(
     () => ({
@@ -129,16 +161,10 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
       userId: state.userId,
       username: state.username,
       token: state.token,
-      setSession: (session) =>
-        dispatch({
-          type: 'set',
-          userId: session.userId,
-          username: session.username,
-          token: session.token,
-        }),
-      logout: () => dispatch({ type: 'clear' }),
+      setSession: saveSession,
+      logout: () => saveSession(null),
     }),
-    [isHydrated, state]
+    [isHydrated, state, saveSession]
   );
 
   return <WakaclockUserContext.Provider value={value}>{children}</WakaclockUserContext.Provider>;

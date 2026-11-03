@@ -318,6 +318,37 @@ impl<'a> NormalWrite<'a> {
     ) -> Result<Self> {
         let selected =
             inventory::select_customer_resolution(&tx, guard, scope, operation, customer).await?;
+        Self::begin_selected_resolution(tx, guard, account, selected).await
+    }
+    pub(super) async fn begin_checkout_resolution(
+        tx: deadpool_postgres::Transaction<'a>,
+        guard: &FinancialGuard,
+        account: &Account,
+        scope: &Scope,
+        operation: Uuid,
+        session: &crate::services::team_stripe_checkout_receipt::Session,
+    ) -> Result<Self> {
+        let selected =
+            inventory::select_checkout_resolution(&tx, guard, scope, operation, session).await?;
+        Self::begin_selected_resolution(tx, guard, account, selected).await
+    }
+    pub(super) async fn begin_cancellation_resolution(
+        tx: deadpool_postgres::Transaction<'a>,
+        guard: &FinancialGuard,
+        account: &Account,
+        request: &crate::services::team_subscription_cancellation::FrozenCancellation,
+        observation: &crate::services::team_subscription_cancellation::Observation,
+    ) -> Result<Self> {
+        let selected =
+            inventory::select_cancellation_resolution(&tx, guard, request, observation).await?;
+        Self::begin_selected_resolution(tx, guard, account, selected).await
+    }
+    async fn begin_selected_resolution(
+        tx: deadpool_postgres::Transaction<'a>,
+        guard: &FinancialGuard,
+        account: &Account,
+        selected: inventory::CustomerResolution,
+    ) -> Result<Self> {
         ingress::ready(&tx, guard, account).await?;
         for scope in selected.scopes() {
             let before = selected.state();
@@ -364,9 +395,73 @@ impl<'a> NormalWrite<'a> {
         })
     }
     pub(super) fn customer_selection(&self) -> Result<&inventory::CustomerResolution> {
-        self.resolution
+        let selected = self
+            .resolution
             .as_ref()
-            .context("financial_resolution_selection_missing")
+            .context("financial_resolution_selection_missing")?;
+        ensure!(
+            selected.cancellation().is_none(),
+            "financial_resolution_operation_invalid"
+        );
+        Ok(selected)
+    }
+    pub(super) fn cancellation_outcomes(
+        &self,
+    ) -> Result<&std::collections::BTreeMap<Uuid, String>> {
+        let selected = self
+            .resolution
+            .as_ref()
+            .context("financial_resolution_selection_missing")?;
+        ensure!(
+            selected.cancellation().is_some() && selected.checkout_identity().is_none(),
+            "financial_resolution_operation_invalid"
+        );
+        Ok(selected.outcomes())
+    }
+    pub(super) async fn commit_checkout_projection(
+        self,
+        writer: Writer,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
+        let Writer::CheckoutProjection {
+            organization,
+            request,
+            observation,
+            projection,
+            outcomes,
+            ..
+        } = &writer
+        else {
+            anyhow::bail!("financial_transaction_writer_mismatch");
+        };
+        if let Some(selected) = &self.resolution {
+            ensure!(
+                *organization == selected.scope().organization
+                    && request == selected.request()
+                    && outcomes == selected.outcomes()
+                    && matches!(selected.checkout_identity(), Some(crate::services::team_financial_source::ProviderIdentity::Checkout { session, customer, subscription })
+                    if session == &observation.session.id && customer == &observation.session.customer
+                        && subscription.as_ref().zip(observation.session.subscription.as_ref()).is_none_or(|(a,b)| a == b)),
+                "financial_resolution_selection_changed"
+            );
+        } else {
+            ensure!(
+                outcomes.is_empty()
+                    && self.scopes.len() == 1
+                    && self.checkout_request(*organization, request.operation)?.1 == *request,
+                "financial_resolution_selection_changed"
+            );
+        }
+        ensure!(
+            matches!(
+                (projection, deadline),
+                (protocol::CheckoutProjection::Current { .. }, Some(_))
+                    | (protocol::CheckoutProjection::EvidenceOnly { .. }, None)
+            ),
+            "financial_checkout_deadline_contract_invalid"
+        );
+        super::team_stripe_checkout_projection::committed(&self.tx, &self.account, &writer).await?;
+        self.commit_group(None, Some(writer), None, deadline).await
     }
     pub(super) async fn commit_customer_resolution(
         self,
@@ -388,6 +483,8 @@ impl<'a> NormalWrite<'a> {
         let selected = self.customer_selection()?;
         ensure!(
             *organization == selected.scope().organization
+                && selected.checkout_identity().is_none()
+                && selected.cancellation().is_none()
                 && request == selected.request()
                 && customer == selected.customer()
                 && outcomes == selected.outcomes()
@@ -399,6 +496,188 @@ impl<'a> NormalWrite<'a> {
             "financial_resolution_selection_changed"
         );
         self.commit_group(None, Some(writer), None, deadline).await
+    }
+    /// Lookup is read-only at the provider. Pending positive evidence can be
+    /// observed without treating its new associations as committed SQL authority.
+    pub(super) async fn commit_lookup_claim(
+        self,
+        deadline: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        if let Some(selected) = &self.resolution {
+            ensure!(
+                selected.cancellation().is_none(),
+                "financial_resolution_operation_invalid"
+            );
+            for scope in selected.scopes() {
+                enrollment_matches(&self.tx, &self.before, scope.organization).await?;
+                let preview = selected.before(&self.tx, &self.guard, scope).await?;
+                let entry = &self.before.sources.scopes[&scope.key()?];
+                let head = entry
+                    .head
+                    .as_ref()
+                    .context("financial_source_uninitialized")?;
+                ensure!(
+                    !preview.identity_conflict
+                        && !preview.legacy_scope_unconfirmed
+                        && preview.checkpoint.as_ref() == Some(head)
+                        && preview.checkpoint_transition == entry.committed_transition
+                        && preview.digest.schema == head.schema
+                        && preview.digest.records == head.records
+                        && preview.digest.hash == head.hash,
+                    "financial_lookup_read_predecessor_changed"
+                );
+            }
+            selected.unchanged(&self.guard)?;
+            ensure!(
+                token(&self.guard.read()?.snapshot, &self.account, &self.scopes)?
+                    == token(&self.before, &self.account, &self.scopes)?,
+                "financial_source_changed_before_commit"
+            );
+            let now: chrono::DateTime<chrono::Utc> = self
+                .tx
+                .query_one("SELECT clock_timestamp()", &[])
+                .await?
+                .get(0);
+            ensure!(now < deadline, "financial_customer_lease_unconfirmed");
+            self.tx.commit().await?;
+            return Ok(());
+        }
+        ensure!(
+            self.commit_customer_claim(deadline).await?,
+            "financial_customer_lease_unconfirmed"
+        );
+        Ok(())
+    }
+    /// Operational retry/lease/error updates only. The selected-before canonical
+    /// inventory must still equal every old head; changing a semantic field here
+    /// fails closed. No pending outcome is resolved or omitted from the final pin.
+    pub(super) async fn commit_cancellation_operational(self) -> Result<()> {
+        if let Some(selected) = &self.resolution {
+            ensure!(
+                selected.cancellation().is_some() && selected.checkout_identity().is_none(),
+                "financial_resolution_operation_invalid"
+            );
+            for scope in selected.scopes() {
+                enrollment_matches(&self.tx, &self.before, scope.organization).await?;
+                let preview = selected.before(&self.tx, &self.guard, scope).await?;
+                let entry = &self.before.sources.scopes[&scope.key()?];
+                let head = entry
+                    .head
+                    .as_ref()
+                    .context("financial_source_uninitialized")?;
+                ensure!(
+                    !preview.identity_conflict
+                        && !preview.legacy_scope_unconfirmed
+                        && preview.checkpoint.as_ref() == Some(head)
+                        && preview.checkpoint_transition == entry.committed_transition
+                        && preview.digest.schema == head.schema
+                        && preview.digest.records == head.records
+                        && preview.digest.hash == head.hash,
+                    "financial_cancellation_operational_semantics_changed"
+                );
+            }
+            selected.unchanged(&self.guard)?;
+            ensure!(
+                token(&self.guard.read()?.snapshot, &self.account, &self.scopes)?
+                    == token(&self.before, &self.account, &self.scopes)?,
+                "financial_source_changed_before_commit"
+            );
+            self.tx.commit().await?;
+            return Ok(());
+        }
+        ensure!(
+            self.commit_operational(None).await?,
+            "cancellation_operational_release_unconfirmed"
+        );
+        Ok(())
+    }
+    pub(super) async fn commit_lookup_projection(
+        self,
+        writer: Writer,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
+        let Writer::CustomerLookupProjection {
+            organization,
+            request,
+            observation,
+            outcomes,
+            resolved_customer,
+            projection,
+            ..
+        } = &writer
+        else {
+            anyhow::bail!("financial_transaction_writer_mismatch")
+        };
+        if let Some(selected) = &self.resolution {
+            ensure!(
+                selected.checkout_identity().is_none()
+                    && selected.cancellation().is_none()
+                    && *organization == selected.scope().organization
+                    && request == selected.request()
+                    && outcomes == selected.outcomes()
+                    && resolved_customer.as_deref()==Some(selected.customer())
+                    && match &observation.result {
+                        crate::services::team_financial_source::CustomerLookupResult::Verified{customer,..}|crate::services::team_financial_source::CustomerLookupResult::Deleted{customer}=>customer==selected.customer(),
+                        crate::services::team_financial_source::CustomerLookupResult::NotFound=>true,_=>false,
+                    },
+                "financial_resolution_selection_changed"
+            );
+        } else {
+            ensure!(
+                outcomes.is_empty()
+                    && self.scopes.len() == 1
+                    && self.scopes[0].organization == *organization,
+                "financial_resolution_selection_changed"
+            );
+        }
+        ensure!(
+            matches!(
+                (projection, deadline),
+                (protocol::CustomerProjection::Verified { .. }, Some(_))
+                    | (protocol::CustomerProjection::EvidenceOnly { .. }, None)
+            ),
+            "financial_customer_deadline_contract_invalid"
+        );
+        self.commit_group(None, Some(writer), None, deadline).await
+    }
+    pub(super) async fn commit_lookup_stop(self, writer: Writer) -> Result<()> {
+        let Writer::CustomerLookupStop {
+            organization,
+            request,
+            outcomes,
+            resolved_customer,
+            ..
+        } = &writer
+        else {
+            anyhow::bail!("financial_transaction_writer_mismatch")
+        };
+        if let Some(selected) = &self.resolution {
+            ensure!(
+                selected.checkout_identity().is_none()
+                    && selected.cancellation().is_none()
+                    && *organization == selected.scope().organization
+                    && request == selected.request()
+                    && outcomes == selected.outcomes()
+                    && resolved_customer.as_deref() == Some(selected.customer()),
+                "financial_resolution_selection_changed"
+            );
+        } else {
+            ensure!(
+                outcomes.is_empty()
+                    && resolved_customer.is_none()
+                    && self.scopes.len() == 1
+                    && self.scopes[0].organization == *organization,
+                "financial_resolution_selection_changed"
+            );
+        }
+        self.commit_group(None, Some(writer), None, None).await
+    }
+    pub(super) fn lookup_resolution(
+        &self,
+    ) -> Option<(String, std::collections::BTreeMap<Uuid, String>)> {
+        self.resolution
+            .as_ref()
+            .map(|s| (s.customer().to_owned(), s.outcomes().clone()))
     }
     pub(super) fn sql(&self) -> &Transaction<'_> {
         &self.tx
@@ -443,6 +722,14 @@ impl<'a> NormalWrite<'a> {
         claim: Option<&super::team_stripe::Claim>,
     ) -> Result<bool> {
         self.commit_operational_deadline(claim, None).await
+    }
+    /// Ephemeral read/link requests share canonical validation but do not create
+    /// a financial source fact or reuse a reconciliation-job lease.
+    pub(super) async fn commit_read_before(
+        self,
+        deadline: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool> {
+        self.commit_operational_deadline(None, Some(deadline)).await
     }
     pub(super) async fn commit_customer_claim(
         self,
@@ -555,6 +842,180 @@ impl<'a> NormalWrite<'a> {
         );
         self.commit_group(None, Some(writer), None, None).await
     }
+    pub(super) async fn commit_cancellation_request(
+        self,
+        writer: Writer,
+        deadline: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        ensure!(
+            matches!(writer, Writer::CancellationRequest { .. }),
+            "financial_transaction_writer_mismatch"
+        );
+        super::team_subscription_cancellation::committed_request(&self.tx, &self.account, &writer)
+            .await?;
+        self.commit_group(None, Some(writer), None, Some(deadline))
+            .await
+    }
+    pub(super) async fn commit_cancellation_lifecycle(
+        self,
+        writer: Writer,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
+        use crate::services::team_subscription_cancellation::lifecycle::CancellationStage;
+        let Writer::CancellationLifecycle { request, stage, .. } = &writer else {
+            anyhow::bail!("financial_transaction_writer_mismatch")
+        };
+        ensure!(
+            self.before
+                .sources
+                .scopes
+                .get(&request.scope().key()?)
+                .and_then(|entry| entry.accepted.get(&request.operation()))
+                == Some(&request.accepted_request()?),
+            "financial_cancellation_original_request_changed"
+        );
+        ensure!(
+            matches!(
+                (stage, deadline),
+                (CancellationStage::BeginExchange { .. }, Some(_))
+                    | (
+                        CancellationStage::Stop { .. }
+                            | CancellationStage::RecoveryAuthorization { .. },
+                        None
+                    )
+            ),
+            "financial_cancellation_deadline_contract_invalid"
+        );
+        super::team_subscription_cancellation::committed_lifecycle(
+            &self.tx,
+            &self.account,
+            &writer,
+        )
+        .await?;
+        self.commit_group(None, Some(writer), None, deadline).await
+    }
+    pub(super) async fn commit_cancellation_projection(
+        self,
+        writer: Writer,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
+        use crate::services::team_subscription_cancellation::projection::ProjectionMode;
+        let Writer::CancellationResult { projection } = &writer else {
+            anyhow::bail!("financial_transaction_writer_mismatch")
+        };
+        let selected = self
+            .resolution
+            .as_ref()
+            .context("financial_resolution_selection_missing")?;
+        ensure!(
+            selected.cancellation() == Some(&projection.request)
+                && selected.checkout_identity().is_none()
+                && selected.request() == &projection.request.accepted_request()?
+                && selected.outcomes() == &projection.outcomes
+                && matches!(
+                    (&projection.mode, deadline),
+                    (ProjectionMode::Current { .. }, Some(_))
+                        | (ProjectionMode::RetainedOnly { .. }, None)
+                ),
+            "financial_cancellation_selection_changed"
+        );
+        super::team_subscription_cancellation::committed_projection(
+            &self.tx,
+            &self.account,
+            &writer,
+        )
+        .await?;
+        self.commit_group(None, Some(writer), None, deadline).await
+    }
+    pub(super) fn checkout_request(
+        &self,
+        organization: Uuid,
+        operation: Uuid,
+    ) -> Result<(
+        Scope,
+        crate::services::team_financial_source::AcceptedRequest,
+    )> {
+        let scope = self
+            .scopes
+            .iter()
+            .find(|s| s.organization == organization)
+            .context("financial_checkout_scope_unconfirmed")?;
+        let request = self
+            .before
+            .sources
+            .scopes
+            .get(&scope.key()?)
+            .and_then(|e| e.accepted.get(&operation))
+            .context("financial_checkout_request_unconfirmed")?;
+        ensure!(
+            request.kind == crate::services::team_financial_source::OperationKind::CreateCheckout,
+            "financial_checkout_request_kind_invalid"
+        );
+        Ok((scope.clone(), request.clone()))
+    }
+    pub(super) async fn commit_checkout_lifecycle(
+        self,
+        writer: Writer,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
+        let Writer::CheckoutLifecycle {
+            organization,
+            request,
+            stage,
+            ..
+        } = &writer
+        else {
+            anyhow::bail!("financial_transaction_writer_mismatch");
+        };
+        ensure!(
+            self.checkout_request(*organization, request.operation)?.1 == *request,
+            "financial_checkout_original_request_changed"
+        );
+        ensure!(
+            matches!(
+                (stage, deadline),
+                (
+                    protocol::CheckoutStage::FirstAttempt { .. }
+                        | protocol::CheckoutStage::ResumeReadback { .. },
+                    Some(_)
+                ) | (
+                    protocol::CheckoutStage::Stop { .. }
+                        | protocol::CheckoutStage::RecoveryAuthorization { .. },
+                    None
+                )
+            ),
+            "financial_checkout_deadline_contract_invalid"
+        );
+        super::team_stripe_checkout_control::committed(&self.tx, &self.account, &writer).await?;
+        self.commit_group(None, Some(writer), None, deadline).await
+    }
+    pub(super) async fn commit_checkout_claim(
+        self,
+        deadline: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        if self.resolution.is_some() {
+            return self.commit_lookup_claim(deadline).await;
+        }
+        ensure!(
+            self.commit_operational_deadline(None, Some(deadline))
+                .await?,
+            "financial_checkout_lease_unconfirmed"
+        );
+        Ok(())
+    }
+    pub(super) async fn commit_checkout_request(
+        self,
+        writer: Writer,
+        deadline: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        ensure!(
+            matches!(writer, Writer::CheckoutRequest { .. }),
+            "financial_transaction_writer_mismatch"
+        );
+        super::team_stripe_checkout::committed_request(&self.tx, &self.account, &writer).await?;
+        self.commit_group(None, Some(writer), None, Some(deadline))
+            .await
+    }
     pub(super) async fn commit_quote(
         self,
         writer: Writer,
@@ -564,6 +1025,19 @@ impl<'a> NormalWrite<'a> {
             matches!(writer, Writer::Quote { .. }),
             "financial_transaction_writer_mismatch"
         );
+        self.commit_group(None, Some(writer), None, Some(deadline))
+            .await
+    }
+    pub(super) async fn commit_upgrade_preview_request(
+        self,
+        writer: Writer,
+        deadline: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        ensure!(
+            matches!(writer, Writer::UpgradePreviewRequest { .. }),
+            "financial_transaction_writer_mismatch"
+        );
+        super::team_upgrade_preview::committed_request(&self.tx, &self.account, &writer).await?;
         self.commit_group(None, Some(writer), None, Some(deadline))
             .await
     }
@@ -681,10 +1155,27 @@ impl<'a> NormalWrite<'a> {
                             .change_hash(&self.account, scope)?
                     },
                     accepted: match &writer {
-                        Some(Writer::CustomerRequest {
-                            organization,
-                            request,
-                        }) if *organization == scope.organization => vec![request.clone()],
+                        Some(Writer::UpgradePreviewRequest { request })
+                            if &request.scope == scope =>
+                        {
+                            vec![request.accepted_request()?]
+                        }
+                        Some(Writer::CancellationRequest { request, .. })
+                            if request.scope() == scope =>
+                        {
+                            vec![request.accepted_request()?]
+                        }
+                        Some(
+                            Writer::CustomerRequest {
+                                organization,
+                                request,
+                            }
+                            | Writer::CheckoutRequest {
+                                organization,
+                                request,
+                                ..
+                            },
+                        ) if *organization == scope.organization => vec![request.clone()],
                         _ => vec![],
                     },
                     resolved_outcomes: self
@@ -882,13 +1373,13 @@ pub(super) async fn reconcile_ingress(
 
 /// Only the exact committed next state of the retained bounded scheduler batch.
 /// No job increment, owner terms or provider intent is replayed here.
-async fn reconcile_writer(
-    tx: deadpool_postgres::Transaction<'_>,
+pub(super) async fn readback_writer(
+    tx: &deadpool_postgres::Transaction<'_>,
     guard: &FinancialGuard,
     account: &Account,
     expected: Option<&Writer>,
-) -> Result<Writer> {
-    ingress::lock(&tx, account).await?;
+) -> Result<(protocol::Entry, String)> {
+    ingress::lock(tx, account).await?;
     let before = guard.read()?.snapshot;
     let known = before
         .transactions
@@ -904,7 +1395,12 @@ async fn reconcile_writer(
     ensure!(
         expected.map_or(matches!(writer, Writer::Scheduler { .. }), |e| e == writer)
             && p.mode
-                == if matches!(writer, Writer::CustomerResolution { .. }) {
+                == if matches!(
+                    writer,
+                    Writer::CustomerResolution { .. } | Writer::CancellationResult { .. }
+                ) || matches!(writer,Writer::CheckoutProjection{outcomes,..} if !outcomes.is_empty())
+                    || matches!(writer,Writer::CustomerLookupProjection{outcomes,..}|Writer::CustomerLookupStop{outcomes,..} if !outcomes.is_empty())
+                {
                     Mode::ResolveOutcomes
                 } else {
                     Mode::Normal
@@ -913,12 +1409,33 @@ async fn reconcile_writer(
         "financial_transaction_writer_mismatch"
     );
     let targets = match writer {
-        Writer::CustomerRecoveryAuthorization { .. }
+        Writer::CancellationRequest { .. }
+        | Writer::CancellationLifecycle { .. }
+        | Writer::CancellationResult { .. } => &[],
+        Writer::CustomerLookupProjection { .. }
+        | Writer::CustomerLookupStop { .. }
+        | Writer::CustomerRecoveryAuthorization { .. }
         | Writer::CustomerRequest { .. }
         | Writer::CustomerLifecycle { .. }
         | Writer::CustomerResolution { .. } => &[],
+        Writer::CheckoutProjection { .. } => {
+            super::team_stripe_checkout_projection::committed(tx, account, writer).await?;
+            &[]
+        }
+        Writer::CheckoutLifecycle { .. } => {
+            super::team_stripe_checkout_control::committed(tx, account, writer).await?;
+            &[]
+        }
+        Writer::CheckoutRequest { .. } => {
+            super::team_stripe_checkout::committed_request(tx, account, writer).await?;
+            &[]
+        }
         Writer::Quote { .. } => {
-            super::team_stripe_quote::committed_quote(&tx, account, writer).await?;
+            super::team_stripe_quote::committed_quote(tx, account, writer).await?;
+            &[]
+        }
+        Writer::UpgradePreviewRequest { .. } => {
+            super::team_upgrade_preview::committed_request(tx, account, writer).await?;
             &[]
         }
         Writer::Scheduler { targets } => targets.as_slice(),
@@ -930,24 +1447,39 @@ async fn reconcile_writer(
         .map(|s| s.scope.clone())
         .collect::<Vec<_>>();
     for scope in &scopes {
-        super::team_seats::lock(&tx, scope.organization).await?;
+        super::team_seats::lock(tx, scope.organization).await?;
     }
     let evidence = token(&before, account, &scopes)?;
+    if matches!(writer, Writer::CancellationRequest { .. }) {
+        super::team_subscription_cancellation::committed_request(tx, account, writer).await?;
+    }
+    if matches!(writer, Writer::CancellationLifecycle { .. }) {
+        super::team_subscription_cancellation::committed_lifecycle(tx, account, writer).await?;
+    }
+    if matches!(writer, Writer::CancellationResult { .. }) {
+        super::team_subscription_cancellation::committed_projection(tx, account, writer).await?;
+    }
+    if matches!(
+        writer,
+        Writer::CustomerLookupProjection { .. } | Writer::CustomerLookupStop { .. }
+    ) {
+        super::team_stripe_customer_lookup::committed(tx, account, writer).await?;
+    }
     if matches!(writer, Writer::CustomerRecoveryAuthorization { .. }) {
-        super::team_stripe_customer_recovery::committed(&tx, account, writer).await?;
+        super::team_stripe_customer_recovery::committed(tx, account, writer).await?;
     }
     if matches!(writer, Writer::CustomerResolution { .. }) {
-        super::team_stripe_customer_resolution::committed(&tx, account, writer).await?;
+        super::team_stripe_customer_resolution::committed(tx, account, writer).await?;
     }
     if matches!(
         writer,
         Writer::CustomerRequest { .. } | Writer::CustomerLifecycle { .. }
     ) {
-        super::team_stripe_customer::committed_request(&tx, account, writer).await?;
+        super::team_stripe_customer::committed_request(tx, account, writer).await?;
     }
     for target in targets {
         let a = inventory::associations(
-            &tx,
+            tx,
             guard,
             account,
             Some(&target.customer),
@@ -963,7 +1495,7 @@ async fn reconcile_writer(
     let entry = before.ingress.entry(account)?;
     entry.ready()?;
     ingress::matches(
-        &tx,
+        tx,
         account,
         &entry.head,
         entry.committed_transition,
@@ -979,9 +1511,17 @@ async fn reconcile_writer(
                     .change_hash(account, &change.scope)?
                 && change.transition.accepted
                     == match writer {
+                        Writer::CancellationRequest { request, .. }
+                            if request.scope() == &change.scope =>
+                            vec![request.accepted_request()?],
                         Writer::CustomerRequest {
                             organization,
                             request,
+                        }
+                        | Writer::CheckoutRequest {
+                            organization,
+                            request,
+                            ..
                         } if *organization == change.scope.organization => vec![request.clone()],
                         _ => vec![],
                     }
@@ -993,12 +1533,12 @@ async fn reconcile_writer(
             .iter()
             .find(|e| e.organization == change.scope.organization)
         {
-            enrollment_next(&tx, enrollment).await?;
+            enrollment_next(tx, enrollment).await?;
         } else {
-            enrollment_matches(&tx, &before, change.scope.organization).await?;
+            enrollment_matches(tx, &before, change.scope.organization).await?;
         }
 
-        let observed = inventory::in_transaction(&tx, guard, &change.scope).await?;
+        let observed = inventory::in_transaction(tx, guard, &change.scope).await?;
         let next = &change.transition.next;
         ensure!(
             !observed.identity_conflict
@@ -1017,14 +1557,39 @@ async fn reconcile_writer(
             && current.transactions.groups.get(&p.id) == Some(known),
         "financial_source_changed_during_readback"
     );
+    // A review plan must not advertise an applicable confirmation when the
+    // journal itself would reject it (for example a frozen account source).
+    // Apply only to a clone; the durable append remains after SQL COMMIT.
+    let mut preview = current;
+    preview.apply(
+        &crate::services::team_financial_guard::Event::FinancialTransaction {
+            event: Box::new(Event::Confirm {
+                transaction: p.id,
+                proposal_hash: known.proposal_hash.clone(),
+            }),
+        },
+    )?;
+    Ok((known.clone(), evidence))
+}
+
+async fn reconcile_writer(
+    tx: deadpool_postgres::Transaction<'_>,
+    guard: &FinancialGuard,
+    account: &Account,
+    expected: Option<&Writer>,
+) -> Result<Writer> {
+    let (known, _) = readback_writer(&tx, guard, account, expected).await?;
     tx.commit()
         .await
         .map_err(|_| anyhow::anyhow!("financial_transaction_commit_reconciliation_required"))?;
     guard.record_transaction(Event::Confirm {
-        transaction: p.id,
-        proposal_hash: known.proposal_hash.clone(),
+        transaction: known.proposal.id,
+        proposal_hash: known.proposal_hash,
     })?;
-    Ok(writer.clone())
+    known
+        .proposal
+        .writer
+        .context("financial_transaction_writer_mismatch")
 }
 
 pub(super) async fn reconcile_schedule(
@@ -1075,33 +1640,33 @@ pub(super) async fn reconcile_quote_history(
     reconcile_writer(tx, guard, account, Some(&writer)).await?;
     Ok(())
 }
-/// Confirm retained customer acceptance history only. No request/Owner/provider
-/// work is replayed, and caller authorization for a response is checked separately.
-pub(super) async fn reconcile_customer_request_history(
+/// Historical exact-next recovery only. Settle prior account work before a
+/// customer's retained outcome can block new scheduler writes. Never recreate
+/// SQL from a predecessor, reissue HTTP or grant current Owner authorization.
+pub(super) async fn reconcile_account_history(
     tx: deadpool_postgres::Transaction<'_>,
     guard: &FinancialGuard,
     account: &Account,
 ) -> Result<()> {
-    let writer = guard
+    let pending = guard
         .read()?
         .snapshot
         .transactions
         .groups
         .values()
         .find(|g| !g.committed && g.proposal.account == *account)
-        .and_then(|g| g.proposal.writer.clone())
+        .cloned()
         .context("financial_transaction_reconciliation_required")?;
-    ensure!(
-        matches!(
-            writer,
-            Writer::CustomerRecoveryAuthorization { .. }
-                | Writer::CustomerRequest { .. }
-                | Writer::CustomerLifecycle { .. }
-                | Writer::CustomerResolution { .. }
-        ),
-        "financial_transaction_writer_mismatch"
-    );
-    reconcile_writer(tx, guard, account, Some(&writer)).await?;
+    if let Some(writer) = pending.proposal.writer {
+        reconcile_writer(tx, guard, account, Some(&writer)).await?;
+    } else if let Some(ingress) = pending.proposal.ingress {
+        ensure!(
+            reconcile_ingress(tx, guard, account, &ingress.receipt.notification).await?,
+            "financial_transaction_reconciliation_required"
+        );
+    } else {
+        anyhow::bail!("financial_transaction_writer_mismatch");
+    }
     Ok(())
 }
 

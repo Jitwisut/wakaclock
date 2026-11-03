@@ -22,6 +22,331 @@ impl BillingService {
         }
     }
 
+    pub async fn team_trial_status(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+    ) -> Result<super::team_trial::TrialStatus> {
+        super::team_trial::require_enabled()?;
+        self.authorization
+            .require(actor, org, OrganizationAction::ManageBilling, None)
+            .await?;
+        let deployment = crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+        let pg = self.postgres.clone().context("PostgreSQL unavailable")?;
+        let mut result =
+            crate::repository::team_trial::status(&pg, org, actor, &deployment).await?;
+        // A committed trial changes privacy generation. Never rewrite/export the
+        // independent registry here to make activation look analytics-ready.
+        let privacy = crate::repository::team_trust::TeamTrustRepository::new(pg.clone())
+            .guard(org)
+            .await
+            .is_ok();
+        if privacy
+            && !matches!(
+                result.disposition,
+                super::team_trial::Disposition::RecoveryRequired
+                    | super::team_trial::Disposition::Unconfirmed
+            )
+        {
+            result.analytics_status = "observed";
+            result.analytics_reason =
+                "privacy_and_enrollment_agree_consent_and_fact_admission_still_required";
+        }
+        crate::repository::team_trial::validate(&pg, org, actor, &deployment, &result).await?;
+        Ok(result)
+    }
+    pub async fn stripe_portal_destination(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        input: super::team_stripe_portal::PortalRequest,
+    ) -> Result<super::team_stripe_portal::HostedPortal> {
+        input.validate()?;
+        self.authorization
+            .require(actor, org, OrganizationAction::ManageBilling, None)
+            .await?;
+        anyhow::ensure!(
+            super::team_stripe_portal::enabled()?,
+            super::team_insights::TeamError::Disabled
+        );
+        let config = crate::infrastructure::stripe::StripeApiConfig::from_env()?
+            .context("Stripe unavailable")?;
+        let policy = super::team_stripe_portal::PortalPolicy::from_environment(
+            &config.account_id,
+            config.livemode,
+        )?;
+        let account = config.account_id.clone();
+        let live = config.livemode;
+        let client = crate::infrastructure::stripe::StripeClient::new(config)?;
+        let deployment=crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+        let pg = self.postgres.clone().context("PostgreSQL unavailable")?;
+        let runtime = crate::repository::team_stripe::TeamStripeRepository::new_guarded(
+            pg.clone(),
+            deployment.clone(),
+        );
+        let repository =
+            crate::repository::team_stripe_portal::PortalRepository::new(pg, deployment);
+        let lease = runtime
+            .claim_scope(&account, live)
+            .await?
+            .context("Stripe account busy or backing off")?;
+        let proof = match repository.proof(actor, org, &policy, lease).await {
+            Ok(proof) => proof,
+            Err(error) => {
+                runtime.finish_scope(&account, live, lease, false).await?;
+                return Err(error);
+            }
+        };
+        let result = match client
+            .portal_destination(&proof, &policy, input.request_id)
+            .await
+        {
+            Ok(result) => result,
+            Err(super::team_stripe_portal::PortalFailure::Authority(error)) => {
+                runtime.finish_scope(&account, live, lease, false).await?;
+                return Err(error);
+            }
+            Err(super::team_stripe_portal::PortalFailure::Provider(error)) => {
+                runtime.fail_scope(&account, live, lease, &error).await?;
+                return Err(anyhow::anyhow!(
+                    "portal unavailable or unconfirmed; request a fresh check"
+                ));
+            }
+        };
+        anyhow::ensure!(
+            runtime.finish_scope(&account, live, lease, true).await?,
+            "portal_scope_lease_unconfirmed"
+        );
+        // The final proof deliberately excludes the now-released operational
+        // lease but repeats Owner/customer/binding/source/config checks.
+        proof.response_fence(&policy).await?;
+        result.fresh_at(chrono::Utc::now())?;
+        Ok(result)
+    }
+    pub async fn team_cancellation_view(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        operation: Option<Uuid>,
+    ) -> Result<super::team_subscription_cancellation::CancellationView> {
+        self.authorization
+            .require(actor, org, OrganizationAction::ManageBilling, None)
+            .await?;
+        let deployment=crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+        let pg = self.postgres.clone().context("PostgreSQL unavailable")?;
+        crate::repository::team_subscription_cancellation::CancellationRepository::new(
+            pg, deployment,
+        )
+        .cancellation_view(actor, org, operation)
+        .await
+    }
+    /// Reads accepted history without requiring a live provider credential or
+    /// the mutation flag. Current Owner/source/generation fences still apply.
+    pub async fn team_cancellation_status(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        operation: Uuid,
+    ) -> Result<super::team_subscription_cancellation::CancellationStatus> {
+        self.authorization
+            .require(actor, org, OrganizationAction::ManageBilling, None)
+            .await?;
+        let deployment = crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+        let pg = self.postgres.clone().context("PostgreSQL unavailable")?;
+        let repository =
+            crate::repository::team_subscription_cancellation::CancellationRepository::new(
+                pg, deployment,
+            );
+        repository
+            .find_saved(actor, org, operation)
+            .await?
+            .context("cancellation_saved_acceptance_unconfirmed_reconciliation_required")?
+            .response()
+            .await
+    }
+    /// Explicit current-Owner authorization of resource readback only. This can
+    /// never create a fresh cancellation or reset its first possible send time.
+    pub async fn recover_team_cancellation(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        input: super::team_subscription_cancellation::RecoverCancellation,
+    ) -> Result<super::team_subscription_cancellation::CancellationStatus> {
+        input.validate()?;
+        super::team_subscription_cancellation::require_enabled()?;
+        self.authorization
+            .require(actor, org, OrganizationAction::ManageBilling, None)
+            .await?;
+        let deployment=crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+        let pg = self.postgres.clone().context("PostgreSQL unavailable")?;
+        let repository =
+            crate::repository::team_subscription_cancellation::CancellationRepository::new(
+                pg, deployment,
+            );
+        repository
+            .authorize_readback(actor, org, input.operation_id, input.expected_revision)
+            .await?;
+        self.team_cancellation_status(actor, org, input.operation_id)
+            .await
+    }
+    /// Unknown response -> inspect the original operation first. Existing
+    /// acceptance never calls the provider, renews a read or creates a new nonce.
+    /// This method is not routed until the lifecycle/worker/API is complete.
+    pub async fn accept_team_cancellation(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        input: super::team_subscription_cancellation::CancellationSelection,
+    ) -> Result<super::team_subscription_cancellation::CancellationStatus> {
+        input.validate()?;
+        self.authorization
+            .require(actor, org, OrganizationAction::ManageBilling, None)
+            .await?;
+        let deployment = crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+        let pg = self.postgres.clone().context("PostgreSQL unavailable")?;
+        let repository =
+            crate::repository::team_subscription_cancellation::CancellationRepository::new(
+                pg, deployment,
+            );
+        if let Some(saved) = repository
+            .find_saved(actor, org, input.operation_id)
+            .await?
+        {
+            saved.matches_selection(&input)?;
+            return saved.response().await;
+        }
+        // Only the sealed factory's complete authority/provider proof can
+        // authorize a new acceptance. The empty probe above grants nothing.
+        let operation = input.operation_id;
+        let prepared = self.prepare_team_cancellation(actor, org, input).await?;
+        repository.accept(prepared).await?;
+        repository
+            .find_saved(actor, org, operation)
+            .await?
+            .context("cancellation_saved_acceptance_unconfirmed_reconciliation_required")?
+            .response()
+            .await
+    }
+    /// Explicit readonly preparation. This opaque result cannot be returned as
+    /// an accepted operation; the existing worker needs its own fresh claim.
+    pub async fn prepare_team_cancellation(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        input: super::team_subscription_cancellation::CancellationSelection,
+    ) -> Result<crate::repository::team_subscription_cancellation::PreparedCancellation> {
+        use super::team_subscription_cancellation as cancellation;
+        cancellation::require_enabled()?;
+        input.validate()?;
+        self.authorization
+            .require(actor, org, OrganizationAction::ManageBilling, None)
+            .await?;
+        let config = crate::infrastructure::stripe::StripeApiConfig::from_env()?
+            .context("Stripe unavailable")?;
+        let account = config.account_id.clone();
+        let live = config.livemode;
+        let client = crate::infrastructure::stripe::StripeClient::new(config)?;
+        let deployment=crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+        let pg = self.postgres.clone().context("PostgreSQL unavailable")?;
+        let runtime = crate::repository::team_stripe::TeamStripeRepository::new_guarded(
+            pg.clone(),
+            deployment.clone(),
+        );
+        let repository =
+            crate::repository::team_subscription_cancellation::CancellationRepository::new(
+                pg, deployment,
+            );
+        repository
+            .reconcile_history(&super::team_financial_ingress::Scope {
+                account: account.clone(),
+                live,
+            })
+            .await?;
+        let lease = runtime
+            .claim_scope(&account, live)
+            .await?
+            .context("Stripe account busy or backing off")?;
+        let proof = match repository.read_proof(actor, org, input, lease).await {
+            Ok(value) => value,
+            Err(error) => {
+                runtime.finish_scope(&account, live, lease, false).await?;
+                return Err(error);
+            }
+        };
+        let resource = match client.read_cancellation_preparation(&proof).await {
+            Ok(value) => value,
+            Err(cancellation::PreparationFailure::Authority(error)) => {
+                runtime.finish_scope(&account, live, lease, false).await?;
+                return Err(error);
+            }
+            Err(cancellation::PreparationFailure::Provider(error)) => {
+                runtime.fail_scope(&account, live, lease, &error).await?;
+                return Err(anyhow::anyhow!(
+                    "cancellation preparation unavailable or unconfirmed; reload the saved status"
+                ));
+            }
+        };
+        let prepared = match repository.complete_read(proof, resource).await {
+            Ok(value) => value,
+            Err(error) => {
+                runtime.finish_scope(&account, live, lease, false).await?;
+                return Err(error);
+            }
+        };
+        anyhow::ensure!(
+            runtime.finish_scope(&account, live, lease, true).await?,
+            "cancellation_account_lease_unconfirmed"
+        );
+        prepared.recheck().await?;
+        Ok(prepared)
+    }
+    pub async fn start_team_trial(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        input: super::team_trial::StartTrial,
+    ) -> Result<super::team_trial::TrialStatus> {
+        input.validate()?;
+        super::team_trial::require_enabled()?;
+        self.authorization
+            .require(actor, org, OrganizationAction::ManageBilling, None)
+            .await?;
+        let deployment = crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+        let pg = self.postgres.as_ref().context("PostgreSQL unavailable")?;
+        crate::repository::team_analytics_entitlement::start_self_service_trial(
+            pg,
+            org,
+            actor,
+            i32::from(input.package_seats),
+            &deployment,
+        )
+        .await?;
+        self.team_trial_status(actor, org).await
+    }
+    pub async fn recover_team_trial(
+        &self,
+        actor: Uuid,
+        org: Uuid,
+        input: super::team_trial::RecoverTrial,
+    ) -> Result<super::team_trial::TrialStatus> {
+        input.validate()?;
+        super::team_trial::require_enabled()?;
+        self.authorization
+            .require(actor, org, OrganizationAction::ManageBilling, None)
+            .await?;
+        let deployment = crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
+        let pg = self.postgres.as_ref().context("PostgreSQL unavailable")?;
+        crate::repository::team_analytics_entitlement::reconcile_self_service_trial(
+            pg,
+            org,
+            actor,
+            input.transition_id,
+            &deployment,
+        )
+        .await?;
+        self.team_trial_status(actor, org).await
+    }
+
     pub async fn stripe_checkout_status(
         &self,
         actor: Uuid,

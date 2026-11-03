@@ -56,18 +56,18 @@ export default async function DashboardLayout({
   return (
     <RootDocument lang="en">
       <ThemeProvider attribute="class" defaultTheme="light" disableTransitionOnChange enableSystem>
-      {/*
+        {/*
         `fontVariables` has to sit on the same element as the theme attributes. A preset
         declares `--text-family: var(--font-space-mono), …`, and a var() whose variable is
         undefined at that element makes the whole declaration invalid, so the font silently
         falls back to the system stack. The `--font-*` variables come from these classes, so
         they must be defined here, not on a descendant.
       */}
-      <ActiveThemeProvider className={fontVariables} initialTheme={themeSettings}>
-        <QueryProvider>
+        <ActiveThemeProvider className={fontVariables} initialTheme={themeSettings}>
           <WakaclockUserProvider>
-            <DashboardPanelsProvider initialHidden={hiddenPanels}>
-              {/*
+            <QueryProvider>
+              <DashboardPanelsProvider initialHidden={hiddenPanels}>
+                {/*
               The `data-theme-*` attributes deliberately do NOT live here. They used to,
               rendered from the request cookie, which meant this element kept the theme the
               page was loaded with while `ActiveThemeProvider` moved the live one onto
@@ -76,13 +76,13 @@ export default async function DashboardLayout({
               preset appeared to do nothing until a reload. The provider now owns the
               attributes on its own element, which does re-render.
             */}
-              <div className={cn('bg-background min-h-screen font-sans')}>{children}</div>
-            </DashboardPanelsProvider>
-            <Toaster position="top-center" richColors />
+                <div className={cn('bg-background min-h-screen font-sans')}>{children}</div>
+              </DashboardPanelsProvider>
+              <Toaster position="top-center" richColors />
+            </QueryProvider>
           </WakaclockUserProvider>
-        </QueryProvider>
-        <NextTopLoader color="var(--primary)" height={2} shadow-sm="none" showSpinner={false} />
-      </ActiveThemeProvider>
+          <NextTopLoader color="var(--primary)" height={2} shadow-sm="none" showSpinner={false} />
+        </ActiveThemeProvider>
       </ThemeProvider>
     </RootDocument>
   );

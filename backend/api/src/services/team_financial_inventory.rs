@@ -32,6 +32,14 @@ impl Records {
             matches!(
                 tag,
                 "customer"
+                    | "upgrade_preview_request"
+                    | "upgrade_preview_audit"
+                    | "cancellation"
+                    | "cancellation_authorization"
+                    | "cancellation_audit"
+                    | "cancellation_exchange"
+                    | "cancellation_exchange_audit"
+                    | "cancellation_projection"
                     | "customer_authorization"
                     | "quote"
                     | "checkout"
@@ -239,5 +247,33 @@ mod tests {
         let mut missing = raw;
         missing.as_object_mut().unwrap().remove("paid_at");
         assert!(typed_json::<super::super::team_stripe_invoice::Invoice>(&missing).is_err());
+    }
+    #[test]
+    fn typed_cancellation_and_upgrade_tags_are_classified_without_opening_an_arbitrary_namespace() {
+        let scope = Scope {
+            organization: uuid::Uuid::now_v7(),
+            account: "acct_inventory".into(),
+            live: false,
+        };
+        let mut records = Records::new();
+        for tag in [
+            "cancellation",
+            "cancellation_authorization",
+            "cancellation_audit",
+            "cancellation_exchange",
+            "cancellation_exchange_audit",
+            "cancellation_projection",
+            "upgrade_preview_request",
+            "upgrade_preview_audit",
+        ] {
+            records.insert(tag, "fixture", json!({"schema":1})).unwrap();
+        }
+        assert_eq!(records.finish(&scope).unwrap().records, 8);
+        assert!(records
+            .insert("upgrade_raw_provider_payload", "fixture", json!({}))
+            .is_err());
+        assert!(records
+            .insert("cancellation_unknown", "fixture", json!({}))
+            .is_err());
     }
 }

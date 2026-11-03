@@ -99,6 +99,12 @@ impl Catalog {
     pub fn digest(&self) -> Result<String> {
         Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(self)?)))
     }
+    pub fn currency(&self) -> &str {
+        &self.currency
+    }
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
     pub fn package(&self, seats: u16) -> Result<&Package> {
         self.packages
             .iter()

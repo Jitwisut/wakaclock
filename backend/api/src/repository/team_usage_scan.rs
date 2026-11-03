@@ -20,11 +20,14 @@ pub async fn observation(
             state.validate().is_ok()
                 && Some(state.revision) == row.get::<_, Option<i64>>("revision")
         });
-    let active = state.as_ref().and_then(|s| {
-        super::team_financial_guard::HintProof::capture(org, Some(s))
+    let active = if let Some(s) = state.as_ref() {
+        super::team_financial_guard::HintProof::capture(pg, org, Some(s))
+            .await
             .ok()
             .map(|_| s.covered_at(now))
-    });
+    } else {
+        None
+    };
     Ok(crate::services::team_usage_admission_worker::Observation {
         enrolled: row.get("enrolled"),
         access_active: active,
@@ -76,10 +79,13 @@ async fn claim_one(pg: &PostgresClient) -> Result<Poll> {
         .filter(|state| {
             state.validate().is_ok() && state.revision == row.get::<_, i64>("entitlement_revision")
         });
-    let financial = state
-        .as_ref()
-        .map(|s| super::team_financial_guard::HintProof::capture(org, Some(s)))
-        .transpose();
+    let financial = if let Some(s) = state.as_ref() {
+        super::team_financial_guard::HintProof::capture_in(&tx, org, Some(s))
+            .await
+            .map(Some)
+    } else {
+        Ok(None)
+    };
     if financial.is_err() {
         defer(&tx, org, "financial_guard_unconfirmed").await?;
         tx.commit().await?;

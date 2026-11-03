@@ -16,6 +16,12 @@ import type { TeamSummaryQuery } from '@/lib/wakaclock/team-summary-types';
 import { closedWeeks } from '@/lib/wakaclock/team-weeks';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
+const observedCostLabels: Record<string, string> = {
+  observed_average_merged_pr_cost: 'Average cost for fully priced received usage',
+  fully_priced_observed_prs: 'PRs used for the observed average',
+  fully_priced_observed_pr_cost: 'Received usage cost in those PRs',
+};
+
 function SummaryResult({ org, query }: { org: string; query: TeamSummaryQuery }) {
   const token = useWakaclockUserStore((s) => s.token);
   const user = useWakaclockUserStore((s) => s.userId) ?? '';
@@ -39,6 +45,14 @@ function SummaryResult({ org, query }: { org: string; query: TeamSummaryQuery })
     retry: false,
   });
   const data = !report.isError && !report.isFetching && !exportError ? report.data : undefined;
+  const observedAverage = data?.cells.some(
+    (cell) => cell.metric === 'observed_average_merged_pr_cost'
+  );
+  const cells = data?.cells.filter(
+    (cell) =>
+      !observedAverage ||
+      !['average_complete_merged_pr_cost', 'merged_prs_complete_cost'].includes(cell.metric)
+  );
   // A new read, failed projection, or action page invalidates a pending export
   // even when the signed-in account is unchanged.
   React.useLayoutEffect(() => {
@@ -91,6 +105,13 @@ function SummaryResult({ org, query }: { org: string; query: TeamSummaryQuery })
             Updated: {data.checked_at}. Measurement health:{' '}
             {data.measurement_health.join(', ') || 'unconfirmed'}.
           </p>
+          {observedAverage && (
+            <p>
+              The observed average includes only PRs whose received, confirmed linked usage before
+              merge is fully priced. Complete capture remains unconfirmed. The mean is rounded down
+              to one micro-USD; numerator and PR count preserve the exact ratio.
+            </p>
+          )}
           <div className="overflow-auto">
             <table>
               <caption>Admitted weekly metrics; unavailable values are not zero</caption>
@@ -103,10 +124,13 @@ function SummaryResult({ org, query }: { org: string; query: TeamSummaryQuery })
                 </tr>
               </thead>
               <tbody>
-                {data.cells.map((c) => (
+                {cells?.map((c) => (
                   <tr key={`${c.metric}:${c.dimension}`}>
                     <td>
-                      {c.metric} · {c.dimension}
+                      {observedCostLabels[c.metric] ?? c.metric} ·{' '}
+                      {observedCostLabels[c.metric]
+                        ? 'received linked usage before merge'
+                        : c.dimension}
                     </td>
                     <td>
                       {c.value ?? 'Unavailable'} · {c.unit}

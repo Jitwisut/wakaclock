@@ -8,8 +8,10 @@ import { Button } from '@/components/ui/button';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { WakaclockError } from '@/lib/wakaclock/client';
 import { getTeamCheckoutDestination } from '@/lib/wakaclock/team-billing-endpoints';
+import { reportTeamBillingAccessFailure } from '@/lib/wakaclock/team-billing-recovery';
 
 interface Props {
+  onAccessLost?: (error: unknown) => void;
   operation: string;
   organizationId: string;
   revision: number;
@@ -23,12 +25,15 @@ export function TeamHostedCheckoutLink(props: Props) {
     />
   );
 }
-function LinkScope({ organizationId, operation, revision }: Props) {
+function LinkScope({ onAccessLost, organizationId, operation, revision }: Props) {
   const [until, setUntil] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const request = useMutation({
     mutationFn: async () => {
-      const data = await getTeamCheckoutDestination(organizationId, operation, revision);
+      const data = await reportTeamBillingAccessFailure(
+        getTeamCheckoutDestination(organizationId, operation, revision),
+        onAccessLost
+      );
       if (
         data.operation_id !== operation ||
         !isCheckoutUrl(data.url) ||
@@ -90,8 +95,9 @@ function LinkScope({ organizationId, operation, revision }: Props) {
 function isCheckoutUrl(raw: string): boolean {
   const prefix = 'https://checkout.stripe.com/c/pay/cs_test_';
   if (typeof raw !== 'string' || raw.length > 8192 || !raw.startsWith(prefix)) return false;
-  if ([...raw].some((c) => (c.codePointAt(0) ?? 0) < 33 || (c.codePointAt(0) ?? 0) > 126))
-    {return false;}
+  if ([...raw].some((c) => (c.codePointAt(0) ?? 0) < 33 || (c.codePointAt(0) ?? 0) > 126)) {
+    return false;
+  }
   const id = raw.slice(prefix.length).split('#', 1)[0];
   return /^\w+$/.test(id);
 }

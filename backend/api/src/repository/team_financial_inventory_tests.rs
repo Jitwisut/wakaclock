@@ -36,6 +36,52 @@ fn source_inventory_json_requires_exact_contract_and_consistent_frozen_request()
     assert!(!err.contains("PRIVATE_INVENTORY_MARKER"));
 }
 
+#[test]
+fn cancellation_inventory_requires_matching_typed_contract_hashes_and_safe_errors() {
+    use crate::services::team_subscription_cancellation::{tests::fixture, ReadEvidence};
+    let (request, before) = fixture();
+    let read = ReadEvidence {
+        exchange: Uuid::now_v7(),
+        observed_at: request.accepted_at(),
+        valid_until: request.accepted_at() + chrono::Duration::seconds(60),
+        subscription: before,
+    };
+    let accepted = request.accepted_request().unwrap();
+    let original = json!({"operation_id":request.operation(),"organization_id":request.scope().organization,
+        "account_id":request.scope().account,"livemode":request.scope().live,"actor_id":request.actor(),
+        "customer_id":request.customer(),"subscription_id":request.subscription(),"frozen_request":request,
+        "request_sha256":accepted.request_hash,"idempotency_sha256":accepted.idempotency_hash,
+        "read_evidence":read,"read_sha256":read.digest(&request).unwrap(),"accepted_at":request.accepted_at().timestamp_micros()});
+    normalize("cancellation", &mut original.clone()).unwrap();
+    for (field, bad) in [
+        ("request_sha256", json!("a".repeat(64))),
+        ("customer_id", json!("cus_other")),
+        ("read_sha256", json!("b".repeat(64))),
+        ("accepted_at", json!(0)),
+        ("livemode", json!(true)),
+    ] {
+        let mut changed = original.clone();
+        changed[field] = bad;
+        assert!(normalize("cancellation", &mut changed).is_err(), "{field}");
+    }
+    for pointer in [
+        "/frozen_request/amount_minor",
+        "/read_evidence/subscription/amount_minor",
+    ] {
+        let mut changed = original.clone();
+        *changed.pointer_mut(pointer).unwrap() = json!("PRIVATE_CANCELLATION_MARKER");
+        let error = normalize("cancellation", &mut changed)
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("PRIVATE_CANCELLATION_MARKER"));
+    }
+    let mut changed = original;
+    changed["read_evidence"]["prompt"] = json!("PRIVATE_CANCELLATION_MARKER");
+    let error = normalize("cancellation", &mut changed)
+        .unwrap_err()
+        .to_string();
+    assert!(!error.contains("PRIVATE_CANCELLATION_MARKER"));
+}
 async fn transaction_observation(
     pg: &PostgresClient,
     guard: &FinancialGuard,

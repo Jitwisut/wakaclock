@@ -26,6 +26,18 @@ pub struct RegistryEntry {
     #[serde(default)]
     pub copilot_sources: BTreeMap<String, (i64, String)>,
 }
+/// One atomic bundle: no total is registered before its average/count support
+/// has passed historical inference checks. None is unknown legacy evidence.
+pub struct CostPublication<'a> {
+    pub org: Uuid,
+    pub week: NaiveDate,
+    pub key: &'a str,
+    pub generation: i64,
+    pub fingerprint: &'a str,
+    pub contributors: &'a BTreeSet<Uuid>,
+    pub facts: Option<&'a BTreeSet<String>>,
+    pub equations: Option<&'a crate::services::team_cost_equations::Equations>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Disposition {
     pub provider: String,
@@ -121,7 +133,7 @@ impl TeamTrustRepository {
         let row=self.postgres.query_one("SELECT r.generation,m.retention_before FROM team_rollouts r LEFT JOIN team_privacy_markers m USING(organization_id) WHERE r.organization_id=$1", &[&org]).await?;
         let access=self.postgres.query_one("SELECT jsonb_build_object('consents',COALESCE((SELECT jsonb_agg(jsonb_build_object('user',c.user_id,'version',c.consent_version,'aggregate',c.share_aggregate,'individual',c.share_individual,'aggregate_from',c.aggregate_from,'individual_from',c.individual_from) ORDER BY c.user_id) FROM organization_analytics_consents c WHERE c.organization_id=$1),'[]'::jsonb), 'members',COALESCE((SELECT jsonb_agg(to_jsonb(m) ORDER BY m.user_id) FROM organization_members m WHERE m.organization_id=$1),'[]'::jsonb), 'scopes',COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.repository_id) FROM team_repository_scopes s WHERE s.organization_id=$1),'[]'::jsonb), 'project_bindings',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.user_id,b.project_id) FROM team_member_project_bindings b WHERE b.organization_id=$1),'[]'::jsonb), 'copilot_membership',COALESCE((SELECT jsonb_agg(to_jsonb(h) ORDER BY id) FROM team_copilot_membership_intervals h WHERE h.organization_id=$1),'[]'::jsonb), 'user_state',COALESCE((SELECT jsonb_agg(jsonb_build_object('user',u.id,'active',u.is_active,'deleted',u.deleted_at) ORDER BY u.id) FROM users u JOIN organization_members m ON m.user_id=u.id WHERE m.organization_id=$1),'[]'::jsonb), 'github_identity',COALESCE((SELECT jsonb_agg(jsonb_build_object('user',g.user_id,'id',g.github_user_id,'verified',g.verified_at,'revoked',g.revoked_at) ORDER BY g.user_id) FROM team_github_identities g JOIN organization_members m ON m.user_id=g.user_id WHERE m.organization_id=$1),'[]'::jsonb), 'github_installations',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',installation_id,'account',account_id,'status',status,'generation',generation) ORDER BY installation_id) FROM team_github_installations WHERE organization_id=$1),'[]'::jsonb))", &[&org]).await?.get::<_,serde_json::Value>(0);
         let weeks=self.postgres.query("SELECT DISTINCT week_start FROM team_weekly_publications WHERE organization_id=$1 ORDER BY week_start", &[&org]).await?.iter().map(|r|r.get(0)).collect();
-        let rows=self.postgres.query("SELECT week_start,view_key,generation,fingerprint,contributors,invalidated_at,fact_membership,report_family,window_start,window_end,calculation_version,source_revisions FROM team_weekly_publications WHERE organization_id=$1 ORDER BY week_start,view_key",&[&org]).await?;
+        let rows=self.postgres.query("SELECT week_start,view_key,generation,fingerprint,contributors,invalidated_at,fact_membership,report_family,window_start,window_end,calculation_version,source_revisions,cost_equations FROM team_weekly_publications WHERE organization_id=$1 ORDER BY week_start,view_key",&[&org]).await?;
         let mut publication_marks: BTreeMap<NaiveDate, BTreeSet<String>> = BTreeMap::new();
         let mut invalidated_weeks = BTreeSet::new();
         for row in rows {
@@ -147,6 +159,11 @@ impl TeamTrustRepository {
                     row.get::<_, Option<String>>(10),
                     row.get::<_, Option<serde_json::Value>>(11),
                 ))?);
+            }
+            // Absent legacy proof keeps its original marker bytes. New support
+            // is part of the independent restore proof; never rebuild it later.
+            if let Some(equations) = row.get::<_, Option<serde_json::Value>>(12) {
+                marker.extend(serde_json::to_vec(&equations)?);
             }
             publication_marks
                 .entry(week)
@@ -228,6 +245,40 @@ impl TeamTrustRepository {
         contributors: &BTreeSet<Uuid>,
         facts: Option<&BTreeSet<String>>,
     ) -> Result<bool> {
+        self.release_cost_publication(CostPublication {
+            org,
+            week,
+            key,
+            generation,
+            fingerprint,
+            contributors,
+            facts,
+            equations: None,
+        })
+        .await
+    }
+    pub async fn release_cost_publication(&self, publication: CostPublication<'_>) -> Result<bool> {
+        let CostPublication {
+            org,
+            week,
+            key,
+            generation,
+            fingerprint,
+            contributors,
+            facts,
+            equations,
+        } = publication;
+        if let Some(equations) = equations {
+            equations.validate(facts.context("cost_equation_facts_missing")?)?;
+            ensure!(
+                equations
+                    .counts
+                    .values()
+                    .flat_map(|prs| prs.values())
+                    .all(|people| people.is_subset(contributors)),
+                "cost_equation_contributors_unconfirmed"
+            );
+        }
         let mut client = self.postgres.transaction_client().await?;
         let tx = client.transaction().await?;
         let current: i64 = tx
@@ -276,7 +327,7 @@ impl TeamTrustRepository {
             return Ok(false);
         }
         if let Some(facts) = facts {
-            let history = tx.query("SELECT fingerprint,contributors,fact_membership FROM team_weekly_publications WHERE organization_id=$1", &[&org]).await?;
+            let history = tx.query("SELECT fingerprint,contributors,fact_membership,cost_equations,report_family FROM team_weekly_publications WHERE organization_id=$1", &[&org]).await?;
             for row in history {
                 let previous = row
                     .get::<_, Option<Vec<String>>>("fact_membership")
@@ -295,6 +346,46 @@ impl TeamTrustRepository {
                 ) {
                     return Ok(false);
                 }
+                let previous_equations = row
+                    .get::<_, Option<serde_json::Value>>("cost_equations")
+                    .map(serde_json::from_value::<crate::services::team_cost_equations::Equations>)
+                    .transpose()?;
+                if let Some(old) = &previous_equations {
+                    old.validate(
+                        previous
+                            .as_ref()
+                            .context("cost_equation_history_facts_missing")?,
+                    )?;
+                }
+                match (equations, previous_equations.as_ref()) {
+                    (Some(new), Some(old))
+                        if !new.compatible(
+                            old,
+                            row.get::<_, String>("fingerprint") == fingerprint,
+                        ) =>
+                    {
+                        return Ok(false)
+                    }
+                    (Some(_), None)
+                        if row.get::<_, Option<String>>("report_family").as_deref()
+                            != Some("copilot_daily_weekly")
+                            && !people.is_disjoint(contributors) =>
+                    {
+                        return Ok(false)
+                    }
+                    (None, Some(_)) if !people.is_disjoint(contributors) => return Ok(false),
+                    _ => (),
+                }
+            }
+        } else {
+            let history = tx.query("SELECT contributors FROM team_weekly_publications WHERE organization_id=$1 AND cost_equations IS NOT NULL", &[&org]).await?;
+            if history.iter().any(|r| {
+                !r.get::<_, Vec<Uuid>>(0)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>()
+                    .is_disjoint(contributors)
+            }) {
+                return Ok(false);
             }
         }
         let timezone: String = tx
@@ -315,7 +406,13 @@ impl TeamTrustRepository {
         let to = DateTime::from_timestamp(to as i64, 0).context("weekly window end")?;
         let membership = facts.map(|f| f.iter().cloned().collect::<Vec<_>>());
         let people = contributors.iter().copied().collect::<Vec<_>>();
-        tx.execute("INSERT INTO team_weekly_publications(organization_id,week_start,view_key,generation,fingerprint,contributors,fact_membership,report_family,window_start,window_end,calculation_version) VALUES($1,$2,$3,$4,$5,$6,$7,'team_weekly_cost',$8,$9,'team-weekly-v1') ON CONFLICT DO NOTHING", &[&org,&week,&key,&generation,&fingerprint,&people,&membership,&from,&to]).await?;
+        let equations = equations.map(serde_json::to_value).transpose()?;
+        let version = if equations.is_some() {
+            "team-weekly-cost-equations-v2"
+        } else {
+            "team-weekly-v1"
+        };
+        tx.execute("INSERT INTO team_weekly_publications(organization_id,week_start,view_key,generation,fingerprint,contributors,fact_membership,report_family,window_start,window_end,calculation_version,cost_equations) VALUES($1,$2,$3,$4,$5,$6,$7,'team_weekly_cost',$8,$9,$10,$11) ON CONFLICT DO NOTHING", &[&org,&week,&key,&generation,&fingerprint,&people,&membership,&from,&to,&version,&equations]).await?;
         tx.execute("UPDATE team_report_policies SET locked_at=COALESCE(locked_at,now()) WHERE organization_id=$1", &[&org]).await?;
         tx.commit().await?;
         Ok(true)
@@ -752,7 +849,7 @@ impl TeamTrustRepository {
   };
         if phase >= 16 {
             tx.execute("INSERT INTO team_privacy_markers(organization_id,retention_before) VALUES($1,$2) ON CONFLICT(organization_id) DO UPDATE SET retention_before=GREATEST(team_privacy_markers.retention_before,EXCLUDED.retention_before),changed_at=now()", &[&org,&cutoff]).await?;
-            tx.execute("UPDATE team_weekly_publications SET invalidated_at=COALESCE(invalidated_at,now()),contributors='{}',fingerprint='expired',projection=NULL,source_revisions=NULL WHERE organization_id=$1 AND week_start<$2::timestamptz::date", &[&org,&cutoff]).await?;
+            tx.execute("UPDATE team_weekly_publications SET invalidated_at=COALESCE(invalidated_at,now()),contributors='{}',fingerprint='expired',projection=NULL,source_revisions=NULL,cost_equations=NULL WHERE organization_id=$1 AND week_start<$2::timestamptz::date", &[&org,&cutoff]).await?;
             tx.execute("UPDATE team_cleanup_jobs SET completed_at=$2,cutoff=NULL,phase=0,lease_token=NULL,lease_until=NULL,error_code=NULL WHERE organization_id=$1", &[&org,&now]).await?;
         } else {
             tx.execute("UPDATE team_cleanup_jobs SET phase=phase+$2,lease_token=NULL,lease_until=NULL,error_code=NULL WHERE organization_id=$1", &[&org,&(if count<100 {1}else{0})]).await?;

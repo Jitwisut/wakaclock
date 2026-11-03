@@ -125,6 +125,27 @@ pub fn cost_cells(r: &TeamInsights) -> Vec<Cell> {
             &r.merged_pr_cost.complete_prs,
             prices,
         ),
+        metric(
+            "observed_average_merged_pr_cost",
+            "received_facts_until_merge_floor_microusd",
+            "micro_usd",
+            &r.merged_pr_cost.observed_average_microusd,
+            prices,
+        ),
+        metric(
+            "fully_priced_observed_prs",
+            "received_facts_until_merge",
+            "pull_requests",
+            &r.merged_pr_cost.fully_priced_observed_prs,
+            prices,
+        ),
+        metric(
+            "fully_priced_observed_pr_cost",
+            "received_facts_until_merge",
+            "micro_usd",
+            &r.merged_pr_cost.fully_priced_observed_cost_microusd,
+            prices,
+        ),
     ];
     rows.extend(r.provider_breakdown.iter().map(|p| {
         metric(

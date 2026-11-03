@@ -8,7 +8,7 @@ use crate::{
     services::{
         authorization::{AuthorizationDenied, AuthorizationService},
         team_financial_ingress as ingress,
-        team_financial_source::Scope,
+        team_financial_source::{AcceptedRequest, ProviderIdentity, Scope},
         team_financial_transaction::{CustomerProjection, Writer},
     },
 };
@@ -50,25 +50,85 @@ pub(super) async fn complete(
     }
     let mut db = repo.postgres_for_resolution().transaction_client().await?;
     let tx = db.transaction().await?;
+    apply(
+        tx,
+        guard,
+        &scope,
+        original.clone(),
+        Some(c.lease_id),
+        customer,
+    )
+    .await?;
+    // A historical confirmation is not a response grant.
+    current(repo, c, customer, guard).await
+}
+
+/// Reconcile an accepted create whose provider result survived a process crash.
+/// No claim is minted and no provider request is made. The expired attempt can
+/// only produce evidence-only SQL; a fresh Owner-authorized lookup is required.
+pub(super) async fn resume(
+    repo: &CustomerRepository,
+    tx: deadpool_postgres::Transaction<'_>,
+    scope: Scope,
+    operation: Uuid,
+) -> Result<()> {
+    let guard = repo
+        .guard_for_resolution()?
+        .context("financial_guard_configuration_unconfirmed")?;
+    let state = guard.read()?.snapshot;
+    let entry = state
+        .sources
+        .scopes
+        .get(&scope.key()?)
+        .context("financial_source_uninitialized")?;
+    let outcome = entry
+        .outcomes
+        .values()
+        .find(|o| o.operation == operation && entry.unapplied_outcomes.contains(&o.id))
+        .context("financial_resolution_no_unapplied_outcome")?;
+    let Some(ProviderIdentity::Customer { customer }) = &outcome.identity else {
+        anyhow::bail!("financial_resolution_customer_unconfirmed");
+    };
+    let original = entry
+        .accepted
+        .get(&operation)
+        .context("financial_customer_request_unconfirmed")?
+        .clone();
+    apply(tx, guard, &scope, original, None, customer).await?;
+    Ok(())
+}
+
+async fn apply(
+    tx: deadpool_postgres::Transaction<'_>,
+    guard: &FinancialGuard,
+    scope: &Scope,
+    original: AcceptedRequest,
+    live_lease: Option<Uuid>,
+    customer: &str,
+) -> Result<()> {
+    let account = ingress::Scope {
+        account: scope.account.clone(),
+        live: scope.live,
+    };
     let write = NormalWrite::begin_customer_resolution(
         tx,
         guard,
         &account,
-        &scope,
-        c.operation_id,
+        scope,
+        original.operation,
         customer,
     )
     .await?;
     ensure!(
-        write.customer_selection()?.request() == original,
+        write.customer_selection()?.request() == &original,
         "financial_customer_claim_identity_changed"
     );
     // Participant billing locks are already sorted/held before any Owner or row
     // lock. No account/org/User locks span the preceding provider request.
     let allowed = match AuthorizationService::require_locked_billing_owner(
         write.sql(),
-        c.actor,
-        c.organization_id,
+        original.actor,
+        scope.organization,
     )
     .await
     {
@@ -76,11 +136,10 @@ pub(super) async fn complete(
         Err(e) if e.downcast_ref::<AuthorizationDenied>().is_some() => false,
         Err(e) => return Err(e),
     };
-    let row=write.sql().query_opt("SELECT requested_by,revision,disposition,customer_id,lease_id,lease_until,lookup_only,created_at FROM team_stripe_customer_operations WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4 FOR UPDATE",&[&c.operation_id,&c.organization_id,&c.account_id,&c.livemode]).await?.context("financial_customer_request_missing")?;
+    let row=write.sql().query_opt("SELECT requested_by,revision,disposition,customer_id,lease_id,lease_until,lookup_only,created_at FROM team_stripe_customer_operations WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4 FOR UPDATE",&[&original.operation,&scope.organization,&scope.account,&scope.live]).await?.context("financial_customer_request_missing")?;
     let revision: i64 = row.get(1);
     ensure!(
         row.get::<_, Uuid>(0) == original.actor
-            && revision == c.revision
             && revision == 1
             && row.get::<_, String>(2) == "pending"
             && row.get::<_, Option<String>>(3).is_none()
@@ -96,42 +155,47 @@ pub(super) async fn complete(
         .await?
         .get(0);
     ensure!(
-        !(lease.is_some() && lease != Some(c.lease_id) && deadline.is_some_and(|t| t > now)),
+        !(lease.is_some() && lease != live_lease && deadline.is_some_and(|t| t > now)),
         "financial_customer_newer_claim_active"
     );
-    let (projection, disposition, error, final_deadline) =
-        if allowed && lease == Some(c.lease_id) && deadline.is_some_and(|t| t > now) {
-            (
-                CustomerProjection::Verified { lease: c.lease_id },
-                "verified",
-                None,
-                deadline,
-            )
-        } else {
-            (
-                CustomerProjection::EvidenceOnly {
-                    owner_changed: !allowed,
-                },
-                if allowed {
-                    "recovery_required"
-                } else {
-                    "owner_changed"
-                },
-                Some(if allowed {
-                    "customer_lease_recovery_required"
-                } else {
-                    "owner_authorization_changed"
-                }),
-                None,
-            )
-        };
+    let (projection, disposition, error, final_deadline) = if allowed
+        && live_lease.is_some()
+        && lease == live_lease
+        && deadline.is_some_and(|t| t > now)
+    {
+        (
+            CustomerProjection::Verified {
+                lease: live_lease.context("financial_customer_lease_unconfirmed")?,
+            },
+            "verified",
+            None,
+            deadline,
+        )
+    } else {
+        (
+            CustomerProjection::EvidenceOnly {
+                owner_changed: !allowed,
+            },
+            if allowed {
+                "recovery_required"
+            } else {
+                "owner_changed"
+            },
+            Some(if allowed {
+                "customer_lease_recovery_required"
+            } else {
+                "owner_authorization_changed"
+            }),
+            None,
+        )
+    };
     let next = revision
         .checked_add(1)
         .context("financial_customer_revision_overflow")?;
-    write.sql().execute("UPDATE team_stripe_customer_operations SET revision=$2,customer_id=$3,disposition=$4,last_error_code=$5,observed_at=$6,lease_id=NULL,lease_until=NULL WHERE operation_id=$1",&[&c.operation_id,&next,&customer,&disposition,&error,&now]).await?;
+    write.sql().execute("UPDATE team_stripe_customer_operations SET revision=$2,customer_id=$3,disposition=$4,last_error_code=$5,observed_at=$6,lease_id=NULL,lease_until=NULL WHERE operation_id=$1",&[&original.operation,&next,&customer,&disposition,&error,&now]).await?;
     let selected = write.customer_selection()?;
     let writer = Writer::CustomerResolution {
-        organization: c.organization_id,
+        organization: scope.organization,
         request: selected.request().clone(),
         customer: customer.into(),
         outcomes: selected.outcomes().clone(),
@@ -142,9 +206,7 @@ pub(super) async fn complete(
     write
         .commit_customer_resolution(writer, final_deadline)
         .await?;
-    // A historical confirmation is not a response grant. Re-read current Owner,
-    // canonical source and SQL state independently before acknowledging usable.
-    current(repo, c, customer, guard).await
+    Ok(())
 }
 async fn current(
     repo: &CustomerRepository,

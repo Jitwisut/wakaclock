@@ -49,7 +49,12 @@ pub mod summary;
 pub mod team;
 pub mod team_billing;
 pub mod team_insights;
+pub mod team_organization_birth;
+pub mod team_pilot;
 pub mod team_release;
+pub mod team_stripe_portal;
+pub mod team_subscription_cancellation;
+pub mod team_trial;
 pub mod team_webhooks;
 pub mod user;
 pub mod vcs;
@@ -146,6 +151,7 @@ pub mod team_github_redelivery;
 
 pub mod team_context;
 
+pub mod team_cost_equations;
 pub mod team_merged_cost;
 
 pub mod copilot_daily;
@@ -166,7 +172,9 @@ pub mod team_stripe_invoice;
 pub mod team_stripe_catalog;
 
 pub mod team_stripe_checkout;
+pub mod team_stripe_checkout_receipt;
 
+pub mod team_stripe_change_payment;
 pub mod team_stripe_payment;
 
 pub mod team_analytics_entitlement;

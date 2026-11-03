@@ -31,8 +31,14 @@ export interface TeamInsights {
   measurement_health: string[];
   merged_pr_cost?: {
     average_microusd: TeamMetric;
+    average_rounding?: string;
     calculation_version: string;
+    capture_completeness?: string;
     complete_prs: TeamMetric;
+    fully_priced_observed_cost_microusd?: TeamMetric;
+    fully_priced_observed_prs?: TeamMetric;
+    observed_average_microusd?: TeamMetric;
+    observed_cost_scope?: string;
     pricing_versions: string[];
     with_cost: TeamMetric;
     without_cost: TeamMetric;

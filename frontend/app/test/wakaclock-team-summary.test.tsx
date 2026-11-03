@@ -111,6 +111,23 @@ it('keeps exact decimal, zero and unknown separate; actions are current metadata
   expect(screen.getByText(/not historical task status/)).toBeTruthy();
   expect(screen.getByText(/capture_unconfirmed/)).toBeTruthy();
 });
+it('shows the explicit received-cost average and hides deprecated completeness aliases', async () => {
+  const cell = data.cells[0];
+  mocks.summary.mockResolvedValue({
+    ...data,
+    cells: [
+      { ...cell, metric: 'average_complete_merged_pr_cost', value: null },
+      { ...cell, metric: 'merged_prs_complete_cost', value: null },
+      { ...cell, metric: 'observed_average_merged_pr_cost', value: '1000' },
+      { ...cell, metric: 'fully_priced_observed_prs', value: '5', unit: 'pull_requests' },
+    ],
+  });
+  mount();
+  await screen.findByText(/Average cost for fully priced received usage/);
+  expect(screen.getByText(/Complete capture remains unconfirmed/)).toBeTruthy();
+  expect(screen.getByText(/PRs used for the observed average/)).toBeTruthy();
+  expect(screen.queryByText(/average_complete_merged_pr_cost/)).toBeNull();
+});
 it('uses Copilot UTC and filtered pages while exporting the whole scope', async () => {
   mocks.summary.mockResolvedValue({ ...data, actions_next_cursor: 'page-2' });
   mount();

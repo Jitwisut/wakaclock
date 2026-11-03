@@ -2713,3 +2713,964 @@ async fn financial_source_customer_recovery_authorization_original_identity_atom
         f.close().await;
     }
 }
+
+#[tokio::test]
+#[ignore = "requires isolated POSTGRES_TEST_URL"]
+async fn financial_customer_lookup_receipts_durable_dedup_tokens_and_atomic_conflicts() {
+    use source::{CustomerLookupAttempt as Attempt, CustomerLookupResult as ResultKind};
+    let url = std::env::var("POSTGRES_TEST_URL").unwrap();
+    assert_eq!(
+        url.parse::<tokio_postgres::Config>().unwrap().get_dbname(),
+        Some("atoaxis_stripe_test")
+    );
+    let pg = std::sync::Arc::new(
+        PostgresClient::connect(&PostgresConfig {
+            url: Some(url),
+            max_connections: 8,
+        })
+        .await
+        .unwrap(),
+    );
+    pg.migrate().await.unwrap();
+    for mode in 0..6 {
+        let (f, actor, recovery) = customer_request_fixture(pg.clone(), true).await;
+        let scope = &f.scopes[0];
+        let key = scope.key().unwrap();
+        let org = scope.organization;
+        let repo = f.repository.customers();
+        let op = repo
+            .request(actor, org, &f.account.account, false, true)
+            .await
+            .unwrap()
+            .unwrap()
+            .operation_id;
+        let claim = repo
+            .claim(&f.account.account, false)
+            .await
+            .unwrap()
+            .unwrap();
+        claim
+            .retain_provider_result(Some("cus_lookup_receipt"), true)
+            .unwrap();
+        pg.execute("UPDATE team_stripe_customer_operations SET lease_until=clock_timestamp()-interval '1 second' WHERE operation_id=$1",&[&op]).await.unwrap();
+        assert!(!repo.complete(&claim, "cus_lookup_receipt").await.unwrap());
+        repo.authorize_recovery(recovery, org, &f.account.account, false, op, 2)
+            .await
+            .unwrap();
+        let before = f.ledger.guard.read().unwrap();
+        let request = before.snapshot.sources.scopes[&key].accepted[&op].clone();
+        let writer = before
+            .snapshot
+            .transactions
+            .groups
+            .values()
+            .filter(|g| g.committed)
+            .find_map(|g| match &g.proposal.writer {
+                Some(w @ transaction::Writer::CustomerRecoveryAuthorization { .. }) => Some(w),
+                _ => None,
+            })
+            .unwrap();
+        let attempt = Attempt {
+            actor: recovery,
+            revision: 3,
+            authorization_hash: crate::services::team_financial_guard::fingerprint(writer).unwrap(),
+            lease: Uuid::now_v7(),
+        };
+        let token = inventory::account_source_token(&f.ledger.guard, &f.account).unwrap();
+        let sql_before: serde_json::Value = pg
+            .query_one(
+                "SELECT to_jsonb(c) FROM team_stripe_customer_operations c WHERE operation_id=$1",
+                &[&op],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        let result = match mode {
+            0 | 5 => ResultKind::Verified {
+                customer: "cus_lookup_receipt".into(),
+                outcome: Uuid::nil(),
+            },
+            1 => ResultKind::NotFound,
+            2 => ResultKind::Ambiguous {
+                candidates: vec!["cus_lookup_receipt".into(), "cus_second_lookup".into()],
+                has_more: false,
+            },
+            3 => ResultKind::Deleted {
+                customer: "cus_lookup_receipt".into(),
+            },
+            _ => ResultKind::Invalid {
+                customer: Some("cus_invalid_lookup".into()),
+            },
+        };
+        let mut used = attempt.clone();
+        if mode == 5 {
+            used.authorization_hash = "f".repeat(64);
+        }
+        let id = f
+            .ledger
+            .guard
+            .retain_customer_lookup(scope.clone(), &request, used.clone(), result.clone(), true)
+            .unwrap()
+            .unwrap();
+        let observed = f.ledger.guard.read().unwrap();
+        assert_eq!(observed.sequence, before.sequence + 1);
+        let entry = &observed.snapshot.sources.scopes[&key];
+        assert_eq!(
+            entry.outcomes.len(),
+            1,
+            "positive lookup reuses original customer fact"
+        );
+        assert!(entry.unapplied_outcomes.is_empty());
+        assert_eq!(entry.customer_lookups.len(), 1);
+        assert_eq!(entry.customer_lookups[&id].authorization_revision, 3);
+        assert_eq!(entry.frozen.is_empty(), matches!(mode, 0 | 1 | 3));
+        assert_ne!(
+            inventory::account_source_token(&f.ledger.guard, &f.account).unwrap(),
+            token
+        );
+        assert_eq!(
+            f.ledger
+                .guard
+                .retain_customer_lookup(scope.clone(), &request, used.clone(), result.clone(), true)
+                .unwrap()
+                .unwrap(),
+            id
+        );
+        let duplicate = f.ledger.guard.read().unwrap();
+        assert_eq!(duplicate.sequence, observed.sequence);
+        assert_eq!(duplicate.chain, observed.chain);
+        assert_eq!(duplicate.snapshot, observed.snapshot);
+        let reopened = crate::infrastructure::team_financial_guard::FinancialGuard::new(
+            f.ledger.path().to_owned(),
+        )
+        .unwrap()
+        .pin_namespace(f.ledger.guard.namespace().unwrap())
+        .unwrap();
+        let restored = reopened.read().unwrap();
+        assert_eq!(restored.sequence, observed.sequence);
+        assert_eq!(restored.chain, observed.chain);
+        assert_eq!(restored.snapshot, observed.snapshot);
+        assert_eq!(
+            pg.query_one(
+                "SELECT to_jsonb(c) FROM team_stripe_customer_operations c WHERE operation_id=$1",
+                &[&op]
+            )
+            .await
+            .unwrap()
+            .get::<_, serde_json::Value>(0),
+            sql_before
+        );
+        if mode == 0 {
+            let mut next = attempt.clone();
+            next.lease = Uuid::now_v7();
+            let second = f
+                .ledger
+                .guard
+                .retain_customer_lookup(scope.clone(), &request, next, result.clone(), true)
+                .unwrap()
+                .unwrap();
+            assert_ne!(second, id);
+            let state = f.ledger.guard.read().unwrap().snapshot;
+            let e = &state.sources.scopes[&key];
+            assert_eq!(e.outcomes.len(), 1);
+            assert_eq!(e.customer_lookups.len(), 2);
+            assert!(e.frozen.is_empty());
+            assert!(
+                inventory::preview(&pg, &f.ledger.guard, scope)
+                    .await
+                    .unwrap()
+                    .independent_source_matches
+            );
+            let before = f.ledger.guard.read().unwrap();
+            f.ledger
+                .guard
+                .retain_customer_lookup(
+                    scope.clone(),
+                    &request,
+                    attempt,
+                    ResultKind::NotFound,
+                    true,
+                )
+                .unwrap();
+            let after = f.ledger.guard.read().unwrap();
+            assert_eq!(after.sequence, before.sequence + 1);
+            let e = &after.snapshot.sources.scopes[&key];
+            assert_eq!(e.customer_lookups.len(), 3);
+            assert!(e
+                .frozen
+                .contains(&source::FreezeReason::LookupObservationConflict));
+            assert_eq!(e.outcomes.len(), 1);
+            assert!(e.unapplied_outcomes.is_empty());
+        }
+        f.close().await;
+    }
+    // A guarded legacy lookup must not self-initialize a source, but must retain
+    // a response when a reviewed footprint appears while its HTTP is in flight.
+    let (f, actor, _) = customer_request_fixture(pg.clone(), false).await;
+    let scope = &f.scopes[0];
+    let org = scope.organization;
+    let repo = f.repository.customers();
+    let op = repo
+        .request(actor, org, &f.account.account, false, true)
+        .await
+        .unwrap()
+        .unwrap()
+        .operation_id;
+    pg.execute(
+        "UPDATE team_stripe_customer_operations SET lookup_only=true WHERE operation_id=$1",
+        &[&op],
+    )
+    .await
+    .unwrap();
+    let claim = repo
+        .claim(&f.account.account, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let before = f.ledger.guard.read().unwrap();
+    claim
+        .retain_lookup_observation(ResultKind::NotFound)
+        .unwrap();
+    assert_eq!(f.ledger.guard.read().unwrap().sequence, before.sequence);
+    assert!(f
+        .ledger
+        .guard
+        .read()
+        .unwrap()
+        .snapshot
+        .sources
+        .scopes
+        .is_empty());
+    let at = pg
+        .query_one(
+            "SELECT created_at FROM team_stripe_customer_operations WHERE operation_id=$1",
+            &[&op],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let request =
+        crate::services::team_stripe_customer_request::Request::new(scope.clone(), op, actor)
+            .unwrap()
+            .accepted(at)
+            .unwrap();
+    f.seed_sources_accepted(Some(&request)).await;
+    let before = f.ledger.guard.read().unwrap();
+    claim
+        .retain_lookup_observation(ResultKind::NotFound)
+        .unwrap();
+    let after = f.ledger.guard.read().unwrap();
+    assert_eq!(after.sequence, before.sequence + 1);
+    let e = &after.snapshot.sources.scopes[&scope.key().unwrap()];
+    assert_eq!(e.customer_lookups.len(), 1);
+    assert!(e
+        .frozen
+        .contains(&source::FreezeReason::RequestIdentityConflict));
+    assert_eq!(
+        e.customer_lookups
+            .values()
+            .next()
+            .unwrap()
+            .authorization_revision,
+        1
+    );
+    f.close().await;
+
+    // A receipt must not leave a second ownership alias in the resolver's
+    // before-view when its new positive Outcome is deliberately excluded.
+    let (f, actor, recovery) = customer_request_fixture(pg.clone(), true).await;
+    let scope = &f.scopes[0];
+    let org = scope.organization;
+    let repo = f.repository.customers();
+    let op = repo
+        .request(actor, org, &f.account.account, false, true)
+        .await
+        .unwrap()
+        .unwrap()
+        .operation_id;
+    repo.claim(&f.account.account, false)
+        .await
+        .unwrap()
+        .unwrap();
+    pg.execute(
+        "UPDATE organization_members SET role='viewer' WHERE organization_id=$1 AND user_id=$2",
+        &[&org, &actor],
+    )
+    .await
+    .unwrap();
+    pg.execute("UPDATE team_stripe_customer_operations SET lease_until=clock_timestamp()-interval '1 second' WHERE operation_id=$1",&[&op]).await.unwrap();
+    assert!(repo
+        .claim(&f.account.account, false)
+        .await
+        .unwrap()
+        .is_none());
+    repo.authorize_recovery(recovery, org, &f.account.account, false, op, 2)
+        .await
+        .unwrap();
+    let state = f.ledger.guard.read().unwrap().snapshot;
+    let request = state.sources.scopes[&scope.key().unwrap()].accepted[&op].clone();
+    let writer = state
+        .transactions
+        .groups
+        .values()
+        .find_map(|g| match &g.proposal.writer {
+            Some(w @ transaction::Writer::CustomerRecoveryAuthorization { .. }) if g.committed => {
+                Some(w)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let mut attempt = Attempt {
+        actor: recovery,
+        revision: 3,
+        authorization_hash: crate::services::team_financial_guard::fingerprint(writer).unwrap(),
+        lease: Uuid::now_v7(),
+    };
+    f.ledger
+        .guard
+        .retain_customer_lookup(
+            scope.clone(),
+            &request,
+            attempt.clone(),
+            ResultKind::Deleted {
+                customer: "cus_new_lookup_alias".into(),
+            },
+            true,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        inventory::preview(&pg, &f.ledger.guard, scope)
+            .await
+            .unwrap()
+            .independent_source_matches
+    );
+    let now = Utc::now();
+    let mut body: serde_json::Value =
+        serde_json::from_slice(&f.body("evt_new_lookup_alias", true, now)).unwrap();
+    body["data"]["object"]["customer"] = serde_json::json!("cus_new_lookup_alias");
+    let body = serde_json::to_vec(&body).unwrap();
+    f.receiver
+        .accept(&body, &signed(&body, now), now)
+        .await
+        .unwrap();
+    attempt.lease = Uuid::now_v7();
+    f.ledger
+        .guard
+        .retain_customer_lookup(
+            scope.clone(),
+            &request,
+            attempt,
+            ResultKind::Verified {
+                customer: "cus_new_lookup_alias".into(),
+                outcome: Uuid::nil(),
+            },
+            true,
+        )
+        .unwrap()
+        .unwrap();
+    let mut db = pg.transaction_client().await.unwrap();
+    let tx = db.transaction().await.unwrap();
+    let write = super::team_financial_transaction::NormalWrite::begin_customer_resolution(
+        tx,
+        &f.ledger.guard,
+        &f.account,
+        scope,
+        op,
+        "cus_new_lookup_alias",
+    )
+    .await
+    .unwrap();
+    write.rollback().await.unwrap();
+    assert!(pg
+        .query_one(
+            "SELECT customer_id FROM team_stripe_customer_operations WHERE operation_id=$1",
+            &[&op]
+        )
+        .await
+        .unwrap()
+        .get::<_, Option<String>>(0)
+        .is_none());
+    f.close().await;
+}
+
+fn source_lookup_http(
+    operation: Uuid,
+    search: bool,
+    kind: &str,
+) -> (u16, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let kind = kind.to_owned();
+    let worker = std::thread::spawn(move || {
+        let customer = serde_json::json!({"object":"customer","id":"cus_runtime_lookup","livemode":false,"metadata":{"atoaxis_operation":operation},"description":"PRIVATE_LOOKUP_RUNTIME_DO_NOT_STORE"});
+        let requests = if search && kind != "not_found" && kind != "rate_limit" {
+            2
+        } else {
+            1
+        };
+        for index in 0..requests {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0; 1024];
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                assert!(n > 0);
+                request.extend_from_slice(&buf[..n]);
+                if request.windows(4).any(|v| v == b"\r\n\r\n") {
+                    break;
+                }
+                assert!(request.len() < 8192);
+            }
+            let request = String::from_utf8(request).unwrap();
+            assert!(request.starts_with("GET /v1/customers"));
+            assert!(!request.starts_with("POST"));
+            let is_search = search && index == 0;
+            assert_eq!(request.contains("/customers/search?"), is_search);
+            let (status, body) = if kind == "rate_limit" {
+                (
+                    429,
+                    serde_json::json!({"error":{"type":"rate_limit_error"}}),
+                )
+            } else if is_search {
+                (
+                    200,
+                    serde_json::json!({"object":"search_result","data":if kind=="not_found"{vec![]}else{vec![customer.clone()]},"has_more":false}),
+                )
+            } else {
+                match kind.as_str() {
+                    "not_found" => (
+                        404,
+                        serde_json::json!({"error":{"type":"invalid_request_error"}}),
+                    ),
+                    "deleted" => (
+                        200,
+                        serde_json::json!({"id":"cus_runtime_lookup","deleted":true}),
+                    ),
+                    _ => (200, customer.clone()),
+                }
+            };
+            let bytes = serde_json::to_vec(&body).unwrap();
+            write!(stream,"HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nRetry-After: 60\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",bytes.len()).unwrap();
+            stream.write_all(&bytes).unwrap();
+        }
+    });
+    (port, worker)
+}
+
+#[tokio::test]
+#[ignore = "requires isolated POSTGRES_TEST_URL"]
+async fn financial_source_customer_lookup_current_receipt_projection_restart_and_faults() {
+    use crate::infrastructure::{
+        stripe::{CustomerLookup, StripeClient},
+        team_financial_guard::{CommercialDeployment, FinancialGuard},
+    };
+    let url = std::env::var("POSTGRES_TEST_URL").unwrap();
+    assert_eq!(
+        url.parse::<tokio_postgres::Config>().unwrap().get_dbname(),
+        Some("atoaxis_stripe_test")
+    );
+    let pg = std::sync::Arc::new(
+        PostgresClient::connect(&PostgresConfig {
+            url: Some(url),
+            max_connections: 8,
+        })
+        .await
+        .unwrap(),
+    );
+    pg.migrate().await.unwrap();
+    for mode in 0..18 {
+        let (f, actor, recovery) =
+            customer_request_fixture(pg.clone(), !matches!(mode, 16 | 17)).await;
+        if matches!(mode, 16 | 17) {
+            pg.execute("INSERT INTO team_stripe_bindings(organization_id,account_id,livemode,customer_id,subscription_id,enabled) VALUES($1,$2,false,'cus_other_runtime_lookup','sub_other_runtime_lookup',true)",&[&f.scopes[1].organization,&f.account.account]).await.unwrap();
+            f.seed_sources().await;
+        }
+        let scope = &f.scopes[0];
+        let org = scope.organization;
+        let repo = f.repository.customers();
+        let op = repo
+            .request(actor, org, &f.account.account, false, true)
+            .await
+            .unwrap()
+            .unwrap()
+            .operation_id;
+        let unknown = matches!(mode, 1 | 9 | 10 | 11 | 12 | 14 | 15 | 16 | 17);
+        let mut original_create = None;
+        if mode == 10 {
+            // Owner stops before any possible create. Recovery remains GET-only.
+            pg.execute("UPDATE organization_members SET role='viewer' WHERE organization_id=$1 AND user_id=$2",&[&org,&actor]).await.unwrap();
+            assert!(repo
+                .claim(&f.account.account, false)
+                .await
+                .unwrap()
+                .is_none());
+        } else {
+            let create = repo
+                .claim(&f.account.account, false)
+                .await
+                .unwrap()
+                .unwrap();
+            pg.execute("UPDATE team_stripe_customer_operations SET lease_until=clock_timestamp()-interval '1 second' WHERE operation_id=$1",&[&op]).await.unwrap();
+            if unknown {
+                pg.execute("UPDATE organization_members SET role='viewer' WHERE organization_id=$1 AND user_id=$2",&[&org,&actor]).await.unwrap();
+                assert!(repo
+                    .claim(&f.account.account, false)
+                    .await
+                    .unwrap()
+                    .is_none());
+            } else {
+                create
+                    .retain_provider_result(Some("cus_runtime_lookup"), true)
+                    .unwrap();
+                assert!(!repo.complete(&create, "cus_runtime_lookup").await.unwrap());
+            }
+            original_create = Some(create);
+        }
+        repo.authorize_recovery(recovery, org, &f.account.account, false, op, 2)
+            .await
+            .unwrap();
+        let initial =
+            f.ledger.guard.read().unwrap().snapshot.sources.scopes[&scope.key().unwrap()].clone();
+        let first:Option<chrono::DateTime<Utc>>=pg.query_one("SELECT first_attempt_at FROM team_stripe_customer_operations WHERE operation_id=$1",&[&op]).await.unwrap().get(0);
+        if matches!(mode, 13 | 15) {
+            if mode == 15 {
+                original_create
+                    .as_ref()
+                    .unwrap()
+                    .retain_provider_result(Some("cus_runtime_lookup"), true)
+                    .unwrap();
+            }
+            pg.execute("UPDATE organization_members SET role='viewer' WHERE organization_id=$1 AND user_id=$2",&[&org,&recovery]).await.unwrap();
+            assert!(repo
+                .claim(&f.account.account, false)
+                .await
+                .unwrap()
+                .is_none());
+            let row=pg.query_one("SELECT revision,disposition,first_attempt_at,customer_id FROM team_stripe_customer_operations WHERE operation_id=$1",&[&op]).await.unwrap();
+            assert_eq!(row.get::<_, i64>(0), 4);
+            assert_eq!(row.get::<_, String>(1), "owner_changed");
+            assert_eq!(row.get::<_, Option<chrono::DateTime<Utc>>>(2), first);
+            assert_eq!(
+                row.get::<_, Option<String>>(3).as_deref(),
+                if mode == 15 {
+                    None
+                } else {
+                    Some("cus_runtime_lookup")
+                }
+            );
+            assert!(
+                inventory::preview(&pg, &f.ledger.guard, scope)
+                    .await
+                    .unwrap()
+                    .independent_source_matches
+            );
+            f.close().await;
+            continue;
+        }
+        let claim = repo
+            .claim(&f.account.account, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(claim.lookup_only);
+        assert_eq!(claim.actor, recovery);
+        assert_eq!(claim.revision, 3);
+        if mode == 1 {
+            let now = Utc::now();
+            let mut body: serde_json::Value =
+                serde_json::from_slice(&f.body("evt_runtime_lookup_association", true, now))
+                    .unwrap();
+            body["data"]["object"]["customer"] = serde_json::json!("cus_runtime_lookup");
+            let body = serde_json::to_vec(&body).unwrap();
+            f.receiver
+                .accept(&body, &signed(&body, now), now)
+                .await
+                .unwrap();
+            // An unrelated durable ingress changes proof tokens: reacquire a
+            // current lookup lease rather than weakening provider preflight.
+            pg.execute("UPDATE team_stripe_customer_operations SET lease_until=clock_timestamp()-interval '1 second' WHERE operation_id=$1",&[&op]).await.unwrap();
+        }
+        let claim = if mode == 1 {
+            repo.claim(&f.account.account, false)
+                .await
+                .unwrap()
+                .unwrap()
+        } else {
+            claim
+        };
+        if mode == 17 {
+            f.ledger.guard.fail_transaction_confirmation_once();
+            assert!(f
+                .repository
+                .schedule_bound(&f.account.account, false)
+                .await
+                .is_err());
+        }
+        let kind = if mode == 2 { "not_found" } else { "verified" };
+        let (port, server) = if mode == 17 {
+            (1, None)
+        } else {
+            let (port, server) = source_lookup_http(op, unknown, kind);
+            (port, Some(server))
+        };
+        let client =
+            StripeClient::fixture_guarded(port, &f.account.account, f.ledger.guard.clone());
+        let result = if mode == 17 {
+            claim
+                .retain_provider_result(Some("cus_runtime_lookup"), true)
+                .unwrap();
+            CustomerLookup::Verified("cus_runtime_lookup".into())
+        } else {
+            assert!(
+                client.create_customer(&claim).await.is_err(),
+                "lookup authority must never send POST"
+            );
+            let value = client.lookup_customer(&claim).await.unwrap();
+            server.unwrap().join().unwrap();
+            value
+        };
+        if mode == 2 {
+            assert!(matches!(
+                result,
+                CustomerLookup::Unconfirmed("customer_not_found_unconfirmed")
+            ));
+            repo.unresolved(&claim, "customer_not_found_unconfirmed")
+                .await
+                .unwrap();
+        } else {
+            assert!(matches!(result, CustomerLookup::Verified(_)));
+            match mode {
+                3 | 9 | 16 | 17 => {
+                    pg.execute("UPDATE team_stripe_customer_operations SET lease_until=clock_timestamp()-interval '1 second' WHERE operation_id=$1",&[&op]).await.unwrap();
+                }
+                4 => {
+                    pg.execute("UPDATE organization_members SET role='viewer' WHERE organization_id=$1 AND user_id=$2",&[&org,&recovery]).await.unwrap();
+                }
+                5 => {
+                    pg.execute("UPDATE team_stripe_customer_operations SET lease_id=$2,lease_until=clock_timestamp()+interval '5 minutes' WHERE operation_id=$1",&[&op,&Uuid::now_v7()]).await.unwrap();
+                }
+                6 => f.ledger.guard.fail_transaction_confirmation_once(),
+                7 => {
+                    pg.execute("UPDATE team_stripe_customer_operations SET lease_until=clock_timestamp()+interval '5 seconds' WHERE operation_id=$1",&[&op]).await.unwrap();
+                    f.ledger.guard.delay_prepare_once_ms(7000);
+                }
+                8 => {
+                    pg.execute("CREATE FUNCTION fixture_lookup_projection_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic_lookup_projection_failure'; END $$",&[]).await.unwrap();
+                    pg.execute("CREATE CONSTRAINT TRIGGER fixture_lookup_projection_failure AFTER UPDATE ON team_stripe_customer_operations DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fixture_lookup_projection_failure()",&[]).await.unwrap();
+                }
+                _ => (),
+            }
+            if matches!(mode, 11 | 12 | 14) {
+                // A stale response is retained under an earlier lease, but a
+                // current attempt may legitimately read 404/deleted afterward.
+                pg.execute("UPDATE team_stripe_customer_operations SET lease_id=$2,lease_until=clock_timestamp()-interval '1 second' WHERE operation_id=$1",&[&op,&Uuid::now_v7()]).await.unwrap();
+                let fresh = repo
+                    .claim(&f.account.account, false)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let kind = if mode == 11 {
+                    "not_found"
+                } else if mode == 14 {
+                    "rate_limit"
+                } else {
+                    "deleted"
+                };
+                let (port, server) = source_lookup_http(op, true, kind);
+                let client =
+                    StripeClient::fixture_guarded(port, &f.account.account, f.ledger.guard.clone());
+                let answer = client.lookup_customer(&fresh).await;
+                server.join().unwrap();
+                if mode == 14 {
+                    let error = answer.err().unwrap();
+                    assert!(matches!(
+                        error.kind,
+                        super::team_stripe::Failure::RateLimited
+                    ));
+                    let due = error.retry_after.unwrap();
+                    repo.fail(&fresh, &error).await.unwrap();
+                    let row=pg.query_one("SELECT retry_at,lease_id FROM team_stripe_customer_operations WHERE operation_id=$1",&[&op]).await.unwrap();
+                    assert!(row.get::<_, chrono::DateTime<Utc>>(0) >= due);
+                    assert!(row.get::<_, Option<Uuid>>(1).is_none());
+                } else {
+                    let CustomerLookup::Unconfirmed(reason) = answer.unwrap() else {
+                        panic!("expected negative lookup")
+                    };
+                    repo.unresolved(&fresh, reason).await.unwrap();
+                }
+            } else if matches!(mode, 9 | 16 | 17) {
+                let reopened = FinancialGuard::new(f.ledger.path().to_owned())
+                    .unwrap()
+                    .pin_namespace(f.ledger.guard.namespace().unwrap())
+                    .unwrap();
+                let restarted = super::team_stripe::TeamStripeRepository::new_guarded(
+                    pg.clone(),
+                    CommercialDeployment::for_test(reopened.clone()).unwrap(),
+                );
+                if matches!(mode, 16 | 17) {
+                    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                    let port = listener.local_addr().unwrap().port();
+                    drop(listener);
+                    let client = StripeClient::fixture_guarded(port, &f.account.account, reopened);
+                    crate::services::team_stripe_worker::StripeWorker::new(restarted, client)
+                        .tick()
+                        .await
+                        .unwrap();
+                } else {
+                    assert!(restarted
+                        .customers()
+                        .claim(&f.account.account, false)
+                        .await
+                        .unwrap()
+                        .is_none());
+                }
+            } else {
+                let completed = repo.complete(&claim, "cus_runtime_lookup").await;
+                if matches!(mode, 5..=8) {
+                    assert!(completed.is_err(), "mode {mode}");
+                } else {
+                    assert_eq!(completed.unwrap(), !matches!(mode, 3 | 4));
+                }
+            }
+        }
+        if mode == 8 {
+            pg.execute(
+                "DROP TRIGGER fixture_lookup_projection_failure ON team_stripe_customer_operations",
+                &[],
+            )
+            .await
+            .unwrap();
+            pg.execute("DROP FUNCTION fixture_lookup_projection_failure()", &[])
+                .await
+                .unwrap();
+        }
+        if mode == 6 {
+            pg.execute("UPDATE organization_members SET role='viewer' WHERE organization_id=$1 AND user_id=$2",&[&org,&recovery]).await.unwrap();
+            assert!(!repo.complete(&claim, "cus_runtime_lookup").await.unwrap());
+        }
+        let row=pg.query_one("SELECT revision,disposition,customer_id,first_attempt_at,lease_id FROM team_stripe_customer_operations WHERE operation_id=$1",&[&op]).await.unwrap();
+        let stalled = matches!(mode, 5 | 7 | 8 | 14);
+        assert_eq!(row.get::<_, i64>(0), if stalled { 3 } else { 4 });
+        assert_eq!(row.get::<_, Option<chrono::DateTime<Utc>>>(3), first);
+        let expected = if mode == 4 {
+            "owner_changed"
+        } else if matches!(mode, 2 | 3 | 9 | 11 | 12 | 16 | 17) {
+            "recovery_required"
+        } else if stalled {
+            "pending"
+        } else {
+            "verified"
+        };
+        assert_eq!(row.get::<_, String>(1), expected, "mode {mode}");
+        assert_eq!(
+            row.get::<_, Option<String>>(2).as_deref(),
+            if matches!(mode, 11 | 12 | 14) {
+                None
+            } else {
+                Some("cus_runtime_lookup")
+            }
+        );
+        let state = f.ledger.guard.read().unwrap().snapshot;
+        let entry = &state.sources.scopes[&scope.key().unwrap()];
+        assert_eq!(entry.accepted, initial.accepted);
+        assert_eq!(entry.dispatches, initial.dispatches);
+        if matches!(mode, 7 | 8) {
+            let pending = state.clone();
+            assert!(pending.transactions.groups.values().any(|g| !g.committed));
+            assert!(repo.complete(&claim, "cus_runtime_lookup").await.is_err());
+            assert_eq!(f.ledger.guard.read().unwrap().snapshot, pending);
+        } else if !stalled {
+            assert!(entry.unapplied_outcomes.is_empty());
+            for scope in &f.scopes {
+                assert!(
+                    inventory::preview(&pg, &f.ledger.guard, scope)
+                        .await
+                        .unwrap()
+                        .independent_source_matches
+                );
+            }
+        }
+        if mode == 0 {
+            let proof = super::team_stripe_quote::QuoteRepository::new_guarded(
+                pg.clone(),
+                f.ledger.deployment(),
+            )
+            .customer(recovery, org, &f.account.account, false)
+            .await
+            .unwrap();
+            assert_eq!(proof.revision, 4);
+            assert!(repo.complete(&claim, "cus_runtime_lookup").await.unwrap());
+        }
+        if mode == 2 {
+            repo.authorize_recovery(recovery, org, &f.account.account, false, op, 4)
+                .await
+                .unwrap();
+            let fresh = repo
+                .claim(&f.account.account, false)
+                .await
+                .unwrap()
+                .unwrap();
+            let (port, server) = source_lookup_http(op, false, "verified");
+            let client =
+                StripeClient::fixture_guarded(port, &f.account.account, f.ledger.guard.clone());
+            client.lookup_customer(&fresh).await.unwrap();
+            server.join().unwrap();
+            assert!(repo.complete(&fresh, "cus_runtime_lookup").await.unwrap());
+            repo.unresolved(&claim, "customer_not_found_unconfirmed")
+                .await
+                .unwrap();
+            let row=pg.query_one("SELECT revision,disposition FROM team_stripe_customer_operations WHERE operation_id=$1",&[&op]).await.unwrap();
+            assert_eq!(row.get::<_, i64>(0), 6);
+            assert_eq!(row.get::<_, String>(1), "verified");
+        }
+        assert!(!std::fs::read_to_string(f.ledger.path())
+            .unwrap()
+            .contains("PRIVATE_LOOKUP_RUNTIME_DO_NOT_STORE"));
+        f.close().await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires isolated POSTGRES_TEST_URL"]
+async fn financial_transaction_operator_exact_next_review_and_no_replay_fences() {
+    use super::team_financial_transaction_recovery as operator;
+    use crate::services::team_financial_recovery::Approval;
+    let url = std::env::var("POSTGRES_TEST_URL").unwrap();
+    assert_eq!(
+        url.parse::<tokio_postgres::Config>().unwrap().get_dbname(),
+        Some("atoaxis_stripe_test")
+    );
+    let pg = std::sync::Arc::new(
+        PostgresClient::connect(&PostgresConfig {
+            url: Some(url),
+            max_connections: 8,
+        })
+        .await
+        .unwrap(),
+    );
+    pg.migrate().await.unwrap();
+    for mode in 0..5 {
+        let f = IngressFixture::new(pg.clone(), false).await;
+        pg.execute(
+            "UPDATE team_stripe_bindings SET enabled=true WHERE organization_id=$1",
+            &[&f.scopes[0].organization],
+        )
+        .await
+        .unwrap();
+        f.seed_sources().await;
+        let guard = &f.ledger.guard;
+        guard.fail_transaction_confirmation_once();
+        assert!(f
+            .repository
+            .schedule_bound(&f.account.account, false)
+            .await
+            .is_err());
+        let pending = guard
+            .read()
+            .unwrap()
+            .snapshot
+            .transactions
+            .groups
+            .values()
+            .find(|g| !g.committed)
+            .cloned()
+            .unwrap();
+        let before = guard.read().unwrap().snapshot;
+        let plan = operator::prepare(&pg, guard, &f.account, &"e".repeat(64))
+            .await
+            .unwrap();
+        assert_eq!(
+            guard.read().unwrap().snapshot,
+            before,
+            "Prepare must not confirm or rewrite SQL"
+        );
+        let mut plan = plan;
+        if mode == 1 {
+            // A restored predecessor/missing job is never reconstructed by Apply.
+            pg.execute(
+                "DELETE FROM team_stripe_reconcile_jobs WHERE account_id=$1",
+                &[&f.account.account],
+            )
+            .await
+            .unwrap();
+        } else if mode == 2 {
+            guard
+                .record_source(source::Event::Freeze {
+                    scope: pending.proposal.sources[0].scope.clone(),
+                    reason: source::FreezeReason::OrganizationUnconfirmed,
+                })
+                .unwrap();
+        } else if mode == 3 {
+            plan.body.prepared_at -= chrono::Duration::minutes(16);
+            plan.body.expires_at -= chrono::Duration::minutes(16);
+            plan.digest = crate::services::team_financial_guard::fingerprint(&plan.body).unwrap();
+        } else if mode == 4 {
+            guard.fail_transaction_confirmation_once();
+        }
+        let approval = Approval::reviewed_transaction(
+            &plan,
+            plan.namespace(),
+            plan.scope(),
+            plan.plan_digest(),
+            true,
+        )
+        .unwrap();
+        let before_apply = guard.read().unwrap().snapshot;
+        let result = operator::apply(&pg, guard, &plan, &approval).await;
+        if mode > 0 {
+            assert!(result.is_err());
+            assert_eq!(guard.read().unwrap().snapshot, before_apply);
+            if mode == 1 {
+                assert_eq!(
+                    pg.query_one(
+                        "SELECT count(*) FROM team_stripe_reconcile_jobs WHERE account_id=$1",
+                        &[&f.account.account]
+                    )
+                    .await
+                    .unwrap()
+                    .get::<_, i64>(0),
+                    0
+                );
+                assert!(operator::prepare(&pg, guard, &f.account, &"e".repeat(64))
+                    .await
+                    .is_err());
+            }
+        }
+        if mode == 0 || mode == 4 {
+            if mode == 4 {
+                operator::apply(&pg, guard, &plan, &approval).await.unwrap();
+            }
+            let confirmed = guard.read().unwrap().snapshot;
+            assert!(confirmed.transactions.groups[&pending.proposal.id].committed);
+            assert_eq!(
+                confirmed.transactions.groups[&pending.proposal.id]
+                    .operator_review
+                    .as_ref()
+                    .unwrap()
+                    .plan_digest,
+                plan.plan_digest()
+            );
+            assert_eq!(
+                operator::apply(&pg, guard, &plan, &approval).await.unwrap()["status"],
+                "already_recorded"
+            );
+            assert_eq!(guard.read().unwrap().snapshot, confirmed);
+            assert_eq!(
+                pg.query_one(
+                    "SELECT requested_revision FROM team_stripe_reconcile_jobs WHERE account_id=$1",
+                    &[&f.account.account]
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+                1
+            );
+        }
+        f.close().await;
+    }
+}

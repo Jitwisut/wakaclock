@@ -2,6 +2,77 @@ use super::*;
 use crate::services::team_analytics_entitlement::State;
 use chrono::{DateTime, Utc};
 
+#[test]
+fn upgrade_preview_request_group_reserves_original_nonce_and_commits_only_its_scope() {
+    let (mut state, mut p) = fixture(1);
+    p.enrollments.clear();
+    p.ingress = None;
+    let (mut request, _, _) = super::super::team_stripe_change_payment::preview::tests::fixture();
+    request.scope = p.sources[0].scope.clone();
+    let writer = Writer::UpgradePreviewRequest {
+        request: Box::new(request.clone()),
+    };
+    p.sources[0].transition.accepted = vec![request.accepted_request().unwrap()];
+    p.sources[0].transition.change_hash = writer.change_hash(&p.account, &request.scope).unwrap();
+    p.writer = Some(writer);
+    let event = GuardEvent::FinancialTransaction {
+        event: Box::new(Event::Prepare {
+            proposal: Box::new(p.clone()),
+        }),
+    };
+    state.apply(&event).unwrap();
+    assert!(operation_known(&state, request.quote_id));
+    let retained = state.clone();
+    state.apply(&event).unwrap();
+    assert_eq!(state, retained);
+    let mut reused = p.clone();
+    reused.id = Uuid::now_v7();
+    reused.sources[0].transition.id = reused.id;
+    assert_eq!(
+        state
+            .apply(&GuardEvent::FinancialTransaction {
+                event: Box::new(Event::Prepare {
+                    proposal: Box::new(reused)
+                })
+            })
+            .unwrap_err()
+            .to_string(),
+        "financial_upgrade_preview_nonce_already_retained"
+    );
+    assert_eq!(state, retained);
+    state
+        .apply(&GuardEvent::FinancialTransaction {
+            event: Box::new(Event::Confirm {
+                transaction: p.id,
+                proposal_hash: p.digest().unwrap(),
+            }),
+        })
+        .unwrap();
+    assert_eq!(
+        state.sources.scopes[&request.scope.key().unwrap()]
+            .accepted
+            .get(&request.quote_id),
+        Some(&request.accepted_request().unwrap())
+    );
+    assert_eq!(state.organizations, retained.organizations);
+    let (original, mut foreign) = fixture(1);
+    foreign.enrollments.clear();
+    foreign.ingress = None;
+    foreign.sources[0].transition.accepted = vec![request.accepted_request().unwrap()];
+    foreign.writer = Some(Writer::UpgradePreviewRequest {
+        request: Box::new(request),
+    });
+    let mut invalid = original.clone();
+    assert!(invalid
+        .apply(&GuardEvent::FinancialTransaction {
+            event: Box::new(Event::Prepare {
+                proposal: Box::new(foreign)
+            })
+        })
+        .is_err());
+    assert_eq!(invalid, original);
+}
+
 pub(crate) fn proposal(
     state: &Guard,
     account: &ingress::Scope,
@@ -150,6 +221,226 @@ pub(crate) fn fixture(count: usize) -> (Guard, Proposal) {
     }
     let p = proposal(&state, &account, &orgs, true, true);
     (state, p)
+}
+
+fn cancellation_proposal() -> (
+    Guard,
+    Proposal,
+    super::super::team_subscription_cancellation::FrozenCancellation,
+) {
+    use super::super::team_subscription_cancellation as cancellation;
+    let (state, mut p) = fixture(1);
+    p.enrollments.clear();
+    p.ingress = None;
+    let (seed, before) = cancellation::tests::fixture();
+    let request = cancellation::FrozenCancellation::new(
+        p.sources[0].scope.clone(),
+        seed.actor(),
+        seed.operation(),
+        1,
+        1,
+        &before,
+        seed.accepted_at(),
+    )
+    .unwrap();
+    let writer = Writer::CancellationRequest {
+        request: request.clone(),
+        read: cancellation::ReadEvidence {
+            exchange: Uuid::now_v7(),
+            observed_at: request.accepted_at(),
+            valid_until: request.accepted_at() + chrono::Duration::seconds(60),
+            subscription: before,
+        },
+    };
+    p.sources[0].transition.accepted = vec![request.accepted_request().unwrap()];
+    p.sources[0].transition.change_hash =
+        writer.change_hash(&p.account, &p.sources[0].scope).unwrap();
+    p.writer = Some(writer);
+    (state, p, request)
+}
+#[test]
+fn cancellation_nonce_is_reserved_by_pending_groups_and_retained_other_account_evidence() {
+    let (mut state, p, request) = cancellation_proposal();
+    assert!(!operation_known(&state, request.operation()));
+    let event = GuardEvent::FinancialTransaction {
+        event: Box::new(Event::Prepare {
+            proposal: Box::new(p.clone()),
+        }),
+    };
+    state.apply(&event).unwrap();
+    assert!(operation_known(&state, request.operation()));
+    let retained = state.clone();
+    state.apply(&event).unwrap(); // Original exact group remains idempotent.
+    assert_eq!(state, retained);
+    let mut replacement = p.clone();
+    replacement.id = Uuid::now_v7();
+    replacement.sources[0].transition.id = replacement.id;
+    let error = state
+        .apply(&GuardEvent::FinancialTransaction {
+            event: Box::new(Event::Prepare {
+                proposal: Box::new(replacement),
+            }),
+        })
+        .unwrap_err();
+    assert_eq!(error.to_string(), "cancellation_operation_already_retained");
+    for orphan in [false, true] {
+        let (mut state, p, request) = cancellation_proposal();
+        let foreign = source::Scope {
+            organization: Uuid::now_v7(),
+            account: "acct_another_account".into(),
+            live: true,
+        };
+        let mut entry = state.sources.scopes.values().next().unwrap().clone();
+        entry.scope = foreign.clone();
+        if orphan {
+            entry.outcomes.insert(
+                Uuid::now_v7(),
+                source::Outcome {
+                    id: Uuid::now_v7(),
+                    operation: request.operation(),
+                    request_hash: "a".repeat(64),
+                    evidence_hash: "b".repeat(64),
+                    observed_at: request.accepted_at(),
+                    identity: None,
+                },
+            );
+        } else {
+            let mut accepted = request.accepted_request().unwrap();
+            accepted.kind = source::OperationKind::CreateCustomer;
+            entry.accepted.insert(accepted.operation, accepted);
+        }
+        state.sources.scopes.insert(foreign.key().unwrap(), entry);
+        assert!(operation_known(&state, request.operation()));
+        let original = state.clone();
+        let error = state
+            .apply(&GuardEvent::FinancialTransaction {
+                event: Box::new(Event::Prepare {
+                    proposal: Box::new(p),
+                }),
+            })
+            .unwrap_err();
+        assert_eq!(error.to_string(), "cancellation_operation_already_retained");
+        assert_eq!(state, original);
+    }
+}
+
+#[test]
+fn cancellation_lifecycle_preserves_original_request_and_requires_own_authorization_and_new_exchange(
+) {
+    use super::super::team_subscription_cancellation::lifecycle::{
+        self, CancellationStage, Exchange, ExchangeKind,
+    };
+    let (mut state, p, request) = cancellation_proposal();
+    state
+        .apply(&GuardEvent::FinancialTransaction {
+            event: Box::new(Event::Prepare {
+                proposal: Box::new(p.clone()),
+            }),
+        })
+        .unwrap();
+    state
+        .apply(&GuardEvent::FinancialTransaction {
+            event: Box::new(Event::Confirm {
+                transaction: p.id,
+                proposal_hash: p.digest().unwrap(),
+            }),
+        })
+        .unwrap();
+    let exchange = Exchange {
+        id: Uuid::now_v7(),
+        actor: request.actor(),
+        revision: 1,
+        lease: Uuid::now_v7(),
+        account_lease: Uuid::now_v7(),
+        kind: ExchangeKind::Mutation,
+        prepared_at: request.accepted_at(),
+        first_attempt_at: Some(request.accepted_at()),
+        previous_observation: None,
+        authorization_hash: lifecycle::authorization_hash(
+            &request,
+            1,
+            request.actor(),
+            request.accepted_at(),
+            "request_cancel_at_period_end",
+        )
+        .unwrap(),
+    };
+    let make = |state: &Guard, exchange: Exchange| {
+        let mut next = proposal(
+            state,
+            &p.account,
+            &[request.scope().organization],
+            false,
+            false,
+        );
+        let writer = Writer::CancellationLifecycle {
+            request: request.clone(),
+            expected_revision: exchange.revision,
+            stage: CancellationStage::BeginExchange { exchange },
+        };
+        next.sources[0].transition.change_hash =
+            writer.change_hash(&p.account, request.scope()).unwrap();
+        next.writer = Some(writer);
+        next
+    };
+    let next = make(&state, exchange.clone());
+    let prepare = GuardEvent::FinancialTransaction {
+        event: Box::new(Event::Prepare {
+            proposal: Box::new(next.clone()),
+        }),
+    };
+    state.apply(&prepare).unwrap();
+    let pending = state.clone();
+    state.apply(&prepare).unwrap();
+    assert_eq!(state, pending);
+    state
+        .apply(&GuardEvent::FinancialTransaction {
+            event: Box::new(Event::Confirm {
+                transaction: next.id,
+                proposal_hash: next.digest().unwrap(),
+            }),
+        })
+        .unwrap();
+    let duplicate = make(&state, exchange.clone());
+    assert_eq!(
+        state
+            .apply(&GuardEvent::FinancialTransaction {
+                event: Box::new(Event::Prepare {
+                    proposal: Box::new(duplicate)
+                })
+            })
+            .unwrap_err()
+            .to_string(),
+        "financial_cancellation_exchange_already_retained"
+    );
+    let mut wrong = exchange.clone();
+    wrong.id = Uuid::now_v7();
+    wrong.kind = ExchangeKind::ResourceRead;
+    wrong.actor = Uuid::now_v7();
+    let wrong = make(&state, wrong);
+    assert!(state
+        .apply(&GuardEvent::FinancialTransaction {
+            event: Box::new(Event::Prepare {
+                proposal: Box::new(wrong)
+            })
+        })
+        .is_err());
+    let mut missing = exchange;
+    missing.id = Uuid::now_v7();
+    missing.kind = ExchangeKind::ResourceRead;
+    missing.revision = 2;
+    let missing = make(&state, missing);
+    assert_eq!(
+        state
+            .apply(&GuardEvent::FinancialTransaction {
+                event: Box::new(Event::Prepare {
+                    proposal: Box::new(missing)
+                })
+            })
+            .unwrap_err()
+            .to_string(),
+        "financial_cancellation_recovery_authorization_missing"
+    );
 }
 
 #[test]
@@ -321,6 +612,129 @@ fn confirm(state: &mut Guard, p: &Proposal) -> Result<()> {
             proposal_hash: p.digest()?,
         }),
     })
+}
+#[test]
+fn reviewed_confirmation_binds_identity_preserves_history_and_rejects_changed_review() {
+    let (mut state, mut p) = fixture(1);
+    p.ingress = None;
+    p.enrollments.clear();
+    p.writer = Some(Writer::Scheduler {
+        targets: vec![ScheduleTarget {
+            organization: p.sources[0].scope.organization,
+            customer: "cus_reviewed".into(),
+            subscription: "sub_reviewed".into(),
+        }],
+    });
+    p.sources[0].transition.change_hash = p
+        .writer
+        .as_ref()
+        .unwrap()
+        .change_hash(&p.account, &p.sources[0].scope)
+        .unwrap();
+    prepare(&mut state, &p).unwrap();
+    let now = Utc::now();
+    let review = OperatorReview {
+        id: Uuid::now_v7(),
+        plan_digest: "a".repeat(64),
+        evidence_hash: "b".repeat(64),
+        reviewed_at: now,
+        expires_at: now + chrono::Duration::minutes(10),
+    };
+    let event = Event::ConfirmReviewed {
+        transaction: p.id,
+        proposal_hash: p.digest().unwrap(),
+        review: review.clone(),
+    };
+    for case in 0..5 {
+        let mut bad = event.clone();
+        let Event::ConfirmReviewed {
+            review,
+            proposal_hash,
+            ..
+        } = &mut bad
+        else {
+            unreachable!()
+        };
+        match case {
+            0 => *proposal_hash = "f".repeat(64),
+            1 => review.id = p.id,
+            2 => review.id = state.ingress.entry(&p.account).unwrap().review,
+            3 => review.expires_at = review.reviewed_at,
+            _ => {
+                review.id = state.sources.scopes[&p.sources[0].scope.key().unwrap()]
+                    .review
+                    .as_ref()
+                    .unwrap()
+                    .id
+            }
+        }
+        let before = state.clone();
+        assert!(state
+            .apply(&GuardEvent::FinancialTransaction {
+                event: Box::new(bad)
+            })
+            .is_err());
+        assert_eq!(state, before);
+    }
+    state
+        .apply(&GuardEvent::FinancialTransaction {
+            event: Box::new(event.clone()),
+        })
+        .unwrap();
+    assert_eq!(
+        state.transactions.groups[&p.id].operator_review,
+        Some(review.clone())
+    );
+    let confirmed = state.clone();
+    state
+        .apply(&GuardEvent::FinancialTransaction {
+            event: Box::new(event.clone()),
+        })
+        .unwrap();
+    confirm(&mut state, &p).unwrap();
+    assert_eq!(state, confirmed);
+    let mut changed = event;
+    let Event::ConfirmReviewed { review: r, .. } = &mut changed else {
+        unreachable!()
+    };
+    r.evidence_hash = "c".repeat(64);
+    assert!(state
+        .apply(&GuardEvent::FinancialTransaction {
+            event: Box::new(changed)
+        })
+        .is_err());
+    assert_eq!(state, confirmed);
+    // A retained review ID cannot become another group, seed, or transition.
+    let mut next = proposal(
+        &state,
+        &p.account,
+        &[p.sources[0].scope.organization],
+        false,
+        false,
+    );
+    next.id = review.id;
+    next.sources[0].transition.id = review.id;
+    assert!(prepare(&mut state, &next).is_err());
+    let seed = GuardEvent::FinancialIngress {
+        event: Box::new(ingress::Event::Seed {
+            scope: ingress::Scope {
+                account: "acct_review_alias".into(),
+                live: false,
+            },
+            receipts: vec![],
+            review: review.id,
+            review_hash: "a".repeat(64),
+        }),
+    };
+    assert!(state.apply(&seed).is_err());
+    assert_eq!(state, confirmed);
+    let legacy = Event::Confirm {
+        transaction: p.id,
+        proposal_hash: p.digest().unwrap(),
+    };
+    let bytes = serde_json::to_vec(&legacy).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("review"));
+    assert_eq!(serde_json::from_slice::<Event>(&bytes).unwrap(), legacy);
 }
 #[test]
 fn group_members_prepare_and_confirm_atomically_and_historical_retries_never_rewind() {
@@ -1278,4 +1692,206 @@ fn customer_recovery_authorization_retains_original_create_actor_and_rejects_for
         request
     );
     assert_ne!(request.actor, actor);
+}
+
+#[test]
+fn lookup_projection_requires_current_positive_receipt_and_exact_resolution() {
+    use source::{CustomerLookup, CustomerLookupResult as Kind, Outcome, ProviderIdentity};
+    let (mut state, mut p) = fixture(1);
+    p.ingress = None;
+    p.enrollments.clear();
+    let scope = p.sources[0].scope.clone();
+    let request = crate::services::team_stripe_customer_request::Request::new(
+        scope.clone(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    )
+    .unwrap()
+    .accepted(Utc::now())
+    .unwrap();
+    p.writer = Some(Writer::CustomerRequest {
+        organization: scope.organization,
+        request: request.clone(),
+    });
+    p.sources[0].transition.accepted = vec![request.clone()];
+    p.sources[0].transition.change_hash = p
+        .writer
+        .as_ref()
+        .unwrap()
+        .change_hash(&p.account, &scope)
+        .unwrap();
+    prepare(&mut state, &p).unwrap();
+    confirm(&mut state, &p).unwrap();
+    let actor = Uuid::now_v7();
+    let mut authorize = proposal(&state, &p.account, &[scope.organization], false, false);
+    authorize.writer = Some(Writer::CustomerRecoveryAuthorization {
+        organization: scope.organization,
+        request: request.clone(),
+        actor,
+        expected_revision: 2,
+        authorized_at: Utc::now(),
+    });
+    authorize.sources[0].transition.change_hash = authorize
+        .writer
+        .as_ref()
+        .unwrap()
+        .change_hash(&p.account, &scope)
+        .unwrap();
+    prepare(&mut state, &authorize).unwrap();
+    confirm(&mut state, &authorize).unwrap();
+    let identity = Some(ProviderIdentity::Customer {
+        customer: "cus_lookup_protocol".into(),
+    });
+    let outcome = Outcome {
+        id: Uuid::now_v7(),
+        operation: request.operation,
+        request_hash: request.request_hash.clone(),
+        evidence_hash: crate::services::team_stripe_customer_request::result_hash(
+            &scope,
+            request.operation,
+            &identity,
+            true,
+        )
+        .unwrap(),
+        observed_at: Utc::now(),
+        identity,
+    };
+    let observation = CustomerLookup {
+        id: Uuid::now_v7(),
+        operation: request.operation,
+        request_hash: request.request_hash.clone(),
+        actor,
+        authorization_revision: 3,
+        authorization_hash: fingerprint(authorize.writer.as_ref().unwrap()).unwrap(),
+        lease: Uuid::now_v7(),
+        observed_at: Utc::now(),
+        result: Kind::Verified {
+            customer: "cus_lookup_protocol".into(),
+            outcome: outcome.id,
+        },
+    };
+    state
+        .apply(&GuardEvent::FinancialSource {
+            event: Box::new(source::Event::CustomerLookup {
+                scope: scope.clone(),
+                observation: observation.clone(),
+                outcome: Some(outcome.clone()),
+            }),
+        })
+        .unwrap();
+    let mut project = proposal(&state, &p.account, &[scope.organization], false, false);
+    project.mode = Mode::ResolveOutcomes;
+    project.writer = Some(Writer::CustomerLookupProjection {
+        organization: scope.organization,
+        request: request.clone(),
+        observation: observation.clone(),
+        customer_before: None,
+        outcomes: [(outcome.id, fingerprint(&outcome).unwrap())].into(),
+        resolved_customer: Some("cus_lookup_protocol".into()),
+        projected_at: Utc::now(),
+        projection: CustomerProjection::Verified {
+            lease: observation.lease,
+        },
+    });
+    project.sources[0]
+        .transition
+        .resolved_outcomes
+        .insert(outcome.id);
+    project.sources[0].transition.change_hash = project
+        .writer
+        .as_ref()
+        .unwrap()
+        .change_hash(&project.account, &scope)
+        .unwrap();
+    for case in 0..7 {
+        let mut forged = project.clone();
+        if let Some(Writer::CustomerLookupProjection {
+            observation,
+            projection,
+            outcomes,
+            customer_before,
+            resolved_customer,
+            ..
+        }) = &mut forged.writer
+        {
+            match case {
+                0 => observation.id = Uuid::now_v7(),
+                1 => observation.authorization_revision += 2,
+                2 => observation.authorization_hash = "f".repeat(64),
+                3 => {
+                    *projection = CustomerProjection::Verified {
+                        lease: Uuid::now_v7(),
+                    }
+                }
+                4 => {
+                    outcomes.insert(outcome.id, "f".repeat(64));
+                }
+                5 => *customer_before = Some("cus_changed_before".into()),
+                _ => *resolved_customer = Some("cus_wrong_resolution".into()),
+            }
+        }
+        forged.sources[0].transition.change_hash = forged
+            .writer
+            .as_ref()
+            .unwrap()
+            .change_hash(&forged.account, &scope)
+            .unwrap();
+        let unchanged = state.clone();
+        assert!(prepare(&mut state, &forged).is_err(), "case {case}");
+        assert_eq!(state, unchanged);
+    }
+    let mut positive = state.clone();
+    prepare(&mut positive, &project).unwrap();
+    confirm(&mut positive, &project).unwrap();
+    assert!(
+        positive.sources.scopes[&scope.key().unwrap()]
+            .dispatches
+            .is_empty(),
+        "lookup does not manufacture create Dispatch"
+    );
+    assert!(positive.sources.scopes[&scope.key().unwrap()]
+        .unapplied_outcomes
+        .is_empty());
+    // A current negative receipt may incorporate retained historical positive
+    // identity without claiming Verified or adding a new SQL customer mapping.
+    let mut negative = state.clone();
+    let mut no = observation.clone();
+    no.id = Uuid::now_v7();
+    no.lease = Uuid::now_v7();
+    no.result = Kind::NotFound;
+    negative
+        .apply(&GuardEvent::FinancialSource {
+            event: Box::new(source::Event::CustomerLookup {
+                scope: scope.clone(),
+                observation: no.clone(),
+                outcome: None,
+            }),
+        })
+        .unwrap();
+    let mut p = project.clone();
+    p.id = Uuid::now_v7();
+    p.sources[0].transition.id = p.id;
+    p.observation_hash = observation_hash(&negative, &p.account, &[scope.organization]).unwrap();
+    if let Some(Writer::CustomerLookupProjection {
+        observation,
+        projection,
+        ..
+    }) = &mut p.writer
+    {
+        *observation = no;
+        *projection = CustomerProjection::EvidenceOnly {
+            owner_changed: false,
+        };
+    }
+    p.sources[0].transition.change_hash = p
+        .writer
+        .as_ref()
+        .unwrap()
+        .change_hash(&p.account, &scope)
+        .unwrap();
+    prepare(&mut negative, &p).unwrap();
+    confirm(&mut negative, &p).unwrap();
+    assert!(negative.sources.scopes[&scope.key().unwrap()]
+        .unapplied_outcomes
+        .is_empty());
 }

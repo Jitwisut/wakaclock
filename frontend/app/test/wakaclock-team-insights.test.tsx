@@ -79,6 +79,39 @@ beforeEach(() => {
 });
 
 describe('Team privacy and freshness presentation', () => {
+  it('labels observed fully priced averages with their denominator and never claims complete capture', async () => {
+    const observed = {
+      ...metric,
+      value: 1000000,
+      status: 'partial',
+      reason: 'fully_priced_received_usage_only_capture_unconfirmed',
+    };
+    api.insights.mockResolvedValue({
+      estimated_ai_cost_microusd: observed,
+      merged_pr_cost_microusd: observed,
+      merged_pr_cost: {
+        average_microusd: metric,
+        complete_prs: metric,
+        with_cost: { ...observed, value: 5 },
+        without_cost: metric,
+        observed_average_microusd: observed,
+        fully_priced_observed_prs: { ...observed, value: 5 },
+        fully_priced_observed_cost_microusd: { ...observed, value: 5000000 },
+        pricing_versions: ['test-v1'],
+        calculation_version: 'observed-test',
+      },
+      measurement_health: ['capture_unconfirmed'],
+      provider_breakdown: [],
+    });
+    panel();
+    expect(
+      await screen.findByText(/Average for PRs whose received linked usage is fully priced/)
+    ).toHaveTextContent('PRs used: 5');
+    expect(screen.getByText(/the numerator and PR count retain the exact ratio/)).toHaveTextContent(
+      'Complete capture remains unconfirmed'
+    );
+    expect(screen.queryByText(/confirmed complete cost coverage/)).not.toBeInTheDocument();
+  });
   it('distinguishes observed zero from unavailable and privacy suppression', () => {
     expect(teamCostLabel(metric)).toBe('Withheld for privacy');
     expect(teamCostLabel({ ...metric, reason: 'pricing_unavailable' })).toBe('Unavailable');

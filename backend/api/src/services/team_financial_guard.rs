@@ -1,6 +1,7 @@
 //! Independent enrollment/entitlement history. This proof does not reconstruct
 //! Stripe bindings, quotes, external outcomes or payment observations.
 use super::team_analytics_entitlement::State;
+use super::team_organization_birth::{BirthConfirmation, BirthEntry, OrganizationBirth};
 use anyhow::{ensure, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,7 @@ use uuid::Uuid;
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Head {
     Legacy,
+    FreshUnenrolled { creation: Uuid },
     Enrolled { state: Box<State> },
     Quarantined,
     Deleted,
@@ -46,6 +48,17 @@ pub enum Event {
         created_at: DateTime<Utc>,
         legacy_organizations: Vec<Uuid>,
     },
+    PrepareOrganizationBirth {
+        birth: Box<OrganizationBirth>,
+    },
+    ConfirmOrganizationBirth {
+        organization: Uuid,
+        creation: Uuid,
+        metadata_hash: String,
+    },
+    ConfirmOrganizationBirthReviewed {
+        confirmation: Box<BirthConfirmation>,
+    },
     RegisterLegacy {
         organization: Uuid,
     },
@@ -69,6 +82,7 @@ pub enum Event {
 pub struct Snapshot {
     pub namespace: Option<Uuid>,
     pub organizations: BTreeMap<Uuid, Entry>,
+    pub births: BTreeMap<Uuid, BirthEntry>,
     pub sources: super::team_financial_source::Snapshot,
     pub ingress: super::team_financial_ingress::Snapshot,
     pub transactions: super::team_financial_transaction::Snapshot,
@@ -141,9 +155,17 @@ impl Snapshot {
                 event.as_ref(),
                 SourceEvent::Outcome { .. }
                     | SourceEvent::RejectedOutcome { .. }
+                    | SourceEvent::CustomerLookup { .. }
+                    | SourceEvent::CheckoutObservation { .. }
+                    | SourceEvent::CancellationObservation { .. }
+                    | SourceEvent::CancellationFailure { .. }
+                    | SourceEvent::CheckoutFailure { .. }
                     | SourceEvent::Freeze { .. }
             );
             if !evidence_only {
+                if self.births.contains_key(&scope.organization) {
+                    self.confirmed_birth(scope.organization)?;
+                }
                 let roster = roster.context("financial_guard_unknown_organization")?;
                 ensure!(
                     !matches!(roster.head, Head::Quarantined | Head::Deleted),
@@ -158,9 +180,35 @@ impl Snapshot {
             }
             let mut sources = self.sources.clone();
             sources.apply(event)?;
+            if let SourceEvent::CustomerLookup { observation, .. } = event.as_ref() {
+                let authorized=self.transactions.groups.values().any(|g|g.committed
+                    && g.proposal.account.account==scope.account && g.proposal.account.live==scope.live
+                    && g.proposal.writer.as_ref().is_some_and(|w|matches!(w,
+                        super::team_financial_transaction::Writer::CustomerRecoveryAuthorization{
+                            organization,request,actor,expected_revision,authorized_at
+                        } if *organization==scope.organization && request.operation==observation.operation
+                            && request.request_hash==observation.request_hash && *actor==observation.actor
+                            && expected_revision.checked_add(1)==Some(observation.authorization_revision)
+                            && observation.observed_at>=*authorized_at
+                            && fingerprint(w).is_ok_and(|h|h==observation.authorization_hash))));
+                if !authorized {
+                    sources.apply(&SourceEvent::Freeze {
+                        scope: scope.clone(),
+                        reason: FreezeReason::RequestIdentityConflict,
+                    })?;
+                }
+            }
             if evidence_only {
                 let reason = match roster {
                     None => Some(FreezeReason::OrganizationUnconfirmed),
+                    Some(_)
+                        if self
+                            .births
+                            .get(&scope.organization)
+                            .is_some_and(|b| !b.confirmed) =>
+                    {
+                        Some(FreezeReason::OrganizationUnconfirmed)
+                    }
                     Some(entry) if matches!(entry.head, Head::Quarantined | Head::Deleted) => {
                         Some(FreezeReason::OrganizationClosed)
                     }
@@ -176,9 +224,129 @@ impl Snapshot {
             self.sources = sources;
             return Ok(());
         }
+        if let Event::PrepareOrganizationBirth { birth } = event {
+            birth.validate()?;
+            ensure!(
+                Some(birth.namespace) == self.namespace,
+                "onboarding_namespace_mismatch"
+            );
+            self.transactions
+                .require_organization_free(birth.organization)?;
+            if let Some(old) = self.births.get(&birth.organization) {
+                ensure!(old.birth == **birth, "onboarding_birth_conflict");
+                return Ok(()); // Retained fact only; never reopen a closed/enrolled head.
+            }
+            let ids = birth.reserved_ids();
+            ensure!(
+                ids.iter().all(|id| !self.identity_known(*id)),
+                "onboarding_identity_already_known"
+            );
+            ensure!(
+                !self
+                    .sources
+                    .scopes
+                    .values()
+                    .any(|e| e.scope.organization == birth.organization)
+                    && !self.transactions.groups.values().any(|g| g
+                        .proposal
+                        .sources
+                        .iter()
+                        .any(|s| s.scope.organization == birth.organization)
+                        || g.proposal
+                            .enrollments
+                            .iter()
+                            .any(|e| e.organization == birth.organization)),
+                "onboarding_scope_already_known"
+            );
+            self.births.insert(
+                birth.organization,
+                BirthEntry {
+                    birth: (**birth).clone(),
+                    confirmed: false,
+                    confirmations: BTreeMap::new(),
+                },
+            );
+            self.organizations.insert(
+                birth.organization,
+                Entry {
+                    head: Head::FreshUnenrolled {
+                        creation: birth.creation,
+                    },
+                    pending: None,
+                    committed_transition_id: None,
+                },
+            );
+            return Ok(());
+        }
+        if let Event::ConfirmOrganizationBirthReviewed { confirmation } = event {
+            confirmation.validate()?;
+            self.transactions
+                .require_organization_free(confirmation.organization)?;
+            let org = self
+                .organizations
+                .get(&confirmation.organization)
+                .context("onboarding_birth_missing")?;
+            ensure!(
+                !matches!(org.head, Head::Deleted | Head::Quarantined) && org.pending.is_none(),
+                "onboarding_workspace_closed_or_pending"
+            );
+            let entry = self
+                .births
+                .get(&confirmation.organization)
+                .context("onboarding_birth_missing")?;
+            ensure!(
+                entry.birth.creation == confirmation.creation
+                    && entry.birth.digest()? == confirmation.birth_digest,
+                "onboarding_birth_confirmation_conflict"
+            );
+            if let Some(old) = entry.confirmations.get(&confirmation.id) {
+                ensure!(
+                    old == confirmation.as_ref(),
+                    "onboarding_confirmation_conflict"
+                );
+                return Ok(());
+            }
+            ensure!(
+                !self.identity_known(confirmation.id),
+                "onboarding_identity_already_known"
+            );
+            ensure!(
+                entry.confirmations.len() < 100,
+                "onboarding_confirmation_review_limit"
+            );
+            let entry = self
+                .births
+                .get_mut(&confirmation.organization)
+                .context("onboarding_birth_missing")?;
+            entry
+                .confirmations
+                .insert(confirmation.id, (**confirmation).clone());
+            entry.confirmed = true;
+            return Ok(());
+        }
+        if let Event::ConfirmOrganizationBirth {
+            organization,
+            creation,
+            metadata_hash,
+        } = event
+        {
+            self.transactions.require_organization_free(*organization)?;
+            let entry = self
+                .births
+                .get_mut(organization)
+                .context("onboarding_birth_missing")?;
+            ensure!(
+                entry.birth.creation == *creation && entry.birth.digest()? == *metadata_hash,
+                "onboarding_birth_confirmation_conflict"
+            );
+            // Confirmation is historical evidence, never permission to reopen a
+            // quarantined/deleted workspace or reset a later enrollment.
+            entry.confirmed = true;
+            return Ok(());
+        }
         if let Event::RegisterLegacy { organization } = event {
             ensure!(
-                !organization.is_nil() && !self.organizations.contains_key(organization),
+                !organization.is_nil() && !self.identity_known(*organization),
                 "financial_guard_organization_already_known"
             );
             self.organizations.insert(
@@ -196,12 +364,30 @@ impl Snapshot {
             | Event::Commit { organization, .. }
             | Event::Quarantine { organization }
             | Event::Delete { organization } => organization,
-            Event::Initialize { .. }
+            Event::PrepareOrganizationBirth { .. }
+            | Event::ConfirmOrganizationBirth { .. }
+            | Event::ConfirmOrganizationBirthReviewed { .. }
+            | Event::Initialize { .. }
             | Event::FinancialTransaction { .. }
             | Event::RegisterLegacy { .. }
             | Event::FinancialSource { .. }
             | Event::FinancialIngress { .. } => unreachable!(),
         };
+        if matches!(event, Event::Prepare { .. } | Event::Commit { .. })
+            && self.births.contains_key(org)
+        {
+            self.confirmed_birth(*org)?;
+        }
+        if let Event::Prepare { transition, .. } = event {
+            ensure!(
+                !self.births.values().any(|b| b
+                    .birth
+                    .reserved_ids()
+                    .contains(&transition.transition_id)
+                    || b.confirmations.contains_key(&transition.transition_id)),
+                "onboarding_identity_already_known"
+            );
+        }
         let entry = self
             .organizations
             .get_mut(org)
@@ -229,7 +415,7 @@ impl Snapshot {
                     "financial_guard_transition_invalid"
                 );
                 match &entry.head {
-                    Head::Legacy => ensure!(
+                    Head::Legacy | Head::FreshUnenrolled { .. } => ensure!(
                         transition.state.revision == 1,
                         "financial_guard_initial_revision_invalid"
                     ),
@@ -252,7 +438,10 @@ impl Snapshot {
             }
             Event::Commit { transition_id, .. } => {
                 ensure!(
-                    matches!(entry.head, Head::Legacy | Head::Enrolled { .. }),
+                    matches!(
+                        entry.head,
+                        Head::Legacy | Head::FreshUnenrolled { .. } | Head::Enrolled { .. }
+                    ),
                     "financial_guard_organization_closed"
                 );
                 let pending = entry
@@ -278,7 +467,10 @@ impl Snapshot {
                 // Retain a proposal as evidence; quarantine never grants its coverage.
             }
             Event::Delete { .. } => entry.head = Head::Deleted,
-            Event::Initialize { .. }
+            Event::PrepareOrganizationBirth { .. }
+            | Event::ConfirmOrganizationBirth { .. }
+            | Event::ConfirmOrganizationBirthReviewed { .. }
+            | Event::Initialize { .. }
             | Event::FinancialTransaction { .. }
             | Event::RegisterLegacy { .. }
             | Event::FinancialSource { .. }
@@ -288,6 +480,40 @@ impl Snapshot {
             self.sources.freeze_organization(*org);
         }
         Ok(())
+    }
+    /// Immutable independent birth proof; this alone grants no trial or consent.
+    pub fn confirmed_birth(&self, org: Uuid) -> Result<&OrganizationBirth> {
+        let entry = self.births.get(&org).context("onboarding_birth_missing")?;
+        entry.birth.validate()?;
+        ensure!(
+            entry.confirmed
+                && entry.birth.organization == org
+                && Some(entry.birth.namespace) == self.namespace,
+            "onboarding_birth_unconfirmed"
+        );
+        Ok(&entry.birth)
+    }
+    pub(crate) fn identity_known(&self, id: Uuid) -> bool {
+        self.organizations.contains_key(&id)
+            || self
+                .births
+                .values()
+                .any(|b| b.birth.reserved_ids().contains(&id) || b.confirmations.contains_key(&id))
+            || self.used_enrollment_transitions.contains(&id)
+            || self.transactions.groups.contains_key(&id)
+            || super::team_financial_transaction::operation_known(self, id)
+            || self.sources.scopes.values().any(|s| {
+                s.scope.organization == id
+                    || s.used_transitions.contains_key(&id)
+                    || s.review.as_ref().is_some_and(|r| r.id == id)
+            })
+            || self
+                .ingress
+                .accounts
+                .values()
+                .any(|a| a.used_transitions.contains_key(&id) || a.review == id)
+            || self.ingress.bootstraps.values().any(|b| b.plan == id)
+            || self.ingress.operator_reviews.contains_key(&id)
     }
     /// Exact committed agreement only. Caller must fence a DB observation between
     /// two equal independent ledger tokens. A proposal never permits analytics.
@@ -303,6 +529,14 @@ impl Snapshot {
         );
         match (&entry.head, database) {
             (Head::Legacy, None) => Ok(Head::Legacy),
+            (Head::FreshUnenrolled { creation }, None) => {
+                let birth = self.confirmed_birth(org)?;
+                ensure!(
+                    birth.creation == *creation,
+                    "onboarding_birth_head_conflict"
+                );
+                Ok(entry.head.clone())
+            }
             (Head::Enrolled { state }, Some(observed)) => {
                 state.validate()?;
                 observed.validate()?;
@@ -431,3 +665,7 @@ mod tests {
             .is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "team_organization_birth_tests.rs"]
+mod organization_birth_tests;

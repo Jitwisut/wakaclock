@@ -144,6 +144,28 @@ pub struct ProviderError {
     pub status: Option<i32>,
     pub retry_after: Option<chrono::DateTime<chrono::Utc>>,
 }
+/// Only evidence references leave the provider boundary. A result is neither
+/// an entitlement grant nor a current SQL projection or cancellation success.
+pub struct RetainedCancellationResult {
+    operation: uuid::Uuid,
+    exchange: uuid::Uuid,
+    observation: uuid::Uuid,
+    proof_identity: String,
+}
+impl RetainedCancellationResult {
+    pub fn operation(&self) -> uuid::Uuid {
+        self.operation
+    }
+    pub fn exchange(&self) -> uuid::Uuid {
+        self.exchange
+    }
+    pub fn observation(&self) -> uuid::Uuid {
+        self.observation
+    }
+    pub fn proof_identity(&self) -> &str {
+        &self.proof_identity
+    }
+}
 impl std::fmt::Display for ProviderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.kind.code())
@@ -195,6 +217,30 @@ pub enum CustomerLookup {
     Verified(String),
     Unconfirmed(&'static str),
 }
+/// Opaque normalized resource read. Only this provider client can construct it;
+/// no response body, credentials, payment details or URL leave the HTTP boundary.
+pub struct CancellationResourceRead {
+    proof_key: String,
+    exchange: uuid::Uuid,
+    observed_at: chrono::DateTime<chrono::Utc>,
+    subscription: crate::services::team_subscription_cancellation::Subscription,
+}
+impl CancellationResourceRead {
+    pub(crate) fn proof_key(&self) -> &str {
+        &self.proof_key
+    }
+    pub(crate) fn exchange(&self) -> uuid::Uuid {
+        self.exchange
+    }
+    pub(crate) fn observed_at(&self) -> chrono::DateTime<chrono::Utc> {
+        self.observed_at
+    }
+    pub(crate) fn subscription(
+        &self,
+    ) -> &crate::services::team_subscription_cancellation::Subscription {
+        &self.subscription
+    }
+}
 pub struct StripeClient {
     client: reqwest::Client,
     origin: String,
@@ -202,6 +248,44 @@ pub struct StripeClient {
     financial_guard: Option<crate::infrastructure::team_financial_guard::FinancialGuard>,
 }
 impl StripeClient {
+    /// Preparation is readonly and creates no accepted financial operation. Each
+    /// actual read is scoped by the current opaque Owner/source/account proof.
+    pub async fn read_cancellation_preparation(
+        &self,
+        proof: &crate::repository::team_subscription_cancellation::CancellationReadProof,
+    ) -> std::result::Result<
+        CancellationResourceRead,
+        crate::services::team_subscription_cancellation::PreparationFailure,
+    > {
+        use crate::services::team_subscription_cancellation::{PreparationFailure, Subscription};
+        if proof.account() != self.account() || proof.live() != self.livemode() {
+            return Err(PreparationFailure::Authority(
+                crate::services::team_insights::TeamError::ProjectionChanged.into(),
+            ));
+        }
+        proof.preflight(self.financial_guard.as_ref()).await?;
+        self.verify_account().await?;
+        proof.preflight(self.financial_guard.as_ref()).await?;
+        let exchange = uuid::Uuid::now_v7();
+        let raw = self
+            .get(&format!("/v1/subscriptions/{}", proof.subscription()))
+            .await?;
+        let observed_at = chrono::Utc::now();
+        let subscription = Subscription::parse(&raw, self.livemode(), observed_at)
+            .map_err(|_| ProviderError::contract())?;
+        if subscription.customer != proof.customer()
+            || subscription.subscription != proof.subscription()
+        {
+            return Err(ProviderError::scope().into());
+        }
+        proof.preflight(self.financial_guard.as_ref()).await?;
+        Ok(CancellationResourceRead {
+            proof_key: proof.proof_key()?,
+            exchange,
+            observed_at,
+            subscription,
+        })
+    }
     pub fn new(config: StripeApiConfig) -> Result<Self> {
         Self::build(config, "https://api.stripe.com".into(), true)
     }
@@ -252,6 +336,204 @@ impl StripeClient {
     pub fn livemode(&self) -> bool {
         self.config.livemode
     }
+    /// One subscription HTTP exchange, minted from an opaque current claim.
+    /// Ancillary account verification is not a subscription activity/result.
+    pub async fn execute_cancellation_exchange(
+        &self,
+        claim: crate::repository::team_subscription_cancellation::CancellationClaim,
+        kind: crate::services::team_subscription_cancellation::lifecycle::ExchangeKind,
+    ) -> std::result::Result<
+        RetainedCancellationResult,
+        crate::services::team_subscription_cancellation::PreparationFailure,
+    > {
+        self.execute_cancellation_exchange_before(claim, kind, None)
+            .await
+    }
+    /// Deadline limits starting HTTP only. Once a request starts its response is
+    /// always normalized and retained, even if the tick budget expired meanwhile.
+    pub(crate) async fn execute_cancellation_exchange_before(
+        &self,
+        claim: crate::repository::team_subscription_cancellation::CancellationClaim,
+        kind: crate::services::team_subscription_cancellation::lifecycle::ExchangeKind,
+        start_before: Option<std::time::Instant>,
+    ) -> std::result::Result<
+        RetainedCancellationResult,
+        crate::services::team_subscription_cancellation::PreparationFailure,
+    > {
+        use crate::services::team_subscription_cancellation::{
+            lifecycle::ExchangeKind, PreparationFailure, Subscription,
+        };
+        let check_budget = || {
+            if start_before.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+                Err(PreparationFailure::Authority(anyhow::anyhow!(
+                    "cancellation_tick_start_budget_exhausted"
+                )))
+            } else {
+                Ok(())
+            }
+        };
+        if claim.account() != self.account() || claim.live() != self.livemode() {
+            return Err(PreparationFailure::Authority(
+                crate::services::team_insights::TeamError::ProjectionChanged.into(),
+            ));
+        }
+        claim
+            .preflight_unprepared(&kind, self.financial_guard.as_ref())
+            .await?;
+        let probe = uuid::Uuid::now_v7();
+        check_budget()?;
+        if let Err(error) = self.verify_account().await {
+            claim.retain_account_failure(probe, &error)?;
+            return Err(error.into());
+        }
+        // Recheck after network waits, persist the exact possible exchange and
+        // mint the proof only after its SQL+independent Confirm are both known.
+        let proof = claim.prepare_exchange(kind.clone()).await?;
+        proof.preflight(self.financial_guard.as_ref()).await?;
+        if proof.account() != self.account() || proof.live() != self.livemode() {
+            return Err(ProviderError::scope().into());
+        }
+        let path = format!("/v1/subscriptions/{}", proof.subscription());
+        check_budget()?;
+        let response = match kind {
+            ExchangeKind::ResourceRead => self.get(&path).await,
+            ExchangeKind::Mutation => {
+                self.request_response(
+                    self.client
+                        .post(format!("{}{path}", self.origin))
+                        .header("Idempotency-Key", proof.request().idempotency_key()?)
+                        .form(&proof.request().provider_body()?),
+                    true,
+                )
+                .await
+            }
+        };
+        let raw = match response {
+            Ok(value) => value,
+            Err(error) => {
+                proof.retain_failure(&error)?;
+                return Err(error.into());
+            }
+        };
+        let observed_at =
+            chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros())
+                .ok_or_else(|| {
+                    PreparationFailure::Authority(anyhow::anyhow!(
+                        "cancellation_observation_clock_invalid"
+                    ))
+                })?;
+        let metadata = match Subscription::parse(&raw, self.livemode(), observed_at) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                let error = ProviderError::contract();
+                proof.retain_failure(&error)?;
+                return Err(error.into());
+            }
+        };
+        // Retain even if Owner/lease/source changed while HTTP was running. No
+        // post-response preflight can erase this result or make it a fresh grant.
+        let observation = proof.retain(&metadata, observed_at)?;
+        if metadata.customer != proof.request().customer()
+            || metadata.subscription != proof.subscription()
+        {
+            let error = ProviderError::scope();
+            proof.retain_failure(&error)?;
+            return Err(error.into());
+        }
+        Ok(RetainedCancellationResult {
+            operation: proof.operation(),
+            exchange: proof.exchange_id(),
+            observation,
+            proof_identity: proof.identity_hash()?,
+        })
+    }
+    pub async fn portal_destination(
+        &self,
+        proof: &crate::repository::team_stripe_portal::PortalProof,
+        policy: &crate::services::team_stripe_portal::PortalPolicy,
+        request_id: uuid::Uuid,
+    ) -> std::result::Result<
+        crate::services::team_stripe_portal::HostedPortal,
+        crate::services::team_stripe_portal::PortalFailure,
+    > {
+        if proof.account() != self.account()
+            || proof.live() != self.livemode()
+            || policy.account() != self.account()
+            || policy.live() != self.livemode()
+        {
+            return Err(
+                crate::services::team_stripe_portal::PortalFailure::Authority(
+                    crate::services::team_insights::TeamError::ProjectionChanged.into(),
+                ),
+            );
+        }
+        proof
+            .preflight(policy, self.financial_guard.as_ref())
+            .await?;
+        self.verify_account().await?;
+        proof
+            .preflight(policy, self.financial_guard.as_ref())
+            .await?;
+        let path = format!(
+            "/v1/billing_portal/configurations/{}",
+            policy.configuration()
+        );
+        let configuration = self.get(&path).await?;
+        policy.verify_configuration(&configuration)?;
+        proof
+            .preflight(policy, self.financial_guard.as_ref())
+            .await?;
+        let key = proof.request_key(policy, request_id)?;
+        let response = self
+            .request_response(
+                self.client
+                    .post(format!("{}/v1/billing_portal/sessions", self.origin))
+                    .header("Idempotency-Key", key)
+                    .form(&[
+                        ("customer", proof.customer().to_owned()),
+                        ("configuration", policy.configuration().to_owned()),
+                        ("return_url", policy.return_url()),
+                    ]),
+                true,
+            )
+            .await?;
+        let result = crate::services::team_stripe_portal::HostedPortal::parse(
+            &response,
+            policy,
+            proof.customer(),
+            request_id,
+            chrono::Utc::now(),
+        )
+        .map_err(|_| {
+            crate::services::team_stripe_portal::PortalFailure::Provider(ProviderError::contract())
+        })?;
+        proof
+            .preflight(policy, self.financial_guard.as_ref())
+            .await?;
+        let configuration = self.get(&path).await?;
+        policy.verify_configuration(&configuration)?;
+        proof
+            .preflight(policy, self.financial_guard.as_ref())
+            .await?;
+        result.fresh_at(chrono::Utc::now())?;
+        Ok(result)
+    }
+    fn checkout_failure<T>(
+        &self,
+        claim: &crate::repository::team_stripe_checkout::CheckoutClaim,
+        phase: crate::services::team_stripe_checkout_receipt::FailurePhase,
+        result: std::result::Result<T, ProviderError>,
+    ) -> std::result::Result<T, ProviderError> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                claim
+                    .retain_provider_failure(phase, &error)
+                    .map_err(|_| ProviderError::contract())?;
+                Err(error)
+            }
+        }
+    }
     async fn get(&self, path: &str) -> std::result::Result<serde_json::Value, ProviderError> {
         self.request(self.client.get(format!("{}{path}", self.origin)))
             .await
@@ -268,6 +550,20 @@ impl StripeClient {
         accepted_write_may_exist: bool,
     ) -> std::result::Result<serde_json::Value, ProviderError> {
         use crate::repository::team_stripe::Failure;
+        if let Some(guard) = &self.financial_guard {
+            if let Some(until) = guard
+                .checkout_retry_after(self.account(), self.livemode())
+                .map_err(|_| ProviderError::scope())?
+            {
+                if until > chrono::Utc::now() {
+                    return Err(ProviderError {
+                        kind: Failure::RateLimited,
+                        status: None,
+                        retry_after: Some(until),
+                    });
+                }
+            }
+        }
         let mut response = request
             .bearer_auth(&self.config.api_key)
             .header("Stripe-Version", API_VERSION)
@@ -323,6 +619,19 @@ impl StripeClient {
         catalog: &crate::services::team_stripe_catalog::Catalog,
     ) -> std::result::Result<crate::services::team_stripe_checkout::SessionEvidence, ProviderError>
     {
+        let result = self.create_checkout_session_inner(claim, catalog).await;
+        self.checkout_failure(
+            claim,
+            crate::services::team_stripe_checkout_receipt::FailurePhase::CreateFlow,
+            result,
+        )
+    }
+    async fn create_checkout_session_inner(
+        &self,
+        claim: &crate::repository::team_stripe_checkout::CheckoutClaim,
+        catalog: &crate::services::team_stripe_catalog::Catalog,
+    ) -> std::result::Result<crate::services::team_stripe_checkout::SessionEvidence, ProviderError>
+    {
         if claim.session_id.is_some() || claim.lookup_only {
             return Err(ProviderError::contract());
         }
@@ -350,6 +659,10 @@ impl StripeClient {
             &claim.expected(),
         )
         .map_err(|_| ProviderError::contract())?;
+        claim
+            .provider_preflight(self.financial_guard.as_ref(), true)
+            .await
+            .map_err(|_| ProviderError::scope())?;
         let value = self
             .request_response(
                 self.client
@@ -368,11 +681,30 @@ impl StripeClient {
             chrono::Utc::now(),
         )
         .map_err(|_| ProviderError::contract())?;
+        claim
+            .retain_session(
+                &receipt,
+                crate::services::team_stripe_checkout_receipt::ObservationKind::CreateResponse,
+            )
+            .map_err(|_| ProviderError::contract())?;
         // Re-read the exact resource; POST response is not canonical payment/subscription proof.
         self.checkout_session(&receipt.id, claim).await
     }
     /// Current resource readback; never trusts a browser success redirect as payment proof.
     pub async fn checkout_session(
+        &self,
+        session: &str,
+        claim: &crate::repository::team_stripe_checkout::CheckoutClaim,
+    ) -> std::result::Result<crate::services::team_stripe_checkout::SessionEvidence, ProviderError>
+    {
+        let result = self.checkout_session_inner(session, claim).await;
+        self.checkout_failure(
+            claim,
+            crate::services::team_stripe_checkout_receipt::FailurePhase::ResourceRead,
+            result,
+        )
+    }
+    async fn checkout_session_inner(
         &self,
         session: &str,
         claim: &crate::repository::team_stripe_checkout::CheckoutClaim,
@@ -392,6 +724,10 @@ impl StripeClient {
             return Err(ProviderError::contract());
         }
         self.verify_account().await?;
+        claim
+            .provider_preflight(self.financial_guard.as_ref(), false)
+            .await
+            .map_err(|_| ProviderError::scope())?;
         let value = self
             .request_response(
                 self.client
@@ -403,12 +739,19 @@ impl StripeClient {
         if value["id"].as_str() != Some(session) {
             return Err(ProviderError::contract());
         }
-        crate::services::team_stripe_checkout::SessionEvidence::parse(
+        let receipt = crate::services::team_stripe_checkout::SessionEvidence::parse(
             &value,
             &claim.expected(),
             chrono::Utc::now(),
         )
-        .map_err(|_| ProviderError::contract())
+        .map_err(|_| ProviderError::contract())?;
+        claim
+            .retain_session(
+                &receipt,
+                crate::services::team_stripe_checkout_receipt::ObservationKind::ResourceRead,
+            )
+            .map_err(|_| ProviderError::contract())?;
+        Ok(receipt)
     }
     pub async fn hosted_checkout(
         &self,
@@ -451,6 +794,22 @@ impl StripeClient {
         &self,
         claim: &crate::repository::team_stripe_checkout::CheckoutClaim,
     ) -> std::result::Result<CheckoutLookup, ProviderError> {
+        let result = self.lookup_checkout_session_inner(claim).await;
+        if let Ok(CheckoutLookup::Unconfirmed(reason)) = &result {
+            claim
+                .retain_lookup_result(reason)
+                .map_err(|_| ProviderError::contract())?;
+        }
+        self.checkout_failure(
+            claim,
+            crate::services::team_stripe_checkout_receipt::FailurePhase::LookupFlow,
+            result,
+        )
+    }
+    async fn lookup_checkout_session_inner(
+        &self,
+        claim: &crate::repository::team_stripe_checkout::CheckoutClaim,
+    ) -> std::result::Result<CheckoutLookup, ProviderError> {
         if !claim.lookup_only
             || claim.session_id.is_some()
             || claim.proof.account != self.account()
@@ -472,6 +831,10 @@ impl StripeClient {
             if let Some(c) = cursor.as_ref() {
                 params.push(("starting_after", c));
             }
+            claim
+                .provider_preflight(self.financial_guard.as_ref(), false)
+                .await
+                .map_err(|_| ProviderError::scope())?;
             let page = self
                 .request(
                     self.client
@@ -543,6 +906,21 @@ impl StripeClient {
         Option<crate::services::team_stripe_checkout::SubscriptionEvidence>,
         ProviderError,
     > {
+        let result = self.checkout_subscription_inner(claim, session).await;
+        self.checkout_failure(
+            claim,
+            crate::services::team_stripe_checkout_receipt::FailurePhase::SubscriptionRead,
+            result,
+        )
+    }
+    async fn checkout_subscription_inner(
+        &self,
+        claim: &crate::repository::team_stripe_checkout::CheckoutClaim,
+        session: &crate::services::team_stripe_checkout::SessionEvidence,
+    ) -> std::result::Result<
+        Option<crate::services::team_stripe_checkout::SubscriptionEvidence>,
+        ProviderError,
+    > {
         use crate::services::team_stripe_checkout::SubscriptionEvidence;
         if session.status != "complete" || session.subscription.is_none() {
             return Ok(None);
@@ -555,6 +933,10 @@ impl StripeClient {
             .subscription
             .as_ref()
             .ok_or_else(ProviderError::contract)?;
+        claim
+            .provider_preflight(self.financial_guard.as_ref(), false)
+            .await
+            .map_err(|_| ProviderError::scope())?;
         let raw = self.get(&format!("/v1/subscriptions/{sub}")).await?;
         let at = chrono::Utc::now();
         let before = SubscriptionEvidence::parse(&raw, session, &claim.expected(), at)
@@ -567,6 +949,10 @@ impl StripeClient {
                 retry_after: None,
             });
         }
+        claim
+            .provider_preflight(self.financial_guard.as_ref(), false)
+            .await
+            .map_err(|_| ProviderError::scope())?;
         let raw = self.get(&format!("/v1/subscriptions/{sub}")).await?;
         let after = SubscriptionEvidence::parse(&raw, &current, &claim.expected(), at)
             .map_err(|_| ProviderError::contract())?;
@@ -617,6 +1003,12 @@ impl StripeClient {
         {
             return Err(ProviderError::scope());
         }
+        use crate::services::team_financial_source::CustomerLookupResult as Observation;
+        let retain = |observation| {
+            claim
+                .retain_lookup_observation(observation)
+                .map_err(|_| ProviderError::contract())
+        };
         let id = if let Some(id) = claim.customer_id.as_ref() {
             if !crate::services::team_stripe::id(id, "cus_") {
                 return Err(ProviderError::contract());
@@ -631,20 +1023,41 @@ impl StripeClient {
                         .query(&[("query", query.as_str()), ("limit", "2")]),
                 )
                 .await?;
-            let data = raw["data"].as_array().ok_or_else(ProviderError::contract)?;
+            let Some(data) = raw["data"].as_array() else {
+                retain(Observation::Invalid { customer: None })?;
+                return Err(ProviderError::contract());
+            };
             if raw["object"] != "search_result" || data.len() > 2 {
+                retain(Observation::Invalid { customer: None })?;
                 return Err(ProviderError::contract());
             }
-            let more = raw["has_more"]
-                .as_bool()
-                .ok_or_else(ProviderError::contract)?;
+            let Some(more) = raw["has_more"].as_bool() else {
+                retain(Observation::Invalid { customer: None })?;
+                return Err(ProviderError::contract());
+            };
             for value in data {
-                Self::customer_identity(value, claim)?;
+                if let Err(error) = Self::customer_identity(value, claim) {
+                    retain(Observation::Invalid {
+                        customer: value["id"]
+                            .as_str()
+                            .filter(|s| crate::services::team_stripe::id(s, "cus_"))
+                            .map(String::from),
+                    })?;
+                    return Err(error);
+                }
             }
             if more || data.len() > 1 {
+                retain(Observation::Ambiguous {
+                    candidates: data
+                        .iter()
+                        .map(|v| v["id"].as_str().unwrap().to_owned())
+                        .collect(),
+                    has_more: more,
+                })?;
                 return Ok(CustomerLookup::Unconfirmed("customer_candidates_ambiguous"));
             }
             let Some(value) = data.first() else {
+                retain(Observation::NotFound)?;
                 return Ok(CustomerLookup::Unconfirmed(
                     "customer_not_found_unconfirmed",
                 ));
@@ -653,23 +1066,44 @@ impl StripeClient {
         };
         // Search is eventually consistent. A positive candidate needs fresh resource verification;
         // a missing result never authorizes another create operation.
+        claim
+            .provider_preflight(self.financial_guard.as_ref())
+            .await
+            .map_err(|_| ProviderError::scope())?;
         let value = match self.get(&format!("/v1/customers/{id}")).await {
             Err(e) if matches!(e.kind, crate::repository::team_stripe::Failure::NotFound) => {
+                retain(Observation::NotFound)?;
                 return Ok(CustomerLookup::Unconfirmed(
                     "customer_not_found_unconfirmed",
-                ))
+                ));
             }
             other => other?,
         };
         if value["id"].as_str() != Some(&id) {
+            retain(Observation::Invalid {
+                customer: value["id"]
+                    .as_str()
+                    .filter(|s| crate::services::team_stripe::id(s, "cus_"))
+                    .map(String::from),
+            })?;
             return Err(ProviderError::scope());
         }
         if value["deleted"].as_bool() == Some(true) {
+            retain(Observation::Deleted {
+                customer: id.clone(),
+            })?;
             return Ok(CustomerLookup::Unconfirmed("customer_deleted"));
         }
-        Ok(CustomerLookup::Verified(Self::customer_identity(
-            &value, claim,
-        )?))
+        let result = Self::customer_identity(&value, claim);
+        claim
+            .retain_provider_result(
+                value["id"]
+                    .as_str()
+                    .filter(|s| crate::services::team_stripe::id(s, "cus_")),
+                result.is_ok(),
+            )
+            .map_err(|_| ProviderError::contract())?;
+        result.map(CustomerLookup::Verified)
     }
     fn customer_identity(
         value: &serde_json::Value,
@@ -1144,6 +1578,7 @@ mod checkout_transport_tests {
             catalog_hash: "fixture".into(),
             session_id: None,
             lookup_only: false,
+            financial: None,
             request: crate::services::team_stripe_checkout::FrozenRequest::new(
                 &crate::services::team_stripe_checkout::ExpectedSession{operation:op,customer:"cus_checkout",price:"price_checkout",currency:"usd",amount_minor:2500,live:false},
                 &crate::services::team_stripe_checkout::CheckoutPolicy::parse(br#"{"schema_version":1,"owner_approved":true,"return_origin":"https://billing.example.test","automatic_tax":true}"#).unwrap()).unwrap(),
@@ -1304,6 +1739,7 @@ mod checkout_creation_tests {
             catalog_hash: catalog.digest().unwrap(),
             session_id: None,
             lookup_only: false,
+            financial: None,
             request: frozen,
         };
         let client = StripeClient::fixture(port, "acct_create");

@@ -563,6 +563,59 @@ async fn team_cost_joint_canonical_correction_and_pg_source_races() {
             .is_ok(),
         "fresh read may retain expired/historical receipts under a newly matching proof"
     );
+    // Read from the same repository before and after removal, retaining the same
+    // caller identity and canonical facts. Test both sides of the access boundary.
+    let team = Uuid::now_v7();
+    pg.execute(
+        "INSERT INTO teams(id,organization_id,name,slug) VALUES($1,$2,'Receipt team',$3)",
+        &[&team, &org, &team.to_string()],
+    )
+    .await
+    .unwrap();
+    let contributor = users[1];
+    pg.execute(
+        "INSERT INTO team_members(team_id,user_id,role) VALUES($1,$2,'member')",
+        &[&team, &contributor],
+    )
+    .await
+    .unwrap();
+    pg.execute("UPDATE team_repository_scopes SET team_id=$3 WHERE organization_id=$1 AND repository_id=$2", &[&org,&repository,&team]).await.unwrap();
+    trust.export_registry(&path).await.unwrap();
+    let before = service
+        .receipt(contributor, org, Some(team), repository, 2)
+        .await
+        .unwrap();
+    assert_eq!(before.sessions.len(), 1);
+    assert_eq!(before.estimated_cost_microusd.value, Some(200));
+    let organizations = crate::services::organizations::OrganizationsService::new(
+        Some(pg.clone()),
+        Arc::new(AuthorizationService::new(Some(pg.clone()))),
+        None,
+    );
+    organizations
+        .remove_team_member(actor, org, team, contributor)
+        .await
+        .unwrap();
+    trust.export_registry(&path).await.unwrap();
+    assert!(service
+        .validate_response(contributor, org, Some(team), before.generation)
+        .await
+        .is_err());
+    assert!(service
+        .receipt(contributor, org, Some(team), repository, 2)
+        .await
+        .is_err());
+    assert!(service
+        .receipt_page(contributor, org, None, repository, 2, None, true)
+        .await
+        .is_err());
+    assert!(service.links(contributor, org).await.unwrap().is_empty());
+    let after = service
+        .receipt(actor, org, Some(team), repository, 2)
+        .await
+        .unwrap();
+    assert!(after.sessions.is_empty());
+    assert_eq!(after.estimated_cost_microusd.value, None);
     proxy.abort();
     std::env::remove_var("ATOAXIS_TEAM_WORKFLOW_ENABLED");
     std::fs::remove_file(path).unwrap();

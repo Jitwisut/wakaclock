@@ -420,6 +420,22 @@ mod tests {
     }
 
     #[test]
+    fn an_expired_signed_session_cannot_authenticate_a_team_request() {
+        let secret = "synthetic-session-test";
+        let token = encode(
+            &JwtHeader::default(),
+            &SessionClaims {
+                sub: Uuid::now_v7(),
+                jti: Uuid::now_v7(),
+                exp: chrono::Utc::now().timestamp() - 3600,
+            },
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+        assert_eq!(verify_session_token(&token, secret), None);
+    }
+
+    #[test]
     fn sessions_issued_in_the_same_second_are_independently_revocable() {
         let secret = "test-only-long-secret-for-jwt-signing";
         let user = Uuid::now_v7();

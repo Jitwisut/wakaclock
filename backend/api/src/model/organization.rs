@@ -10,12 +10,66 @@ pub struct Organization {
     pub personal_owner_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Present only after exact independent+SQL confirmation of this retry key.
+    /// It proves creation, not enrollment, payment, sharing or analytics health.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creation_receipt: Option<OrganizationCreationReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creation_recovery: Option<OrganizationCreationRecovery>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrganizationCreationReceipt {
+    pub schema: u8,
+    pub request_id: Uuid,
+    pub disposition: &'static str,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct CreateOrganizationRequest {
+#[serde(untagged)]
+pub enum CreateOrganizationRequest {
+    Recovery(OrganizationBirthAction),
+    Create(CreateOrganizationFields),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateOrganizationFields {
     pub name: String,
     pub slug: Option<String>,
+    /// Optional retry nonce, never an organization/user identity.
+    #[serde(default)]
+    pub creation_request_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OrganizationBirthAction {
+    InspectBirth {
+        organization_id: Uuid,
+    },
+    ConfirmBirth {
+        organization_id: Uuid,
+        creation_id: Uuid,
+        expected_birth_digest: String,
+        expected_observation: String,
+        confirmation_id: Uuid,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrganizationCreationRecovery {
+    pub schema: u8,
+    pub organization_id: Uuid,
+    pub creation_id: Uuid,
+    pub birth_digest: String,
+    pub observation: String,
+    pub disposition: &'static str,
+    pub confirmation_id: Option<Uuid>,
+    pub confirmation_recorded: bool,
+    pub can_confirm: bool,
+    pub creates_organization: bool,
+    pub starts_trial: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1,3 +1,5 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { QueryProvider } from '@/components/query-provider';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { WakaclockUserProvider, useWakaclockUserStore } from '@/lib/wakaclock/user-store';
@@ -30,10 +32,8 @@ it('never overwrites the stored session with anonymous state while hydrating', (
   const writes = vi.spyOn(Storage.prototype, 'setItem');
   mount();
   expect(screen.getByText('Ada')).toBeVisible();
-  expect(writes).toHaveBeenCalled();
-  for (const [key, value] of writes.mock.calls) {
-    if (key === 'wakaclock-session') expect(JSON.parse(value)).toEqual(session);
-  }
+  expect(JSON.parse(localStorage.getItem('wakaclock-session')!)).toEqual(session);
+  expect(writes).not.toHaveBeenCalled();
 });
 it('hydrates a valid session, mirrors its token and clears both persistence and token on logout or rejection', () => {
   localStorage.setItem('wakaclock-session', JSON.stringify(session));
@@ -87,4 +87,53 @@ it('requires a provider instead of silently exposing a shared anonymous store', 
     'useWakaclockUserStore must be used within a WakaclockUserProvider'
   );
   error.mockRestore();
+});
+
+it('preserves a second tab login when an old 401 arrives before the storage event', () => {
+  localStorage.setItem('wakaclock-session', JSON.stringify(session));
+  mount();
+  const next = { userId: 'other', username: 'Grace', token: token({ exp: 9999999998 }) };
+  localStorage.setItem('wakaclock-session', JSON.stringify(next));
+  act(() => notifyUnauthorized());
+  expect(screen.getByText('Grace')).toBeVisible();
+  expect(getCurrentToken()).toBe(next.token);
+  expect(JSON.parse(localStorage.getItem('wakaclock-session')!)).toEqual(next);
+});
+
+it('starts a fresh query cache when another account takes over the same page', () => {
+  function CacheProbe() {
+    const client = useQueryClient();
+    const state = useWakaclockUserStore((s) => s);
+    return (
+      <>
+        <span>{client.getQueryData<string>(['team-receipt']) ?? 'Empty cache'}</span>
+        <button
+          onClick={() => {
+            client.setQueryData(['team-receipt'], 'Owner receipt');
+            expect(client.getQueryData(['team-receipt'])).toBe('Owner receipt');
+            state.setSession({
+              userId: 'other',
+              username: 'Grace',
+              token: token({ exp: 9999999998 }),
+            });
+          }}
+        >
+          Switch account
+        </button>
+        <span>{state.username}</span>
+      </>
+    );
+  }
+  localStorage.setItem('wakaclock-session', JSON.stringify(session));
+  render(
+    <WakaclockUserProvider>
+      <QueryProvider>
+        <CacheProbe />
+      </QueryProvider>
+    </WakaclockUserProvider>
+  );
+  expect(screen.getByText('Ada')).toBeVisible();
+  fireEvent.click(screen.getByText('Switch account'));
+  expect(screen.getByText('Grace')).toBeVisible();
+  expect(screen.getByText('Empty cache')).toBeVisible();
 });

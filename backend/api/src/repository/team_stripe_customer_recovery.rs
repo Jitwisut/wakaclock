@@ -121,6 +121,28 @@ async fn authorization(
     Ok(row.get(1))
 }
 
+pub(super) async fn verify(
+    tx: &tokio_postgres::Transaction<'_>,
+    guard: &FinancialGuard,
+    scope: &Scope,
+    request: &AcceptedRequest,
+    actor: Uuid,
+    revision: i64,
+) -> Result<()> {
+    let state = guard.read()?.snapshot;
+    let writer = crate::services::team_financial_transaction::recovery_authorization(
+        &state, scope, request, actor, revision,
+    )?;
+    let Writer::CustomerRecoveryAuthorization { authorized_at, .. } = writer else {
+        unreachable!()
+    };
+    ensure!(
+        authorization(tx, request.operation, revision, actor).await? == *authorized_at,
+        "financial_customer_recovery_authorization_changed"
+    );
+    Ok(())
+}
+
 /// Exact committed-next confirmation has no current Owner grant. Canonical
 /// source/checkpoint verification is performed by the shared coordinator too.
 pub(super) async fn committed(
