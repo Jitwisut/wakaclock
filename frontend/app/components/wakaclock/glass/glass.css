@@ -1,0 +1,477 @@
+/*
+ * Glass surface — a macOS/iOS-style material layer.
+ *
+ * Everything is scoped under `.glass-surface`, so a page opts in by wrapping its
+ * content in <GlassSurface>. The tokens are plain custom properties: promoting this to
+ * a dashboard-wide theme preset later means moving the token blocks below onto
+ * `[data-theme-preset='glass']` and keeping the component rules as they are.
+ *
+ * The rules are deliberately unlayered. Tailwind v4 emits utilities inside
+ * `@layer utilities`, and unlayered CSS wins over every layer, so these rules restyle
+ * the existing panels' `rounded-md border p-3` chrome without editing each panel.
+ */
+
+.glass-surface {
+  --glass-font:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Inter', 'Helvetica Neue',
+    system-ui, sans-serif;
+
+  --glass-accent: oklch(0.6 0.2 256);
+  --glass-accent-contrast: oklch(1 0 0);
+  --glass-accent-soft: color-mix(in oklch, var(--glass-accent) 14%, transparent);
+  --glass-accent-ring: color-mix(in oklch, var(--glass-accent) 38%, transparent);
+
+  --glass-label: oklch(0.21 0.01 265);
+  --glass-label-2: oklch(0.47 0.012 265);
+  --glass-label-3: oklch(0.62 0.01 265);
+
+  --glass-canvas: oklch(0.975 0.004 265);
+  --glass-material: rgb(255 255 255 / 0.62);
+  --glass-material-thick: rgb(255 255 255 / 0.8);
+  --glass-card: rgb(255 255 255 / 0.78);
+  --glass-fill: rgb(120 120 128 / 0.1);
+  --glass-fill-strong: rgb(120 120 128 / 0.18);
+  --glass-separator: rgb(60 60 67 / 0.12);
+  --glass-edge: rgb(255 255 255 / 0.85);
+
+  --glass-shadow-card:
+    0 0 0 0.5px rgb(0 0 0 / 0.06), 0 1px 2px rgb(0 0 0 / 0.04),
+    0 10px 30px -14px rgb(15 23 42 / 0.16);
+  --glass-shadow-window:
+    0 0 0 0.5px rgb(0 0 0 / 0.08), 0 2px 6px rgb(0 0 0 / 0.04),
+    0 30px 80px -30px rgb(15 23 42 / 0.3);
+  --glass-shadow-control: 0 0 0 0.5px rgb(0 0 0 / 0.08), 0 1px 1.5px rgb(0 0 0 / 0.08);
+
+  --glass-blur: saturate(180%) blur(28px);
+  --glass-radius-window: 22px;
+  --glass-radius-card: 16px;
+  --glass-radius-inset: 12px;
+  --glass-radius-control: 10px;
+  --glass-ease: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --glass-tint-blue: linear-gradient(180deg, oklch(0.7 0.17 250), oklch(0.58 0.2 258));
+  --glass-tint-indigo: linear-gradient(180deg, oklch(0.66 0.18 285), oklch(0.53 0.22 288));
+  --glass-tint-green: linear-gradient(180deg, oklch(0.78 0.17 150), oklch(0.64 0.18 150));
+  --glass-tint-orange: linear-gradient(180deg, oklch(0.8 0.15 65), oklch(0.7 0.18 50));
+  --glass-tint-pink: linear-gradient(180deg, oklch(0.72 0.19 5), oklch(0.6 0.22 10));
+  --glass-tint-gray: linear-gradient(180deg, oklch(0.72 0.01 265), oklch(0.58 0.012 265));
+
+  --glass-good: oklch(0.68 0.17 150);
+  --glass-warn: oklch(0.76 0.16 70);
+  --glass-bad: oklch(0.62 0.22 25);
+  --glass-idle: oklch(0.7 0.01 265);
+
+  position: relative;
+  isolation: isolate;
+  color: var(--glass-label);
+  font-family: var(--glass-font);
+  font-feature-settings: 'ss01', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.006em;
+}
+
+:where(.dark) .glass-surface {
+  --glass-accent: oklch(0.7 0.17 254);
+  --glass-label: oklch(0.96 0.004 265);
+  --glass-label-2: oklch(0.74 0.01 265);
+  --glass-label-3: oklch(0.58 0.012 265);
+
+  --glass-canvas: oklch(0.17 0.006 265);
+  --glass-material: rgb(38 38 44 / 0.58);
+  --glass-material-thick: rgb(44 44 50 / 0.78);
+  --glass-card: rgb(44 44 50 / 0.62);
+  --glass-fill: rgb(118 118 128 / 0.2);
+  --glass-fill-strong: rgb(118 118 128 / 0.3);
+  --glass-separator: rgb(255 255 255 / 0.09);
+  --glass-edge: rgb(255 255 255 / 0.07);
+
+  --glass-shadow-card:
+    0 0 0 0.5px rgb(255 255 255 / 0.06), 0 1px 2px rgb(0 0 0 / 0.3),
+    0 14px 34px -16px rgb(0 0 0 / 0.6);
+  --glass-shadow-window: 0 0 0 0.5px rgb(255 255 255 / 0.08), 0 30px 80px -30px rgb(0 0 0 / 0.75);
+  --glass-shadow-control: 0 0 0 0.5px rgb(255 255 255 / 0.1), 0 1px 1.5px rgb(0 0 0 / 0.3);
+}
+
+/* The default `retro-pixel` preset squares every corner with `border-radius: 0
+   !important`. Inside the surface, `revert-layer` hands corners back to the Tailwind
+   utilities on each element; the material classes below restate their own radii with a
+   higher specificity so they win over this reset too. */
+.glass-surface.glass-surface,
+.glass-surface.glass-surface * {
+  border-radius: revert-layer !important;
+}
+
+/* ---------------------------------------------------------------- wallpaper */
+
+.glass-surface .glass-wallpaper {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  border-radius: 22px !important;
+  background: var(--glass-canvas);
+  pointer-events: none;
+}
+
+.glass-wallpaper::before,
+.glass-wallpaper::after {
+  content: '';
+  position: absolute;
+  width: 70%;
+  aspect-ratio: 1;
+  border-radius: 50% !important;
+  filter: blur(90px);
+  opacity: 0.55;
+  animation: glass-drift 28s var(--glass-ease) infinite alternate;
+}
+
+.glass-wallpaper::before {
+  top: -30%;
+  left: -15%;
+  background: radial-gradient(circle, oklch(0.82 0.11 250 / 0.9), transparent 65%);
+}
+
+.glass-wallpaper::after {
+  right: -20%;
+  bottom: -35%;
+  background: radial-gradient(circle, oklch(0.84 0.1 330 / 0.8), transparent 65%);
+  animation-delay: -14s;
+}
+
+:where(.dark) .glass-wallpaper::before,
+:where(.dark) .glass-wallpaper::after {
+  opacity: 0.28;
+}
+
+@keyframes glass-drift {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(6%, 4%, 0) scale(1.08);
+  }
+}
+
+/* ---------------------------------------------------------------- materials */
+
+.glass-surface.glass-surface .glass-window {
+  border-radius: var(--glass-radius-window) !important;
+  background: var(--glass-material);
+  box-shadow:
+    var(--glass-shadow-window),
+    inset 0 1px 0 var(--glass-edge);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+.glass-surface.glass-menu {
+  border: 0;
+  background: var(--glass-material-thick);
+  color: var(--glass-label);
+  box-shadow: var(--glass-shadow-window);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+.glass-surface.glass-menu [role='menuitem'] {
+  border-radius: 8px !important;
+}
+
+.glass-surface.glass-menu [role='menuitem']:focus {
+  background: var(--glass-accent);
+  color: var(--glass-accent-contrast);
+}
+
+.glass-sidebar {
+  background: var(--glass-material-thick);
+  border-inline-end: 0.5px solid var(--glass-separator);
+}
+
+.glass-surface.glass-surface .glass-card,
+.glass-surface.glass-menu {
+  border-radius: var(--glass-radius-card) !important;
+  background: var(--glass-card);
+  box-shadow:
+    var(--glass-shadow-card),
+    inset 0 1px 0 var(--glass-edge);
+}
+
+.glass-surface.glass-surface .glass-tint {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: var(--tint-radius, 7px) !important;
+  color: white;
+  box-shadow:
+    inset 0 0.5px 0 rgb(255 255 255 / 0.45),
+    0 0.5px 1px rgb(0 0 0 / 0.18);
+}
+
+.glass-tint[data-tint='blue'] {
+  background: var(--glass-tint-blue);
+}
+.glass-tint[data-tint='indigo'] {
+  background: var(--glass-tint-indigo);
+}
+.glass-tint[data-tint='green'] {
+  background: var(--glass-tint-green);
+}
+.glass-tint[data-tint='orange'] {
+  background: var(--glass-tint-orange);
+}
+.glass-tint[data-tint='pink'] {
+  background: var(--glass-tint-pink);
+}
+.glass-tint[data-tint='gray'] {
+  background: var(--glass-tint-gray);
+}
+
+.glass-surface.glass-surface .glass-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 999px !important;
+  background: var(--glass-idle);
+}
+.glass-surface.glass-surface .glass-dot[data-tone='good'] {
+  background: var(--glass-good);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--glass-good) 22%, transparent);
+}
+.glass-surface.glass-surface .glass-dot[data-tone='warn'] {
+  background: var(--glass-warn);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--glass-warn) 24%, transparent);
+}
+.glass-surface.glass-surface .glass-dot[data-tone='bad'] {
+  background: var(--glass-bad);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--glass-bad) 22%, transparent);
+}
+
+/* Mobile push navigation: the detail pane slides in like an iOS navigation push. */
+@media (max-width: 767.98px) {
+  .glass-push {
+    animation: glass-push-in 420ms var(--glass-ease) both;
+  }
+}
+
+@keyframes glass-push-in {
+  from {
+    opacity: 0;
+    transform: translate3d(28px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ------------------------------------------------- existing panel chrome */
+
+/* Panels render `<section aria-label>` or shadcn <Card>. Top-level ones become cards;
+   nested ones become inset grouped rows, the way iOS groups a list inside a card. */
+.glass-surface [data-glass-content] :is(section, [data-slot='card']) {
+  border: 0;
+  border-radius: var(--glass-radius-card) !important;
+  padding: 18px 20px;
+  background: var(--glass-card);
+  box-shadow:
+    var(--glass-shadow-card),
+    inset 0 1px 0 var(--glass-edge);
+  color: var(--glass-label);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.glass-surface [data-glass-content] [data-slot='card'] {
+  padding: 0;
+}
+
+.glass-surface
+  [data-glass-content]
+  :is(section, [data-slot='card'])
+  :is(section, [data-slot='card']) {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: var(--glass-radius-inset) !important;
+  background: var(--glass-fill);
+  box-shadow: none;
+}
+
+/* Bordered rows, lists and receipts inside a panel become hairline inset groups. */
+.glass-surface [data-glass-content] .border {
+  border: 0.5px solid var(--glass-separator);
+  border-radius: var(--glass-radius-inset) !important;
+  box-shadow: none;
+}
+
+.glass-surface [data-glass-content] :is(.divide-y, .divide-x) > :not(:last-child) {
+  border-color: var(--glass-separator);
+}
+
+/* Some panels use a bordered <div> as their root instead of <section>; those are
+   cards too. Listed after the inset rule so it wins for direct children. */
+.glass-surface [data-glass-content] > div.border {
+  border: 0;
+  border-radius: var(--glass-radius-card) !important;
+  padding: 18px 20px;
+  background: var(--glass-card);
+  box-shadow:
+    var(--glass-shadow-card),
+    inset 0 1px 0 var(--glass-edge);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* A panel's first line is its title. */
+.glass-surface [data-glass-content] section > :is(p.font-medium, h3, h4):first-child,
+.glass-surface [data-glass-content] > div.border > :is(p.font-medium, h3, h4):first-child,
+.glass-surface [data-glass-content] [data-slot='card-title'] {
+  margin-bottom: 6px;
+  color: var(--glass-label);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+}
+
+.glass-surface [data-glass-content] :is(.text-muted-foreground, [data-slot='card-description']) {
+  color: var(--glass-label-2);
+}
+
+.glass-surface [data-glass-content] details > summary {
+  cursor: pointer;
+  border-radius: 8px;
+  color: var(--glass-accent);
+  font-weight: 500;
+}
+
+/* ---------------------------------------------------------------- controls */
+
+.glass-surface :is([data-slot='button']:not([data-slot='button-skeleton'])) {
+  border-radius: var(--glass-radius-control) !important;
+  font-weight: 500;
+  letter-spacing: -0.006em;
+  transition:
+    transform 160ms var(--glass-ease),
+    background-color 160ms var(--glass-ease),
+    box-shadow 160ms var(--glass-ease),
+    opacity 160ms var(--glass-ease);
+}
+
+.glass-surface [data-glass-content] [data-slot='button'][data-variant='default'] {
+  border: 0;
+  background: var(--glass-accent);
+  color: var(--glass-accent-contrast);
+  box-shadow:
+    inset 0 0.5px 0 rgb(255 255 255 / 0.3),
+    0 1px 2px color-mix(in oklch, var(--glass-accent) 40%, transparent);
+}
+
+.glass-surface [data-glass-content] [data-slot='button'][data-variant='default']:hover {
+  background: color-mix(in oklch, var(--glass-accent) 88%, black);
+}
+
+.glass-surface
+  [data-glass-content]
+  [data-slot='button']:is([data-variant='outline'], [data-variant='secondary']) {
+  border: 0;
+  background: var(--glass-card);
+  color: var(--glass-label);
+  box-shadow: var(--glass-shadow-control);
+}
+
+.glass-surface
+  [data-glass-content]
+  [data-slot='button']:is([data-variant='outline'], [data-variant='secondary']):hover {
+  background: var(--glass-fill-strong);
+}
+
+.glass-surface [data-slot='button']:not([data-slot='button-skeleton']):active {
+  transform: scale(0.97);
+}
+
+.glass-surface
+  [data-glass-content]
+  :is(
+    [data-slot='input'],
+    [data-slot='textarea'],
+    [data-slot='select-trigger'],
+    [data-slot='native-select'],
+    select,
+    input:not([type='checkbox'], [type='radio'], [type='range'])
+  ) {
+  border: 0.5px solid transparent;
+  border-radius: var(--glass-radius-control) !important;
+  background: var(--glass-fill);
+  color: var(--glass-label);
+  box-shadow: none;
+  font-family: inherit;
+  transition:
+    background-color 160ms var(--glass-ease),
+    box-shadow 160ms var(--glass-ease);
+}
+
+.glass-surface
+  [data-glass-content]
+  :is(
+    [data-slot='input'],
+    [data-slot='textarea'],
+    [data-slot='select-trigger'],
+    [data-slot='native-select'],
+    select,
+    input:not([type='checkbox'], [type='radio'], [type='range'])
+  ):focus-visible {
+  outline: none;
+  background: var(--glass-card);
+  box-shadow: 0 0 0 3.5px var(--glass-accent-ring);
+}
+
+.glass-surface [data-glass-content] select {
+  min-height: 32px;
+  padding-inline: 10px 28px;
+}
+
+.glass-surface [data-glass-content] [data-slot='alert'] {
+  border: 0;
+  border-radius: var(--glass-radius-inset) !important;
+  background: color-mix(in oklch, var(--glass-bad) 9%, transparent);
+  box-shadow: none;
+}
+
+.glass-surface [data-glass-content] [data-slot='skeleton'] {
+  border-radius: var(--glass-radius-inset) !important;
+  background: linear-gradient(
+    100deg,
+    var(--glass-fill) 30%,
+    var(--glass-fill-strong) 50%,
+    var(--glass-fill) 70%
+  );
+  background-size: 300% 100%;
+  animation: glass-shimmer 1.6s linear infinite;
+}
+
+@keyframes glass-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+.glass-surface :focus-visible {
+  outline: 2px solid var(--glass-accent-ring);
+  outline-offset: 2px;
+}
+
+.glass-surface ::selection {
+  background: var(--glass-accent-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass-wallpaper::before,
+  .glass-wallpaper::after,
+  .glass-surface [data-glass-content] [data-slot='skeleton'],
+  .glass-push {
+    animation: none;
+  }
+}
