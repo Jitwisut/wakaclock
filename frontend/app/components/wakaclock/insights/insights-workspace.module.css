@@ -880,3 +880,8 @@
     transform: none;
   }
 }
+
+/* Motion Native: the dashed orbit is decoration, so it rests instead of turning forever. */
+:global([data-theme-preset='motion-native']) .orbit::before {
+  animation: none;
+}
