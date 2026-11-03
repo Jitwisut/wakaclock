@@ -80,22 +80,20 @@ a small interface, imported only after `chooseTimeQuality` allows 3D; otherwise 
 table stands alone.
 Only a project filter can apply to them; any other filter hides them with a note.
 
-### Glass surface (macOS/iOS material) — Teams page only, for now
+### Settings shell and 3D tilt — Teams page
 
-`components/wakaclock/glass/` holds an opt-in theme layer: `glass.css` (tokens and
-rules scoped under `.glass-surface`), `GlassSurface` (wrapper + wallpaper +
-reduced-motion), and `SettingsShell` (a System Settings-style split view that becomes
-an iOS Settings stack below `md`). `/dashboard/wakaclock/teams` is the only user.
+`components/wakaclock/settings-shell.tsx` is a settings-style split view (section list
+beside a content pane; a push-style stack below `md`). `components/wakaclock/tilt-3d.tsx`
+leans a surface toward the mouse on springs (mouse only; flat for touch, focus inside
+and reduced motion). `/dashboard/wakaclock/teams` is the only user so far.
 
-- The owner plans to offer this look as a dashboard theme later. To promote it, move
-  the token blocks in `glass.css` onto a `[data-theme-preset='glass']` preset; the
-  component rules can stay as they are.
-- The rules are unlayered on purpose so they restyle existing panels' Tailwind chrome
-  (`rounded-md border p-3`, shadcn `data-slot`s) without editing every panel.
-- The default `retro-pixel` preset forces `border-radius: 0 !important`; `glass.css`
-  hands corners back with `border-radius: revert-layer !important` inside the surface.
+- Owner direction (2026-11-03): match the active theme preset — no decorative icons,
+  no gradients. Build these surfaces from theme tokens and shadcn primitives (`Card`,
+  `Input`, `NativeSelect`, `DropdownMenu`) so presets such as `retro-pixel` style them.
+- A macOS-style "glass" theme layer existed briefly (commit `f63f4ec`) and was removed at
+  the owner's request; the owner may still want it later as an optional theme preset.
 - The Teams page keeps `?org=&section=` in the URL via the native History API, so
-  navigation stays client-side and the browser back gesture works like iOS "back".
+  navigation stays client-side and browser back works.
 
 ## State management — Existing Convention
 

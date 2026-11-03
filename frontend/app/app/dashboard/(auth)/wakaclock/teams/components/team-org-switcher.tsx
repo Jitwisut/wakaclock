@@ -1,60 +1,18 @@
 'use client';
 
-import type * as React from 'react';
-
-import { CheckIcon, ChevronsUpDownIcon, PlusIcon } from 'lucide-react';
-
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import type { Organization } from '@/lib/wakaclock/measurement-types';
 
-/** A stable hue per organization so its monogram keeps the same colour everywhere. */
-export function organizationHue(organization: Pick<Organization, 'id'>): number {
-  let hash = 0;
-  for (const char of organization.id) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) % 360;
-  return hash;
-}
-
-export function OrganizationMonogram({
-  organization,
-  size = 36,
-}: {
-  organization: Organization;
-  size?: number;
-}) {
-  const hue = organizationHue(organization);
-  const initials = organization.name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((word) => word[0]?.toUpperCase())
-    .join('');
-  return (
-    <span
-      aria-hidden
-      className="glass-tint font-semibold"
-      style={
-        {
-          width: size,
-          height: size,
-          '--tint-radius': `${Math.round(size * 0.28)}px`,
-          fontSize: Math.round(size * 0.38),
-          background: `linear-gradient(145deg, oklch(0.74 0.15 ${hue}), oklch(0.56 0.19 ${(hue + 40) % 360}))`,
-        } as React.CSSProperties
-      }
-    >
-      {initials || '·'}
-    </span>
-  );
-}
-
-/** The sidebar's account card: the current organization, switchable like an Apple ID card. */
+/** The current organization at the top of the section list; opens a switcher. */
 export function TeamOrgSwitcher({
   current,
   onCreate,
@@ -71,40 +29,30 @@ export function TeamOrgSwitcher({
       <DropdownMenuTrigger asChild>
         <button
           aria-label={`Organization: ${current.name}. Switch organization`}
-          className="glass-card flex w-full items-center gap-3 p-2.5 text-left transition-transform duration-150 active:scale-[0.98]"
+          className="bg-card hover:bg-accent hover:text-accent-foreground flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors"
           type="button"
         >
-          <OrganizationMonogram organization={current} />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[14px] font-semibold">{current.name}</span>
-            <span className="block truncate text-[12px] text-[var(--glass-label-2)]">
-              @{current.slug}
-            </span>
+            <span className="block truncate text-sm font-semibold">{current.name}</span>
+            <span className="text-muted-foreground block truncate text-xs">@{current.slug}</span>
           </span>
-          <ChevronsUpDownIcon aria-hidden className="size-4 text-[var(--glass-label-3)]" />
+          <span className="text-muted-foreground text-xs">Switch</span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        className="glass-surface glass-menu w-(--radix-dropdown-menu-trigger-width) min-w-60 p-1.5"
+        className="w-(--radix-dropdown-menu-trigger-width) min-w-56"
       >
         <DropdownMenuLabel className="text-xs">Organizations</DropdownMenuLabel>
-        {organizations.map((organization) => (
-          <DropdownMenuItem
-            className="gap-2.5 rounded-lg"
-            key={organization.id}
-            onSelect={() => onSelect(organization.id)}
-          >
-            <OrganizationMonogram organization={organization} size={24} />
-            <span className="min-w-0 flex-1 truncate">{organization.name}</span>
-            {organization.id === current.id && <CheckIcon aria-hidden className="size-4" />}
-          </DropdownMenuItem>
-        ))}
+        <DropdownMenuRadioGroup onValueChange={onSelect} value={current.id}>
+          {organizations.map((organization) => (
+            <DropdownMenuRadioItem key={organization.id} value={organization.id}>
+              <span className="truncate">{organization.name}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem className="gap-2.5 rounded-lg" onSelect={onCreate}>
-          <PlusIcon aria-hidden className="size-4" />
-          New Organization…
-        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onCreate}>New organization…</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

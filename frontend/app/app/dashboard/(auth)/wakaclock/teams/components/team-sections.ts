@@ -1,13 +1,4 @@
-import {
-  BlocksIcon,
-  ChartNoAxesColumnIcon,
-  CreditCardIcon,
-  LayoutGridIcon,
-  PlusIcon,
-  UsersIcon,
-} from 'lucide-react';
-
-import type { SettingsGroup, SettingsItem } from '@/components/wakaclock/glass/settings-shell';
+import type { SettingsGroup, SettingsItem } from '@/components/wakaclock/settings-shell';
 
 export type TeamSectionId =
   | 'billing'
@@ -22,48 +13,36 @@ const ITEMS: Record<TeamSectionId, SettingsItem> = {
     id: 'overview',
     label: 'Overview',
     description: 'Health, setup and data trust for this organization.',
-    icon: LayoutGridIcon,
-    tint: 'blue',
     keywords: ['health', 'setup', 'onboarding', 'trust', 'readiness', 'recovery', 'privacy'],
   },
   insights: {
     id: 'insights',
     label: 'Insights',
     description: 'Completed weeks: comparisons, summaries, actions and cost evidence.',
-    icon: ChartNoAxesColumnIcon,
-    tint: 'indigo',
     keywords: ['report', 'week', 'comparison', 'summary', 'actions', 'cost', 'ai', 'export'],
   },
   people: {
     id: 'people',
     label: 'People',
     description: 'Teams, members and invitations.',
-    icon: UsersIcon,
-    tint: 'green',
     keywords: ['members', 'invite', 'teams', 'roles', 'seats'],
   },
   integrations: {
     id: 'integrations',
     label: 'Integrations',
     description: 'Connect GitHub so work links to repositories and pull requests.',
-    icon: BlocksIcon,
-    tint: 'orange',
     keywords: ['github', 'copilot', 'repositories', 'sync', 'pull requests'],
   },
   billing: {
     id: 'billing',
     label: 'Billing',
     description: 'Trial, plan, checkout and invoices. Owner actions.',
-    icon: CreditCardIcon,
-    tint: 'pink',
     keywords: ['trial', 'plan', 'checkout', 'invoice', 'subscription', 'cancel', 'portal'],
   },
   create: {
     id: 'create',
     label: 'New Organization',
     description: 'Start a separate organization with its own people and billing.',
-    icon: PlusIcon,
-    tint: 'gray',
     keywords: ['create', 'add', 'new', 'organization', 'workspace'],
   },
 };

@@ -182,7 +182,7 @@ describe('Teams workspace', () => {
     expect(await screen.findByTestId('github')).toBeInTheDocument();
 
     // The phone back button returns to the list.
-    fireEvent.click(screen.getByRole('button', { name: 'Teams' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Teams' }));
     expect(window.location.search).toBe('?org=org-a');
   });
 
@@ -238,7 +238,7 @@ describe('Teams workspace', () => {
     expect(await screen.findByTestId('github')).toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'zzz' } });
-    expect(screen.getByText('No settings match “zzz”.')).toBeInTheDocument();
+    expect(screen.getByText('No sections match “zzz”.')).toBeInTheDocument();
     fireEvent.keyDown(search, { key: 'Enter' });
     fireEvent.keyDown(search, { key: 'Escape' });
     expect(search).toHaveValue('');
@@ -249,7 +249,7 @@ describe('Teams workspace', () => {
     await screen.findByText('@northwind', { selector: 'p' });
     const trigger = screen.getByRole('button', { name: /Switch organization/ });
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' });
-    fireEvent.click(await screen.findByRole('menuitem', { name: /Acme/ }));
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /Acme/ }));
     expect(window.location.search).toBe('?org=org-b');
     expect(await screen.findByText('@acme', { selector: 'p' })).toBeInTheDocument();
 
@@ -258,7 +258,7 @@ describe('Teams workspace', () => {
       ctrlKey: false,
       pointerType: 'mouse',
     });
-    fireEvent.click(await screen.findByRole('menuitem', { name: /New Organization/ }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /New organization/ }));
     expect(await screen.findByTestId('create')).toBeInTheDocument();
   });
 
@@ -273,7 +273,7 @@ describe('Teams workspace', () => {
         .map((b) => b.textContent)
     ).toEqual(['New Organization']);
     // Nothing to go back to.
-    expect(screen.queryByRole('button', { name: 'Teams' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Back to Teams' })).not.toBeInTheDocument();
     expect(mocks.health).not.toHaveBeenCalled();
   });
 
@@ -307,5 +307,47 @@ describe('Teams helpers', () => {
     expect(isTeamSection('people')).toBe(true);
     expect(isTeamSection('nope')).toBe(false);
     expect(isTeamSection(null)).toBe(false);
+  });
+});
+
+describe('Tilt3D', () => {
+  it('scales the lean with the surface and only follows a mouse', async () => {
+    const { Tilt3D, tiltAngle } = await import('@/components/wakaclock/tilt-3d');
+    expect(tiltAngle(200)).toBe(7);
+    expect(tiltAngle(900)).toBe(2);
+    expect(tiltAngle(5000)).toBe(1.2);
+    expect(tiltAngle(0)).toBe(7);
+    expect(tiltAngle(300, 3)).toBe(3);
+
+    render(
+      <Tilt3D>
+        <input aria-label="field" />
+      </Tilt3D>
+    );
+    const surface = screen.getByLabelText('field').parentElement as HTMLElement;
+    vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 400,
+      height: 200,
+    } as DOMRect);
+    fireEvent.pointerMove(surface, { pointerType: 'mouse', clientX: 300, clientY: 50 });
+    fireEvent.pointerDown(surface, { pointerType: 'mouse' });
+    fireEvent.pointerUp(surface, { pointerType: 'mouse' });
+    fireEvent.pointerMove(surface, { pointerType: 'touch', clientX: 10, clientY: 10 });
+    fireEvent.pointerDown(surface, { pointerType: 'touch' });
+    fireEvent.focus(screen.getByLabelText('field'));
+    fireEvent.pointerMove(surface, { pointerType: 'mouse', clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(surface, { pointerType: 'mouse' });
+    fireEvent.blur(screen.getByLabelText('field'));
+    fireEvent.pointerLeave(surface, { pointerType: 'mouse' });
+    vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+    } as DOMRect);
+    fireEvent.pointerMove(surface, { pointerType: 'mouse', clientX: 1, clientY: 1 });
+    expect(surface).toHaveAttribute('data-tilt');
   });
 });

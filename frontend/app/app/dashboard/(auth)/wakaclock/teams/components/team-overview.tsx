@@ -1,20 +1,17 @@
 'use client';
 
-import { ChevronRightIcon, ClockIcon, GlobeIcon, ShieldCheckIcon } from 'lucide-react';
-
-import {
-  GlassDot,
-  GlassTintIcon,
-  type GlassTone,
-} from '@/components/wakaclock/glass/glass-surface';
+import { Card } from '@/components/ui/card';
+import { Tilt3D } from '@/components/wakaclock/tilt-3d';
+import { cn } from '@/lib/utils';
 import type { Organization } from '@/lib/wakaclock/measurement-types';
 import type { TeamHealthState, TeamMeasurementHealth } from '@/lib/wakaclock/team-types';
 
-import { OrganizationMonogram } from './team-org-switcher';
 import { ORGANIZATION_SECTIONS, teamSection, type TeamSectionId } from './team-sections';
 
+export type StatusTone = 'bad' | 'good' | 'idle' | 'warn';
+
 /** Maps a server health status onto a traffic-light tone. Unknown words stay amber. */
-export function statusTone(status: string | undefined): GlassTone {
+export function statusTone(status: string | undefined): StatusTone {
   if (!status) return 'idle';
   const value = status.toLowerCase();
   if (/fail|error|block|broken|denied|expired|stale|degraded|revoked/.test(value)) return 'bad';
@@ -35,18 +32,26 @@ export function humanize(value: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+const TONE_CLASS: Record<StatusTone, string> = {
+  bad: 'bg-destructive',
+  good: 'bg-primary',
+  idle: 'bg-muted-foreground/40',
+  warn: 'bg-amber-500',
+};
+
 function StatusTile({ label, state }: { label: string; state: TeamHealthState | undefined }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1 px-5 py-4 shadow-[-0.5px_-0.5px_0_0_var(--glass-separator)]">
-      <span className="text-[12px] text-[var(--glass-label-2)]">{label}</span>
-      <span className="flex items-center gap-2 text-[14px] font-semibold">
-        <GlassDot tone={statusTone(state?.status)} />
+    <div className="bg-card flex min-w-0 flex-col gap-1 px-5 py-4">
+      <span className="text-muted-foreground text-xs">{label}</span>
+      <span className="flex items-center gap-2 text-sm font-semibold">
+        <span
+          aria-hidden
+          className={cn('size-2 shrink-0 rounded-full', TONE_CLASS[statusTone(state?.status)])}
+        />
         <span className="truncate">{state ? humanize(state.status) : 'Unconfirmed'}</span>
       </span>
       {state?.reason && (
-        <span className="truncate text-[12px] text-[var(--glass-label-3)]">
-          {humanize(state.reason)}
-        </span>
+        <span className="text-muted-foreground truncate text-xs">{humanize(state.reason)}</span>
       )}
     </div>
   );
@@ -71,63 +76,52 @@ export function TeamOverviewHero({
 }) {
   return (
     <>
-      <div className="glass-card overflow-hidden">
-        <div className="flex flex-wrap items-center gap-4 p-5 md:p-6">
-          <OrganizationMonogram organization={organization} size={60} />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[22px] leading-tight font-bold tracking-[-0.02em]">
-              {organization.name}
-            </p>
-            <p className="text-[13px] text-[var(--glass-label-2)]">@{organization.slug}</p>
-          </div>
-          {health && (
-            <div className="flex flex-wrap gap-2 text-[12px] text-[var(--glass-label-2)]">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--glass-fill)] px-2.5 py-1">
-                <GlobeIcon aria-hidden className="size-3.5" />
-                {health.report_timezone}
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--glass-fill)] px-2.5 py-1">
-                <ClockIcon aria-hidden className="size-3.5" />
-                Checked {formatChecked(health.checked_at)}
-              </span>
+      <Tilt3D>
+        <Card className="gap-0 overflow-hidden py-0">
+          <div className="flex flex-wrap items-end justify-between gap-3 p-5 md:p-6">
+            <div className="min-w-0">
+              <p className="font-display truncate text-xl font-semibold tracking-tight">
+                {organization.name}
+              </p>
+              <p className="text-muted-foreground truncate text-sm">@{organization.slug}</p>
             </div>
-          )}
-        </div>
-        <div
-          aria-busy={healthLoading}
-          aria-label="Data health at a glance"
-          className="grid grid-cols-2 overflow-hidden border-t-[0.5px] border-[var(--glass-separator)] md:grid-cols-4"
-          role="group"
-        >
-          <StatusTile label="Your capture" state={health?.own.capture} />
-          <StatusTile label="Your delivery" state={health?.own.delivery} />
-          <StatusTile label="GitHub sync" state={health?.team.integration} />
-          <StatusTile label="Restore protection" state={health?.restore} />
-        </div>
-      </div>
+            {health && (
+              <p className="text-muted-foreground text-xs">
+                <span>{health.report_timezone}</span> · Checked {formatChecked(health.checked_at)}
+              </p>
+            )}
+          </div>
+          <div
+            aria-busy={healthLoading}
+            aria-label="Data health at a glance"
+            className="bg-border grid grid-cols-2 gap-px border-t md:grid-cols-4"
+            role="group"
+          >
+            <StatusTile label="Your capture" state={health?.own.capture} />
+            <StatusTile label="Your delivery" state={health?.own.delivery} />
+            <StatusTile label="GitHub sync" state={health?.team.integration} />
+            <StatusTile label="Restore protection" state={health?.restore} />
+          </div>
+        </Card>
+      </Tilt3D>
 
       <nav aria-label="Organization shortcuts" className="grid gap-3 sm:grid-cols-2">
         {ORGANIZATION_SECTIONS.filter((id) => id !== 'overview').map((id) => {
           const item = teamSection(id);
           return (
-            <button
-              className="glass-card group flex items-center gap-3.5 p-4 text-left transition-transform duration-200 ease-[var(--glass-ease)] hover:-translate-y-0.5 active:scale-[0.985]"
-              key={id}
-              onClick={() => onNavigate(id)}
-              type="button"
-            >
-              <GlassTintIcon icon={item.icon} size={36} tint={item.tint} />
-              <span className="min-w-0 flex-1">
-                <span className="block text-[14.5px] font-semibold">{item.label}</span>
-                <span className="line-clamp-2 block text-[12.5px] text-[var(--glass-label-2)]">
+            <Tilt3D key={id}>
+              <button
+                className="bg-card text-card-foreground hover:bg-accent hover:text-accent-foreground flex h-full w-full flex-col gap-1 rounded-xl border p-4 text-left transition-colors"
+                data-slot="card"
+                onClick={() => onNavigate(id)}
+                type="button"
+              >
+                <span className="text-sm font-semibold">{item.label}</span>
+                <span className="text-muted-foreground line-clamp-2 text-xs">
                   {item.description}
                 </span>
-              </span>
-              <ChevronRightIcon
-                aria-hidden
-                className="size-4 text-[var(--glass-label-3)] transition-transform duration-200 group-hover:translate-x-0.5"
-              />
-            </button>
+              </button>
+            </Tilt3D>
           );
         })}
       </nav>
@@ -137,8 +131,7 @@ export function TeamOverviewHero({
 
 export function TeamPrivacyNote() {
   return (
-    <p className="flex items-start gap-2 px-1 text-[12.5px] text-[var(--glass-label-2)]">
-      <ShieldCheckIcon aria-hidden className="mt-0.5 size-4 flex-none text-[var(--glass-good)]" />
+    <p className="text-muted-foreground px-1 text-xs">
       Team reports include only members who choose to share. Individual totals need a second opt-in.
     </p>
   );

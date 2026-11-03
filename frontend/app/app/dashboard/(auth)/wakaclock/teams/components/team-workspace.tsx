@@ -3,13 +3,14 @@
 import * as React from 'react';
 
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDownIcon, SparklesIcon } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 
+import { Card } from '@/components/ui/card';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { GlassTintIcon } from '@/components/wakaclock/glass/glass-surface';
-import { SettingsShell } from '@/components/wakaclock/glass/settings-shell';
 import { QueryState } from '@/components/wakaclock/query-state';
+import { SettingsShell } from '@/components/wakaclock/settings-shell';
+import { Tilt3D } from '@/components/wakaclock/tilt-3d';
 import { listOrganizations } from '@/lib/wakaclock/endpoints-v2';
 import type { Organization } from '@/lib/wakaclock/measurement-types';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
@@ -83,38 +84,35 @@ function WeekPicker({
   weeks: Array<{ end: string; start: string }>;
 }) {
   return (
-    <label className="relative inline-flex items-center">
-      <select
-        aria-label="Completed report week"
-        className="h-8 cursor-pointer appearance-none rounded-[9px] bg-[var(--glass-card)] pr-8 pl-3 text-[13px] font-medium text-[var(--glass-label)] shadow-[var(--glass-shadow-control)] outline-none focus-visible:shadow-[0_0_0_3.5px_var(--glass-accent-ring)]"
-        onChange={(event) => onChange(event.target.value)}
-        title={`Weeks close in ${timezone}`}
-        value={value}
-      >
-        {weeks.map((week) => (
-          <option key={week.start} value={week.start}>
-            {formatDay(week.start)} – {formatDay(week.end)}
-          </option>
-        ))}
-      </select>
-      <ChevronDownIcon
-        aria-hidden
-        className="pointer-events-none absolute right-2.5 size-3.5 text-[var(--glass-label-2)]"
-      />
-    </label>
+    <NativeSelect
+      aria-label="Completed report week"
+      className="h-8"
+      onChange={(event) => onChange(event.target.value)}
+      title={`Weeks close in ${timezone}`}
+      value={value}
+    >
+      {weeks.map((week) => (
+        <NativeSelectOption key={week.start} value={week.start}>
+          {formatDay(week.start)} – {formatDay(week.end)}
+        </NativeSelectOption>
+      ))}
+    </NativeSelect>
   );
 }
 
 function WelcomeCard() {
   return (
-    <div className="glass-card flex flex-col items-center gap-3 px-6 py-10 text-center">
-      <GlassTintIcon icon={SparklesIcon} size={56} tint="indigo" />
-      <p className="text-[24px] font-bold tracking-[-0.022em]">Bring your team together</p>
-      <p className="max-w-md text-[14px] text-[var(--glass-label-2)]">
-        Create an organization to invite people, group them into teams and read weekly reports built
-        only from what each member chooses to share.
-      </p>
-    </div>
+    <Tilt3D>
+      <Card className="items-center gap-2 px-6 py-10 text-center">
+        <p className="font-display text-2xl font-semibold tracking-tight">
+          Bring your team together
+        </p>
+        <p className="text-muted-foreground max-w-md text-sm">
+          Create an organization to invite people, group them into teams and read weekly reports
+          built only from what each member chooses to share.
+        </p>
+      </Card>
+    </Tilt3D>
   );
 }
 
@@ -159,14 +157,20 @@ function SectionContent({
             onNavigate={onNavigate}
             organization={organization}
           />
-          <TeamOnboardingPanel key={`setup:${userId}:${orgId}`} organizationId={orgId} />
-          <TeamOrganizationRecoveryPanel
-            key={`birth:${userId}:${orgId}`}
-            organizationId={orgId}
-            sessionToken={sessionToken}
-            userId={userId}
-          />
-          <TeamTrustPanel organizationId={orgId} />
+          <Tilt3D>
+            <TeamOnboardingPanel key={`setup:${userId}:${orgId}`} organizationId={orgId} />
+          </Tilt3D>
+          <Tilt3D>
+            <TeamOrganizationRecoveryPanel
+              key={`birth:${userId}:${orgId}`}
+              organizationId={orgId}
+              sessionToken={sessionToken}
+              userId={userId}
+            />
+          </Tilt3D>
+          <Tilt3D>
+            <TeamTrustPanel organizationId={orgId} />
+          </Tilt3D>
           <TeamPrivacyNote />
         </>
       );
@@ -177,34 +181,33 @@ function SectionContent({
           {week && timezone ? (
             <>
               {health.data?.capabilities?.weekly_comparison && (
-                <TeamComparisonPanel
-                  key={`compare:${userId}:${orgId}`}
-                  organizationId={orgId}
-                  organizationTimezone={timezone}
-                />
+                <Tilt3D key={`compare:${userId}:${orgId}`}>
+                  <TeamComparisonPanel organizationId={orgId} organizationTimezone={timezone} />
+                </Tilt3D>
               )}
               {health.data?.capabilities?.weekly_summary && (
-                <TeamSummaryPanel
-                  key={`summary:${userId}:${orgId}`}
-                  organizationId={orgId}
-                  organizationTimezone={timezone}
-                />
+                <Tilt3D key={`summary:${userId}:${orgId}`}>
+                  <TeamSummaryPanel organizationId={orgId} organizationTimezone={timezone} />
+                </Tilt3D>
               )}
               {health.data?.capabilities?.improvement_actions && (
-                <TeamActionsPanel organizationId={orgId} timezone={timezone} />
+                <Tilt3D>
+                  <TeamActionsPanel organizationId={orgId} timezone={timezone} />
+                </Tilt3D>
               )}
-              <TeamInsightsPanel
-                end={week.end}
-                key={`${userId}:${orgId}:${timezone}`}
-                organizationId={orgId}
-                start={week.start}
-                timezone={timezone}
-              />
+              <Tilt3D key={`${userId}:${orgId}:${timezone}`}>
+                <TeamInsightsPanel
+                  end={week.end}
+                  organizationId={orgId}
+                  start={week.start}
+                  timezone={timezone}
+                />
+              </Tilt3D>
             </>
           ) : (
-            <p className="glass-card px-5 py-8 text-center text-[13.5px] text-[var(--glass-label-2)]">
+            <Card className="text-muted-foreground px-5 py-8 text-center text-sm">
               Reports appear here once the organization has a completed week.
-            </p>
+            </Card>
           )}
         </QueryState>
       );
@@ -212,16 +215,28 @@ function SectionContent({
     case 'people': {
       return (
         <>
-          <OrganizationTeamsPanel organizationId={orgId} />
-          <OrganizationInvitesPanel organizationId={orgId} />
+          <Tilt3D>
+            <OrganizationTeamsPanel organizationId={orgId} />
+          </Tilt3D>
+          <Tilt3D>
+            <OrganizationInvitesPanel organizationId={orgId} />
+          </Tilt3D>
         </>
       );
     }
     case 'integrations': {
-      return <TeamGithubPanel key={`${userId}:${orgId}`} organizationId={orgId} />;
+      return (
+        <Tilt3D key={`${userId}:${orgId}`}>
+          <TeamGithubPanel organizationId={orgId} />
+        </Tilt3D>
+      );
     }
     default: {
-      return <TeamBillingSetupPanel organizationId={orgId} />;
+      return (
+        <Tilt3D>
+          <TeamBillingSetupPanel organizationId={orgId} />
+        </Tilt3D>
+      );
     }
   }
 }
@@ -277,11 +292,9 @@ export function TeamsWorkspace() {
     content = (
       <>
         {!current && <WelcomeCard />}
-        <TeamOrganizationCreatePanel
-          key={`create:${userId}`}
-          sessionToken={sessionToken}
-          userId={userId}
-        />
+        <Tilt3D key={`create:${userId}`}>
+          <TeamOrganizationCreatePanel sessionToken={sessionToken} userId={userId} />
+        </Tilt3D>
       </>
     );
   } else {
