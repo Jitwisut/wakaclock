@@ -220,7 +220,7 @@ fn cancellation_frozen_request_has_only_end_period_provider_effect_and_stable_sc
         request.request_hash().unwrap()
     );
     changed = request.clone();
-    changed.period_end = changed.period_end + Duration::seconds(1);
+    changed.period_end += Duration::seconds(1);
     assert_ne!(
         changed.request_hash().unwrap(),
         request.request_hash().unwrap()
@@ -268,7 +268,7 @@ fn cancellation_acceptance_precision_and_retry_never_change_original_business_te
     };
     assert!(evidence.validate(&request).is_ok());
     let mut changed = evidence.clone();
-    changed.valid_until = changed.valid_until + Duration::microseconds(1);
+    changed.valid_until += Duration::microseconds(1);
     assert!(changed.validate(&request).is_err());
     changed = evidence.clone();
     changed.observed_at = request.accepted_at() + Duration::microseconds(1);
@@ -319,7 +319,7 @@ fn cancellation_selection_is_confirmation_of_canonical_terms_not_client_owned_pr
             .is_err());
     }
     let mut changed = input;
-    changed.expected_period_end = changed.expected_period_end + Duration::nanoseconds(1);
+    changed.expected_period_end += Duration::nanoseconds(1);
     assert!(changed.validate().is_err());
 }
 #[test]
@@ -630,7 +630,7 @@ fn cancellation_receiver_post_needs_original_dispatch_and_conflicts_preserve_his
         .contains(&source::FreezeReason::RequestIdentityConflict));
     let mut receipt = entry.cancellation_observations[&id].clone();
     let outcome = entry.outcomes[&receipt.outcome].clone();
-    receipt.observed_at = receipt.observed_at + Duration::seconds(1);
+    receipt.observed_at += Duration::seconds(1);
     f.guard
         .record_source(source::Event::CancellationObservation {
             scope: request.scope().clone(),

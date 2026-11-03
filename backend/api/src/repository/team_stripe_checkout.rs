@@ -170,6 +170,9 @@ pub struct CheckoutRepository {
     financial_guard: Option<crate::infrastructure::team_financial_guard::FinancialGuard>,
     financial_configuration_error: bool,
 }
+// One value lives per checkout transaction, so boxing the source write would only add an
+// allocation and churn at every match in this financial path.
+#[allow(clippy::large_enum_variant)]
 enum CheckoutTransaction<'a> {
     Source(super::team_financial_transaction::NormalWrite<'a>),
     Legacy {
@@ -583,11 +586,11 @@ impl CheckoutRepository {
         let tx = db.transaction().await?;
         let read = self.read(tx, org, account, live).await?;
         let tx = read.sql();
-        AuthorizationService::require_locked_billing_owner(&tx, actor, org).await?;
+        AuthorizationService::require_locked_billing_owner(tx, actor, org).await?;
         let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4",&[&operation,&org,&account,&live]).await?.ok_or(TeamError::NotFound)?;
         let mut result = Self::view(&row);
         result.invoice_assessment =
-            Self::invoice_assessment(&tx, org, account, live, operation).await?;
+            Self::invoice_assessment(tx, org, account, live, operation).await?;
         read.commit().await?;
         Ok(result)
     }
@@ -626,7 +629,7 @@ impl CheckoutRepository {
         let tx = db.transaction().await?;
         let read = self.read(tx, org, account, live).await?;
         let tx = read.sql();
-        let proof = QuoteRepository::guard(&tx, actor, org, account, live).await?;
+        let proof = QuoteRepository::guard(tx, actor, org, account, live).await?;
         let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4 FOR SHARE",&[&expected.0,&org,&account,&live]).await?.ok_or(TeamError::NotFound)?;
         ensure!(
             row.get::<_, i64>("revision") == expected.1
@@ -678,12 +681,12 @@ impl CheckoutRepository {
         let tx = db.transaction().await?;
         let read = self.read(tx, org, account, live).await?;
         let tx = read.sql();
-        AuthorizationService::require_locked_billing_owner(&tx, actor, org).await?;
+        AuthorizationService::require_locked_billing_owner(tx, actor, org).await?;
         let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE organization_id=$1 AND account_id=$2 AND livemode=$3 ORDER BY confirmed_at DESC,operation_id DESC LIMIT 1", &[&org,&account,&live]).await?;
         let mut result = row.as_ref().map(Self::view);
         if let Some(status) = result.as_mut() {
             status.invoice_assessment =
-                Self::invoice_assessment(&tx, org, account, live, status.operation_id).await?;
+                Self::invoice_assessment(tx, org, account, live, status.operation_id).await?;
         }
         read.commit().await?;
         Ok(result)
@@ -706,7 +709,7 @@ impl CheckoutRepository {
         let tx = db.transaction().await?;
         let write = self.read(tx, org, account, live).await?;
         let tx = write.sql();
-        let proof = QuoteRepository::guard(&tx, actor, org, account, live).await?;
+        let proof = QuoteRepository::guard(tx, actor, org, account, live).await?;
         let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4 FOR UPDATE", &[&operation,&org,&account,&live]).await?.ok_or(TeamError::NotFound)?;
         let checked_at: DateTime<Utc> = tx.query_one("SELECT clock_timestamp()", &[]).await?.get(0);
         ensure!(
@@ -850,7 +853,7 @@ impl CheckoutRepository {
         let source_mode = matches!(&write, CheckoutTransaction::Source(_));
         let tx = write.sql();
         let candidate_actor: Uuid = candidate.get("billing_actor");
-        let proof = QuoteRepository::guard(&tx, candidate_actor, org, account, live).await;
+        let proof = QuoteRepository::guard(tx, candidate_actor, org, account, live).await;
         let row=tx.query_opt("SELECT * FROM team_stripe_checkout_intents WHERE operation_id=$1 AND organization_id=$2 AND account_id=$3 AND livemode=$4 AND COALESCE(recovery_actor,actor_id)=$5 AND (disposition IN ('pending','session_open','awaiting_verification') OR (disposition='recovery_required' AND last_error_code IN ('idempotency_window_unconfirmed','checkout_resource_readback_required'))) AND retry_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<=clock_timestamp()) FOR UPDATE",&[&operation,&org,&account,&live,&candidate_actor]).await?;
         let Some(row) = row else {
             write.commit().await?;
@@ -906,7 +909,7 @@ impl CheckoutRepository {
             stop = Some(("expired", "quote_expired_before_attempt"));
         }
         if stop.is_none() && session_id.is_none() && !lookup_only {
-            if let Err(e) = Self::capacity(&tx, org, q.get("package_seats")).await {
+            if let Err(e) = Self::capacity(tx, org, q.get("package_seats")).await {
                 if e.downcast_ref::<TeamError>().is_none() {
                     return Err(e);
                 }

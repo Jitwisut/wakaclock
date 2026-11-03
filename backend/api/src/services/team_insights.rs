@@ -904,8 +904,11 @@ impl TeamInsightsService {
                     })
             })
             .collect::<Vec<_>>();
-        let mut people: BTreeSet<Uuid> = weekly_scope.iter().map(|f|f.user_id).collect();
-        let weekly_membership = weekly_scope.iter().map(|f|(f.user_id,f.usage_event_id.clone())).collect();
+        let mut people: BTreeSet<Uuid> = weekly_scope.iter().map(|f| f.user_id).collect();
+        let weekly_membership = weekly_scope
+            .iter()
+            .map(|f| (f.user_id, f.usage_event_id.clone()))
+            .collect();
 
         if merged.cost_microusd.value.is_some()
             && !crate::services::team_merged_cost::joint_partition(
@@ -930,17 +933,30 @@ impl TeamInsightsService {
         );
         people.extend(merged.people.iter().copied());
         let equations = cost_equations(&weekly_scope, &cumulative, &projection, &merged)?;
-        let fingerprint = format!("{:x}",Sha256::digest(serde_json::to_vec(&(
-            super::team_cost_equations::VERSION, &facts, &cumulative, &merged_links, &equations,
-            merged.observed_average_microusd.value, merged.fully_priced_observed_prs.value,
-            merged.fully_priced_observed_cost_microusd.value,
-        ))?));
+        let fingerprint = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(
+                super::team_cost_equations::VERSION,
+                &facts,
+                &cumulative,
+                &merged_links,
+                &equations,
+                merged.observed_average_microusd.value,
+                merged.fully_priced_observed_prs.value,
+                merged.fully_priced_observed_cost_microusd.value,
+            ))?)
+        );
         if (projection.0.value.is_some() || merged.cost_microusd.value.is_some())
             && !trust
                 .release_cost_publication(crate::repository::team_trust::CostPublication {
-                    org,week:range.start,key:&team.map_or_else(|| "organization".into(), |id|id.to_string()),
-                    generation:scope.generation,fingerprint:&fingerprint,contributors:&people,
-                    facts:Some(&publication_facts),equations:Some(&equations),
+                    org,
+                    week: range.start,
+                    key: &team.map_or_else(|| "organization".into(), |id| id.to_string()),
+                    generation: scope.generation,
+                    fingerprint: &fingerprint,
+                    contributors: &people,
+                    facts: Some(&publication_facts),
+                    equations: Some(&equations),
                 })
                 .await?
         {

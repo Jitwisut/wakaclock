@@ -15,54 +15,6 @@ pub struct Equations {
     pub counts: BTreeMap<String, BTreeMap<String, BTreeSet<Uuid>>>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn hash(n: u64) -> String {
-        format!("{n:064x}")
-    }
-    fn fixture() -> Equations {
-        Equations {
-            schema_version: 1,
-            calculation_version: VERSION.into(),
-            costs: BTreeMap::from([
-                (
-                    "weekly_total".into(),
-                    [hash(1), hash(2)].into_iter().collect(),
-                ),
-                (
-                    "fully_priced_observed_numerator".into(),
-                    [hash(1)].into_iter().collect(),
-                ),
-            ]),
-            counts: BTreeMap::from([(
-                "fully_priced_observed_prs".into(),
-                BTreeMap::from([(hash(100), (1..=5).map(Uuid::from_u128).collect())]),
-            )]),
-        }
-    }
-    #[test]
-    fn exact_bundle_or_disjoint_support_only_including_pr_denominator_and_revisions() {
-        let a = fixture();
-        let facts = [hash(1), hash(2)].into_iter().collect();
-        a.validate(&facts).unwrap();
-        assert!(a.compatible(&a, true));
-        assert!(!a.compatible(&a, false)); // same IDs, revised value/pricing fingerprint
-        let mut b = fixture();
-        b.costs
-            .values_mut()
-            .for_each(|s| *s = [hash(3)].into_iter().collect());
-        assert!(!b.compatible(&a, false)); // disjoint usage but reused PR count support
-        b.counts.values_mut().for_each(|m| {
-            let people = m.values().next().unwrap().clone();
-            *m = BTreeMap::from([(hash(200), people)]);
-        });
-        assert!(b.compatible(&a, false));
-        assert!(b.validate(&facts).is_err());
-        b.schema_version = 2;
-        assert!(b.validate(&[hash(3)].into_iter().collect()).is_err());
-    }
-}
 impl Equations {
     pub fn validate(&self, facts: &BTreeSet<String>) -> Result<()> {
         ensure!(
@@ -121,5 +73,54 @@ impl Equations {
                 .all(|previous| new.keys().all(|id| !previous.contains_key(id)))
         });
         cost_disjoint && pr_disjoint
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn hash(n: u64) -> String {
+        format!("{n:064x}")
+    }
+    fn fixture() -> Equations {
+        Equations {
+            schema_version: 1,
+            calculation_version: VERSION.into(),
+            costs: BTreeMap::from([
+                (
+                    "weekly_total".into(),
+                    [hash(1), hash(2)].into_iter().collect(),
+                ),
+                (
+                    "fully_priced_observed_numerator".into(),
+                    [hash(1)].into_iter().collect(),
+                ),
+            ]),
+            counts: BTreeMap::from([(
+                "fully_priced_observed_prs".into(),
+                BTreeMap::from([(hash(100), (1..=5).map(Uuid::from_u128).collect())]),
+            )]),
+        }
+    }
+    #[test]
+    fn exact_bundle_or_disjoint_support_only_including_pr_denominator_and_revisions() {
+        let a = fixture();
+        let facts = [hash(1), hash(2)].into_iter().collect();
+        a.validate(&facts).unwrap();
+        assert!(a.compatible(&a, true));
+        assert!(!a.compatible(&a, false)); // same IDs, revised value/pricing fingerprint
+        let mut b = fixture();
+        b.costs
+            .values_mut()
+            .for_each(|s| *s = [hash(3)].into_iter().collect());
+        assert!(!b.compatible(&a, false)); // disjoint usage but reused PR count support
+        b.counts.values_mut().for_each(|m| {
+            let people = m.values().next().unwrap().clone();
+            *m = BTreeMap::from([(hash(200), people)]);
+        });
+        assert!(b.compatible(&a, false));
+        assert!(b.validate(&facts).is_err());
+        b.schema_version = 2;
+        assert!(b.validate(&[hash(3)].into_iter().collect()).is_err());
     }
 }

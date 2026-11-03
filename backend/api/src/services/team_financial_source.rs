@@ -379,6 +379,9 @@ impl Entry {
     }
 }
 
+// A journaled wire type: keeping variants unboxed keeps every match and constructor simple,
+// and the serialized form is the same either way.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {

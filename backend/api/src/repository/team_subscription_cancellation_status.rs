@@ -336,6 +336,10 @@ async fn projected_provider(
 fn sql_observation_matches(sql: Option<DateTime<Utc>>, retained: DateTime<Utc>) -> bool {
     sql == DateTime::from_timestamp_micros(retained.timestamp_micros())
 }
+async fn rollout(tx: &tokio_postgres::Transaction<'_>, org: Uuid) -> Result<String> {
+    let row=tx.query_opt("SELECT to_jsonb(r) FROM team_rollouts r WHERE organization_id=$1 AND enabled FOR SHARE",&[&org]).await?.context(TeamError::Disabled)?;
+    fingerprint(&row.get::<_, serde_json::Value>(0))
+}
 
 #[cfg(test)]
 mod tests {
@@ -392,8 +396,4 @@ mod tests {
         ));
         assert!(!sql_observation_matches(None, retained));
     }
-}
-async fn rollout(tx: &tokio_postgres::Transaction<'_>, org: Uuid) -> Result<String> {
-    let row=tx.query_opt("SELECT to_jsonb(r) FROM team_rollouts r WHERE organization_id=$1 AND enabled FOR SHARE",&[&org]).await?.context(TeamError::Disabled)?;
-    fingerprint(&row.get::<_, serde_json::Value>(0))
 }

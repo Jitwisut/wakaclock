@@ -162,7 +162,7 @@ impl TeamTrustRepository {
             }
             // Absent legacy proof keeps its original marker bytes. New support
             // is part of the independent restore proof; never rebuild it later.
-            if let Some(equations) = row.get::<_,Option<serde_json::Value>>(12) {
+            if let Some(equations) = row.get::<_, Option<serde_json::Value>>(12) {
                 marker.extend(serde_json::to_vec(&equations)?);
             }
             publication_marks
@@ -245,15 +245,39 @@ impl TeamTrustRepository {
         contributors: &BTreeSet<Uuid>,
         facts: Option<&BTreeSet<String>>,
     ) -> Result<bool> {
-        self.release_cost_publication(CostPublication {org,week,key,generation,fingerprint,
-            contributors,facts,equations:None}).await
+        self.release_cost_publication(CostPublication {
+            org,
+            week,
+            key,
+            generation,
+            fingerprint,
+            contributors,
+            facts,
+            equations: None,
+        })
+        .await
     }
     pub async fn release_cost_publication(&self, publication: CostPublication<'_>) -> Result<bool> {
-        let CostPublication {org,week,key,generation,fingerprint,contributors,facts,equations} = publication;
+        let CostPublication {
+            org,
+            week,
+            key,
+            generation,
+            fingerprint,
+            contributors,
+            facts,
+            equations,
+        } = publication;
         if let Some(equations) = equations {
             equations.validate(facts.context("cost_equation_facts_missing")?)?;
-            ensure!(equations.counts.values().flat_map(|prs|prs.values()).all(|people|people.is_subset(contributors)),
-                "cost_equation_contributors_unconfirmed");
+            ensure!(
+                equations
+                    .counts
+                    .values()
+                    .flat_map(|prs| prs.values())
+                    .all(|people| people.is_subset(contributors)),
+                "cost_equation_contributors_unconfirmed"
+            );
         }
         let mut client = self.postgres.transaction_client().await?;
         let tx = client.transaction().await?;
@@ -322,21 +346,45 @@ impl TeamTrustRepository {
                 ) {
                     return Ok(false);
                 }
-                let previous_equations = row.get::<_,Option<serde_json::Value>>("cost_equations")
-                    .map(serde_json::from_value::<crate::services::team_cost_equations::Equations>).transpose()?;
+                let previous_equations = row
+                    .get::<_, Option<serde_json::Value>>("cost_equations")
+                    .map(serde_json::from_value::<crate::services::team_cost_equations::Equations>)
+                    .transpose()?;
                 if let Some(old) = &previous_equations {
-                    old.validate(previous.as_ref().context("cost_equation_history_facts_missing")?)?;
+                    old.validate(
+                        previous
+                            .as_ref()
+                            .context("cost_equation_history_facts_missing")?,
+                    )?;
                 }
                 match (equations, previous_equations.as_ref()) {
-                    (Some(new),Some(old)) if !new.compatible(old, row.get::<_,String>("fingerprint")==fingerprint) => return Ok(false),
-                    (Some(_),None) if row.get::<_,Option<String>>("report_family").as_deref()!=Some("copilot_daily_weekly") && !people.is_disjoint(contributors) => return Ok(false),
-                    (None,Some(_)) if !people.is_disjoint(contributors) => return Ok(false),
+                    (Some(new), Some(old))
+                        if !new.compatible(
+                            old,
+                            row.get::<_, String>("fingerprint") == fingerprint,
+                        ) =>
+                    {
+                        return Ok(false)
+                    }
+                    (Some(_), None)
+                        if row.get::<_, Option<String>>("report_family").as_deref()
+                            != Some("copilot_daily_weekly")
+                            && !people.is_disjoint(contributors) =>
+                    {
+                        return Ok(false)
+                    }
+                    (None, Some(_)) if !people.is_disjoint(contributors) => return Ok(false),
                     _ => (),
                 }
             }
         } else {
             let history = tx.query("SELECT contributors FROM team_weekly_publications WHERE organization_id=$1 AND cost_equations IS NOT NULL", &[&org]).await?;
-            if history.iter().any(|r| !r.get::<_,Vec<Uuid>>(0).into_iter().collect::<BTreeSet<_>>().is_disjoint(contributors)) {
+            if history.iter().any(|r| {
+                !r.get::<_, Vec<Uuid>>(0)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>()
+                    .is_disjoint(contributors)
+            }) {
                 return Ok(false);
             }
         }
@@ -359,7 +407,11 @@ impl TeamTrustRepository {
         let membership = facts.map(|f| f.iter().cloned().collect::<Vec<_>>());
         let people = contributors.iter().copied().collect::<Vec<_>>();
         let equations = equations.map(serde_json::to_value).transpose()?;
-        let version = if equations.is_some(){"team-weekly-cost-equations-v2"}else{"team-weekly-v1"};
+        let version = if equations.is_some() {
+            "team-weekly-cost-equations-v2"
+        } else {
+            "team-weekly-v1"
+        };
         tx.execute("INSERT INTO team_weekly_publications(organization_id,week_start,view_key,generation,fingerprint,contributors,fact_membership,report_family,window_start,window_end,calculation_version,cost_equations) VALUES($1,$2,$3,$4,$5,$6,$7,'team_weekly_cost',$8,$9,$10,$11) ON CONFLICT DO NOTHING", &[&org,&week,&key,&generation,&fingerprint,&people,&membership,&from,&to,&version,&equations]).await?;
         tx.execute("UPDATE team_report_policies SET locked_at=COALESCE(locked_at,now()) WHERE organization_id=$1", &[&org]).await?;
         tx.commit().await?;

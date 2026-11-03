@@ -205,9 +205,18 @@ pub async fn export(
             "merged_pr_complete_received_cost",
             &report.merged_pr_cost.complete_prs,
         ),
-        ("observed_average_merged_pr_microusd", &report.merged_pr_cost.observed_average_microusd),
-        ("fully_priced_observed_prs", &report.merged_pr_cost.fully_priced_observed_prs),
-        ("fully_priced_observed_pr_cost_microusd", &report.merged_pr_cost.fully_priced_observed_cost_microusd),
+        (
+            "observed_average_merged_pr_microusd",
+            &report.merged_pr_cost.observed_average_microusd,
+        ),
+        (
+            "fully_priced_observed_prs",
+            &report.merged_pr_cost.fully_priced_observed_prs,
+        ),
+        (
+            "fully_priced_observed_pr_cost_microusd",
+            &report.merged_pr_cost.fully_priced_observed_cost_microusd,
+        ),
     ] {
         let fields = [
             report.start.clone(),
@@ -226,11 +235,21 @@ pub async fn export(
                 .unwrap_or_default(),
             metric.calculation_version.into(),
             prices.clone(),
-            if name=="estimated_ai_cost_microusd" {"received_usage_in_report_week".into()}
-                else if name.starts_with("fully_priced_observed") || name.starts_with("observed_average") {"fully_priced_received_confirmed_usage_until_merge".into()}
-                else {"received_confirmed_linked_usage_until_merge".into()},
+            if name == "estimated_ai_cost_microusd" {
+                "received_usage_in_report_week".into()
+            } else if name.starts_with("fully_priced_observed")
+                || name.starts_with("observed_average")
+            {
+                "fully_priced_received_confirmed_usage_until_merge".into()
+            } else {
+                "received_confirmed_linked_usage_until_merge".into()
+            },
             report.merged_pr_cost.capture_completeness.into(),
-            if name=="observed_average_merged_pr_microusd" {report.merged_pr_cost.average_rounding.into()}else{String::new()},
+            if name == "observed_average_merged_pr_microusd" {
+                report.merged_pr_cost.average_rounding.into()
+            } else {
+                String::new()
+            },
         ];
         csv.push_str(
             &fields

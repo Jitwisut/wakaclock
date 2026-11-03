@@ -172,19 +172,19 @@ pub fn calculate(
         updated_at: updated,
         calculation_version: "fully_priced_observed_pr_average_v1",
     };
-    let (observed_average, observed_count, observed_sum) = if complete_count > 0 {
-        (
-            observed_metric(complete_sum / complete_count),
-            observed_metric(complete_count),
-            observed_metric(complete_sum),
-        )
-    } else {
-        (
-            Metric::unavailable("no_fully_priced_observed_prs"),
-            Metric::unavailable("no_fully_priced_observed_prs"),
-            Metric::unavailable("no_fully_priced_observed_prs"),
-        )
-    };
+    let (observed_average, observed_count, observed_sum) =
+        match complete_sum.checked_div(complete_count) {
+            Some(average) => (
+                observed_metric(average),
+                observed_metric(complete_count),
+                observed_metric(complete_sum),
+            ),
+            None => (
+                Metric::unavailable("no_fully_priced_observed_prs"),
+                Metric::unavailable("no_fully_priced_observed_prs"),
+                Metric::unavailable("no_fully_priced_observed_prs"),
+            ),
+        };
     let with = groups.values().filter(|g| g.2 > 0).count() as u64;
     let without = if groups.values().any(|g| g.4.is_empty()) {
         Metric::unavailable("unlinked_or_nonsharing_cohort_unconfirmed")

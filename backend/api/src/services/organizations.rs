@@ -125,8 +125,14 @@ impl OrganizationsService {
             CreateOrganizationRequest::Recovery(action) => {
                 let postgres = self.required()?;
                 let deployment = crate::infrastructure::team_financial_guard::CommercialDeployment::required_from_environment()?;
-                return crate::repository::team_organization_recovery::execute(postgres, owner_user_id, action, &deployment)
-                    .await.map_err(|_| anyhow!("onboarding_recovery_unconfirmed"));
+                return crate::repository::team_organization_recovery::execute(
+                    postgres,
+                    owner_user_id,
+                    action,
+                    &deployment,
+                )
+                .await
+                .map_err(|_| anyhow!("onboarding_recovery_unconfirmed"));
             }
         };
         let name = request.name.trim();

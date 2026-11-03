@@ -433,7 +433,9 @@ impl PostgresClient {
             ),
             (
                 "Explicit Owner confirmation of committed organization birth",
-                include_str!("../../migrations/postgres/063_team_organization_birth_confirmations.sql"),
+                include_str!(
+                    "../../migrations/postgres/063_team_organization_birth_confirmations.sql"
+                ),
             ),
             (
                 "Private observed PR cost publication equations",

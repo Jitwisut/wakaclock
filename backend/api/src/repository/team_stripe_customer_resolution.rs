@@ -114,7 +114,7 @@ async fn apply(
         tx,
         guard,
         &account,
-        &scope,
+        scope,
         original.operation,
         customer,
     )
