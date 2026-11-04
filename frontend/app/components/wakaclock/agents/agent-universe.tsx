@@ -13,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
+import { Widget } from '@/components/wakaclock/workspace';
 import { useCapabilities } from '@/hooks/use-capabilities';
 import { useDeliveryHealth } from '@/hooks/use-delivery-health';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
@@ -413,18 +414,21 @@ export function UniversePlayer({ data, live }: { data: AgentUniverseResponse; li
               Live
             </Button>
           )}
-          <div aria-label="Playback speed" className={styles.group} role="group">
+          <div
+            aria-label="Playback speed"
+            className="bg-muted inline-flex gap-0.5 rounded-lg p-0.5 shadow-[inset_0_0_0_1px_var(--border)]"
+            role="group"
+          >
             {SPEEDS.map((value) => (
-              <Button
+              <button
                 aria-pressed={speed === value}
+                className="text-muted-foreground hover:text-foreground aria-pressed:bg-card aria-pressed:text-foreground min-h-8 rounded-md px-3 text-sm font-medium tabular-nums transition-colors aria-pressed:shadow-sm"
                 key={value}
                 onClick={() => setSpeed(value)}
-                size="sm"
                 type="button"
-                variant={speed === value ? 'default' : 'outline'}
               >
                 {value}x
-              </Button>
+              </button>
             ))}
           </div>
           <div aria-label="Agents shown" className={styles.group} role="group">
@@ -451,10 +455,12 @@ export function UniversePlayer({ data, live }: { data: AgentUniverseResponse; li
       {liveOn && live && <LivePanel data={data} live={live} unplaced={overlay.unplaced} />}
 
       <div className={styles.below}>
-        <div className={styles.card}>
-          <h2>Agents</h2>
+        <Widget
+          description="Totals for the whole selected range. Select an agent to see where it worked."
+          title="Agents"
+        >
           <div className={styles.scroll}>
-            <table>
+            <table className={styles.table}>
               <thead>
                 <tr>
                   <th>Agent</th>
@@ -491,12 +497,12 @@ export function UniversePlayer({ data, live }: { data: AgentUniverseResponse; li
             </table>
           </div>
           <p className={styles.note}>
-            These totals cover the whole selected range. A blank value means the agent has not
-            reported it, so it is not zero.
+            &ldquo;Not reported&rdquo; means the agent has not sent that value, so it is not zero.
           </p>
-        </div>
-        <div className={styles.card}>
-          <h2>{selection ? selectionName(selection, data.agents, data.projects) : 'Details'}</h2>
+        </Widget>
+        <Widget
+          title={selection ? selectionName(selection, data.agents, data.projects) : 'Details'}
+        >
           {selection ? (
             <ul className={styles.links}>
               {selectedAgent?.model && (
@@ -528,7 +534,7 @@ export function UniversePlayer({ data, live }: { data: AgentUniverseResponse; li
               planet.
             </p>
           )}
-        </div>
+        </Widget>
       </div>
     </section>
   );
@@ -542,7 +548,7 @@ function LiveDelivery() {
 
 export function AgentUniversePanel() {
   const userId = useWakaclockUserStore((state) => state.userId) ?? '';
-  const { end, setRange, start } = useWakaclockRange(30);
+  const { end, start } = useWakaclockRange(30);
   const { featureAvailability } = useCapabilities();
   const disabled = featureAvailability?.agent_universe === false;
   const [timezone] = React.useState(
@@ -580,31 +586,36 @@ export function AgentUniversePanel() {
   }
 
   return (
-    <div className="space-y-4">
-      <RangePicker onChange={setRange} value={{ end, start }} />
-      <QueryState
-        emptyDescription="No AI agent sessions were reported in this range."
-        emptyTitle="The sky is empty"
-        error={query.error}
-        isEmpty={!query.data?.agents.length}
-        isLoading={query.isLoading}
-        skeletonClassName="h-96 w-full"
-      >
-        {query.data && (
-          <UniversePlayer
-            data={query.data}
-            key={`${start}:${end}`}
-            live={{
-              available: liveAvailable,
-              data: liveQuery.data,
-              enabled: liveEnabled,
-              failed: Boolean(liveQuery.error),
-              notice: liveEnabled && <LiveDelivery />,
-              onToggle: setLiveOn,
-            }}
-          />
-        )}
-      </QueryState>
-    </div>
+    <QueryState
+      emptyDescription="No AI agent sessions were reported in this range."
+      emptyTitle="The sky is empty"
+      error={query.error}
+      isEmpty={!query.data?.agents.length}
+      isLoading={query.isLoading}
+      skeletonClassName="h-96 w-full"
+    >
+      {query.data && (
+        <UniversePlayer
+          data={query.data}
+          key={`${start}:${end}`}
+          live={{
+            available: liveAvailable,
+            data: liveQuery.data,
+            enabled: liveEnabled,
+            failed: Boolean(liveQuery.error),
+            notice: liveEnabled && <LiveDelivery />,
+            onToggle: setLiveOn,
+          }}
+        />
+      )}
+    </QueryState>
   );
+}
+
+/** The page's range, in the toolbar; the panel reads the same URL-backed range. */
+export function AgentUniverseRange() {
+  const { end, setRange, start } = useWakaclockRange(30);
+  const { featureAvailability } = useCapabilities();
+  if (featureAvailability?.agent_universe === false) return null;
+  return <RangePicker onChange={setRange} value={{ end, start }} />;
 }

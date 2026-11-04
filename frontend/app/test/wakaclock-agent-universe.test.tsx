@@ -739,7 +739,7 @@ describe('AgentUniversePanel', () => {
     vi.mocked(getAgentUniverse).mockRejectedValue(
       new WakaclockError('agent universe range must be at most 92 days', 400)
     );
-    wrap(<AgentUniversePanel />);
+    wrap(<AgentUniversePage />);
 
     expect(await screen.findByText(/at most 92 days/)).toBeInTheDocument();
     expect(screen.getByTestId('range-picker')).toBeInTheDocument();
