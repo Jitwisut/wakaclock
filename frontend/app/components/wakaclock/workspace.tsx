@@ -73,6 +73,31 @@ export function MetricStrip({
 }
 
 /**
+ * Joins a row of existing `StatTile`s into one divided strip, matching `MetricStrip`
+ * for pages that keep their tiles' tooltips and loading states. Set the column count
+ * on the className.
+ */
+export function MetricGroup({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        'bg-border grid gap-px overflow-hidden rounded-xl border [&>*]:rounded-none [&>*]:border-0 [&>*]:shadow-none',
+        className
+      )}
+      data-slot="metric-group"
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
  * A bento cell: a titled surface whose size the parent grid decides. `action` sits at the
  * top right (a link, a segmented toggle).
  */

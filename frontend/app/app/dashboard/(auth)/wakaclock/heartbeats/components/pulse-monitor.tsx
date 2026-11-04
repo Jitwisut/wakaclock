@@ -8,14 +8,17 @@ import { AnimatePresence, motion } from 'motion/react';
 
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
+import { Card } from '@/components/ui/card';
 import { CountAnimation } from '@/components/ui/custom/count-animation';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { cn } from '@/lib/utils';
 import { bucketHeartbeatCounts, type HeartbeatSummary } from '@/lib/wakaclock/heartbeat-stats';
 import type { HeartbeatItem } from '@/lib/wakaclock/types';
 
 import styles from '../heartbeats.module.css';
+
 
 import { SendHeartbeatDialog } from './send-heartbeat-dialog';
 
@@ -168,7 +171,7 @@ function PulseTrace({ buckets, nowMinute, beat }: PulseTraceProps) {
             </linearGradient>
           </defs>
           <line
-            stroke="oklch(1 0 0 / 0.14)"
+            stroke="var(--border)"
             strokeDasharray="2 6"
             vectorEffect="non-scaling-stroke"
             x1="0"
@@ -236,17 +239,17 @@ function PulseTrace({ buckets, nowMinute, beat }: PulseTraceProps) {
             className="pointer-events-none absolute inset-y-0"
             style={{ left: `${((hover + 0.5) / n) * 100}%` }}
           >
-            <div className="absolute inset-y-0 w-px bg-white/35" />
+            <div className="bg-foreground/25 absolute inset-y-0 w-px" />
             <div
               className={cn(
-                'absolute top-0 w-max rounded-lg border border-white/15 bg-[oklch(0.14_0.01_255/0.92)] px-2.5 py-1.5 text-[11px] leading-tight shadow-xl backdrop-blur',
+                'bg-popover text-popover-foreground absolute top-0 w-max rounded-lg border px-2.5 py-1.5 text-[11px] leading-tight shadow-md',
                 hover > n * 0.75 ? 'right-2' : 'left-2'
               )}
             >
-              <div className="font-mono text-white/60 tabular-nums">
+              <div className="text-muted-foreground tabular-nums">
                 {formatMinute(hover * BUCKET_MINUTES)}–{formatMinute((hover + 1) * BUCKET_MINUTES)}
               </div>
-              <div className="font-medium text-white">
+              <div className="font-medium">
                 {hoverCount} heartbeat{hoverCount === 1 ? '' : 's'}
               </div>
             </div>
@@ -254,7 +257,10 @@ function PulseTrace({ buckets, nowMinute, beat }: PulseTraceProps) {
         )}
       </div>
 
-      <div aria-hidden="true" className="relative mt-2 h-4 font-mono text-[10px] text-white/45">
+      <div
+        aria-hidden="true"
+        className="text-muted-foreground relative mt-2 h-4 text-[10px] tabular-nums"
+      >
         {HOUR_TICKS.map((hour) => (
           <span
             className={cn('absolute', tickAlign(hour), hour % 6 !== 0 && 'hidden sm:inline')}
@@ -300,82 +306,89 @@ export function PulseMonitor({
   const isLive = isToday && sinceLast !== null && sinceLast < 180;
 
   return (
-    <section aria-labelledby="heartbeats-title" className={cn(styles.monitor, 'p-5 sm:p-7')}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className={cn(styles.eyebrow, 'flex items-center gap-2.5')}>
-          <span aria-hidden="true" className={cn(styles.livePip, !isLive && styles.livePipIdle)} />
-          {signalLabel(isToday, isLive)}
-          {timezone && <span className="text-white/40">· {timezone}</span>}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button className={cn(styles.darkControl, 'gap-1.5')} size="sm" variant="outline">
-                <CalendarIcon className="size-3.5" />
-                {format(parseISO(date), 'MMM d, yyyy')}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-auto p-0">
-              <Calendar
-                mode="single"
-                onSelect={(d) => onDateChange(format(d, 'yyyy-MM-dd'))}
-                required
-                selected={parseISO(date)}
-              />
-            </PopoverContent>
-          </Popover>
-          <span className={styles.signalSlot}>
+    <div className="flex flex-col gap-5">
+      <WakaclockPageHeader
+        actions={
+          <>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button className="gap-1.5" size="sm" variant="outline">
+                  <CalendarIcon className="size-3.5" />
+                  {format(parseISO(date), 'MMM d, yyyy')}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-auto p-0">
+                <Calendar
+                  mode="single"
+                  onSelect={(d) => onDateChange(format(d, 'yyyy-MM-dd'))}
+                  required
+                  selected={parseISO(date)}
+                />
+              </PopoverContent>
+            </Popover>
             <SendHeartbeatDialog date={date} timezone={timezone} />
-          </span>
-        </div>
-      </div>
-
-      <div className="mt-6 flex flex-wrap items-end justify-between gap-x-10 gap-y-5">
-        <div>
-          <h1 className="sr-only" id="heartbeats-title">
-            Heartbeats
-          </h1>
-          <div className={styles.bigNumber}>
-            <CountAnimation duration={1.2} value={total} />
-          </div>
-          <p className="mt-3 text-sm text-white/70">
-            heartbeats recorded on{' '}
-            <span className="text-white">{format(parseISO(date), 'EEEE, MMMM d')}</span>
-          </p>
-        </div>
-        <dl className="flex flex-wrap gap-2">
-          <div className={styles.metaChip}>
-            <dt>First</dt>
-            <dd className="font-mono text-white tabular-nums">
-              {summary.firstTime === null ? '—' : formatClock(summary.firstTime)}
-            </dd>
-          </div>
-          <div className={styles.metaChip}>
-            <dt>Latest</dt>
-            <dd className="font-mono text-white tabular-nums">
-              {summary.lastTime === null ? '—' : formatClock(summary.lastTime)}
-            </dd>
-          </div>
-          {isToday && sinceLast !== null && (
-            <div className={styles.metaChip}>
-              <dt>Last beat</dt>
-              <dd className="font-mono text-white tabular-nums">{formatAgo(sinceLast)}</dd>
+          </>
+        }
+        description="Every heartbeat your editors and agents sent, as it arrives."
+        title="Heartbeats"
+      />
+      <Card
+        aria-label="Heartbeat pulse"
+        className={cn(styles.monitor, 'gap-0 px-5 py-5')}
+        role="region"
+      >
+        <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-5">
+          <div>
+            <p className="text-muted-foreground flex items-center gap-2 text-xs">
+              <span
+                aria-hidden="true"
+                className={cn(styles.livePip, !isLive && styles.livePipIdle)}
+              />
+              {signalLabel(isToday, isLive)}
+              {timezone && <span>· {timezone}</span>}
+            </p>
+            <div className={cn(styles.bigNumber, 'mt-2')}>
+              <CountAnimation duration={1.2} value={total} />
             </div>
-          )}
-          {total > 0 && (
-            <div className={styles.metaChip}>
-              <dt>Busiest hour</dt>
-              <dd className="font-mono text-white tabular-nums">
-                {formatMinute(peakHour * 60)} · {hourly[peakHour]}
+            <p className="text-muted-foreground mt-1 text-sm">
+              heartbeats recorded on{' '}
+              <span className="text-foreground">{format(parseISO(date), 'EEEE, MMMM d')}</span>
+            </p>
+          </div>
+          <dl className="bg-border grid grid-cols-2 gap-px overflow-hidden rounded-lg border sm:grid-cols-4">
+            <div className="bg-card px-3 py-2">
+              <dt className="text-muted-foreground text-xs">First</dt>
+              <dd className="text-sm font-semibold tabular-nums">
+                {summary.firstTime === null ? '—' : formatClock(summary.firstTime)}
               </dd>
             </div>
-          )}
-        </dl>
-      </div>
+            <div className="bg-card px-3 py-2">
+              <dt className="text-muted-foreground text-xs">Latest</dt>
+              <dd className="text-sm font-semibold tabular-nums">
+                {summary.lastTime === null ? '—' : formatClock(summary.lastTime)}
+              </dd>
+            </div>
+            {isToday && sinceLast !== null && (
+              <div className="bg-card px-3 py-2">
+                <dt className="text-muted-foreground text-xs">Last beat</dt>
+                <dd className="text-sm font-semibold tabular-nums">{formatAgo(sinceLast)}</dd>
+              </div>
+            )}
+            {total > 0 && (
+              <div className="bg-card px-3 py-2">
+                <dt className="text-muted-foreground text-xs">Busiest hour</dt>
+                <dd className="text-sm font-semibold tabular-nums">
+                  {formatMinute(peakHour * 60)} · {hourly[peakHour]}
+                </dd>
+              </div>
+            )}
+          </dl>
+        </div>
 
-      <div className="mt-6">
-        <PulseTrace beat={beat} buckets={buckets} nowMinute={nowMinute} />
-      </div>
-    </section>
+        <div className="mt-5">
+          <PulseTrace beat={beat} buckets={buckets} nowMinute={nowMinute} />
+        </div>
+      </Card>
+    </div>
   );
 }

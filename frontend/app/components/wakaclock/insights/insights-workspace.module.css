@@ -885,3 +885,73 @@
 :global([data-theme-preset='motion-native']) .orbit::before {
   animation: none;
 }
+
+/* ---------- Presentation rebuild (all presets) ----------
+ * The page toolbar and metric strip are shared workspace components now. The panels
+ * below take the dashboard widget scale: theme surfaces, compact titles, token colours
+ * and no dark spotlight stage.
+ */
+.workspace {
+  gap: 20px;
+  max-width: none;
+  padding: 0;
+}
+.sectionHeading {
+  padding: 16px 20px 8px;
+}
+.sectionHeading h3 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.spotlight {
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.4) !important;
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow: var(--elevation-raised, none);
+}
+.spotlight::after {
+  display: none;
+}
+.spotlight .eyebrow,
+.spotlightRank,
+.spotlightCaption,
+.shareLabel,
+.spotlight dt,
+.spotlight p {
+  color: var(--muted-foreground);
+}
+.spotlight .eyebrow {
+  font-size: 11px;
+  letter-spacing: 0;
+}
+.spotlight p {
+  border-top-color: var(--border);
+}
+.spotlightTime {
+  color: var(--foreground);
+  font-size: 2rem;
+  font-weight: 600;
+}
+.liveDot {
+  background: var(--primary);
+  box-shadow: none;
+}
+.shareTrack {
+  background: var(--muted);
+}
+.shareTrack span,
+.tableShare b {
+  background: var(--primary);
+}
+.measurement {
+  padding: 20px;
+  border-radius: calc(var(--radius) * 1.4) !important;
+  background: var(--card);
+}
+.measurement h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+}

@@ -14,6 +14,7 @@ import { RangePicker } from '@/components/wakaclock/range-picker';
 import { InspectorLayout } from '@/components/wakaclock/workspace';
 import { useAnalyticsFilters } from '@/hooks/use-analytics-filters';
 import { useCapabilities } from '@/hooks/use-capabilities';
+import { cn } from '@/lib/utils';
 import type {
   AnalyticsFilterOptions,
   ReplayEvent,
@@ -373,18 +374,26 @@ export function TimeMachinePanel() {
   }
 
   const viewPicker = (
-    <div aria-label="Time Machine view" className={styles.views} role="group">
+    <div
+      aria-label="Time Machine view"
+      className="bg-muted inline-flex gap-0.5 rounded-lg p-0.5 shadow-[inset_0_0_0_1px_var(--border)]"
+      role="group"
+    >
       {(['city', 'timeline'] as const).map((value) => (
-        <Button
+        <button
           aria-pressed={view === value}
+          className={cn(
+            'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+            view === value
+              ? 'bg-card text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
           key={value}
           onClick={() => setView(value)}
-          size="sm"
           type="button"
-          variant={view === value ? 'default' : 'outline'}
         >
           {value === 'city' ? 'City' : 'Timeline'}
-        </Button>
+        </button>
       ))}
     </div>
   );

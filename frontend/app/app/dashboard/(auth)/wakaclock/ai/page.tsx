@@ -6,7 +6,6 @@ import { useQuery } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Label, Pie, PieChart, XAxis, YAxis } from 'recharts';
 
 import { DashboardPanel } from '@/components/dashboard-panels';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   ChartContainer,
   ChartLegend,
@@ -24,6 +23,7 @@ import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { StatTile } from '@/components/wakaclock/stat-tile';
 import { WorkSessionsPanel } from '@/components/wakaclock/work-sessions-panel';
+import { MetricGroup } from '@/components/wakaclock/workspace';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
 import { formatAiIdentityReason } from '@/lib/wakaclock/ai-display';
 import { getAiDiagnostics, getAiDiagnosticsV2 } from '@/lib/wakaclock/endpoints';
@@ -50,7 +50,7 @@ const dailyConfig = {
 
 function AiStatsPanel() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
-  const { start, end, setRange } = useWakaclockRange(14);
+  const { start, end } = useWakaclockRange(14);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
   const { data, isLoading, error } = useQuery({
@@ -97,82 +97,74 @@ function AiStatsPanel() {
       : [];
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-          <div>
-            <CardTitle>AI activity evidence</CardTitle>
-          </div>
-          <RangePicker onChange={setRange} value={{ start, end }} />
-        </div>
-      </CardHeader>
-      <CardContent>
-        <QueryState
-          error={error}
-          isEmpty={
-            !isLoading &&
-            !error &&
-            stats?.total_heartbeats === 0 &&
-            (stats.usage_coverage?.event_count ?? 0) === 0
-          }
-          isLoading={isLoading}
-        >
-          {stats && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
-                <StatTile
-                  label="AI heartbeats"
-                  value={stats.total_heartbeats > 0 ? formatPercent(aiPct) : UNAVAILABLE}
-                />
-                <StatTile
-                  label="AI lines added"
-                  subtext={
-                    stats.line_measurements?.ai_deleted
-                      ? `${formatCompactNumber(stats.total_ai_lines_deleted)} deleted`
-                      : 'Deletions unavailable'
-                  }
-                  value={
-                    stats.line_measurements?.ai_added
-                      ? formatCompactNumber(stats.total_ai_lines_added)
-                      : UNAVAILABLE
-                  }
-                />
-                <StatTile
-                  label="Measured human additions"
-                  subtext={
-                    stats.line_measurements?.human_deleted
-                      ? `${formatCompactNumber(stats.total_human_lines_deleted)} deleted`
-                      : 'Deletions unavailable'
-                  }
-                  value={
-                    stats.line_measurements?.human_added
-                      ? formatCompactNumber(stats.total_human_lines_added)
-                      : UNAVAILABLE
-                  }
-                />
-                <StatTile
-                  label="Human keystrokes"
-                  value={
-                    stats.line_measurements?.human_keystrokes
-                      ? formatCompactNumber(stats.total_human_keystrokes)
-                      : UNAVAILABLE
-                  }
-                />
-                <StatTile
-                  label="Total heartbeats"
-                  value={formatCompactNumber(stats.total_heartbeats)}
-                />
-              </div>
+    <section aria-label="AI activity evidence" className="flex flex-col gap-5">
+      <QueryState
+        error={error}
+        isEmpty={
+          !isLoading &&
+          !error &&
+          stats?.total_heartbeats === 0 &&
+          (stats.usage_coverage?.event_count ?? 0) === 0
+        }
+        isLoading={isLoading}
+      >
+        {stats && (
+          <div className="flex flex-col gap-5">
+            <MetricGroup className="grid-cols-2 sm:grid-cols-5">
+              <StatTile
+                label="AI heartbeats"
+                value={stats.total_heartbeats > 0 ? formatPercent(aiPct) : UNAVAILABLE}
+              />
+              <StatTile
+                label="AI lines added"
+                subtext={
+                  stats.line_measurements?.ai_deleted
+                    ? `${formatCompactNumber(stats.total_ai_lines_deleted)} deleted`
+                    : 'Deletions unavailable'
+                }
+                value={
+                  stats.line_measurements?.ai_added
+                    ? formatCompactNumber(stats.total_ai_lines_added)
+                    : UNAVAILABLE
+                }
+              />
+              <StatTile
+                label="Measured human additions"
+                subtext={
+                  stats.line_measurements?.human_deleted
+                    ? `${formatCompactNumber(stats.total_human_lines_deleted)} deleted`
+                    : 'Deletions unavailable'
+                }
+                value={
+                  stats.line_measurements?.human_added
+                    ? formatCompactNumber(stats.total_human_lines_added)
+                    : UNAVAILABLE
+                }
+              />
+              <StatTile
+                label="Human keystrokes"
+                value={
+                  stats.line_measurements?.human_keystrokes
+                    ? formatCompactNumber(stats.total_human_keystrokes)
+                    : UNAVAILABLE
+                }
+              />
+              <StatTile
+                label="Total heartbeats"
+                value={formatCompactNumber(stats.total_heartbeats)}
+              />
+            </MetricGroup>
 
-              <p className="text-muted-foreground text-sm">
-                AI share of measured line changes:{' '}
-                {data?.metrics_v2?.ai_line_share == null
-                  ? UNAVAILABLE
-                  : formatPercent(data.metrics_v2.ai_line_share * 100)}
-                . Human activity does not prove code authorship. Heartbeat shares are not code
-                percentages.
-              </p>
-              <div className="rounded-md border p-3 text-sm" role="status">
+            <p className="text-muted-foreground text-sm">
+              AI share of measured line changes:{' '}
+              {data?.metrics_v2?.ai_line_share == null
+                ? UNAVAILABLE
+                : formatPercent(data.metrics_v2.ai_line_share * 100)}
+              . Human activity does not prove code authorship. Heartbeat shares are not code
+              percentages.
+            </p>
+            <div className="grid items-start gap-5 xl:grid-cols-2">
+              <div className="bg-card rounded-xl border p-4 text-sm" role="status">
                 <p className="font-medium">
                   Attribution coverage: {coverageStatus.replaceAll('_', ' ')}
                 </p>
@@ -196,7 +188,7 @@ function AiStatsPanel() {
               {stats.identity && (
                 <section
                   aria-label="AI identity coverage"
-                  className="rounded-md border p-3 text-sm"
+                  className="bg-card rounded-xl border p-4 text-sm"
                 >
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <p className="font-medium">AI identity coverage</p>
@@ -236,124 +228,120 @@ function AiStatsPanel() {
                   )}
                 </section>
               )}
+            </div>
 
-              <DashboardPanel id="ai.charts">
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                  <div>
-                    <h3 className="mb-2 text-sm font-medium">Heartbeats by activity evidence</h3>
-                    <ChartContainer
-                      className="mx-auto aspect-square max-h-64"
-                      config={attributionConfig}
-                    >
-                      <PieChart>
-                        <ChartTooltip content={<ChartTooltipContent hideLabel />} />
-                        <Pie
-                          data={pieData}
-                          dataKey="heartbeats"
-                          innerRadius={60}
-                          nameKey="key"
-                          strokeWidth={4}
-                        >
-                          <Label
-                            content={({ viewBox }) => {
-                              if (viewBox && 'cx' in viewBox && 'cy' in viewBox) {
-                                return (
-                                  <text
-                                    dominantBaseline="middle"
-                                    textAnchor="middle"
+            <DashboardPanel id="ai.charts">
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                <div className="bg-card rounded-xl border p-4">
+                  <h3 className="mb-2 text-sm font-medium">Heartbeats by activity evidence</h3>
+                  <ChartContainer
+                    className="mx-auto aspect-square max-h-64"
+                    config={attributionConfig}
+                  >
+                    <PieChart>
+                      <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                      <Pie
+                        data={pieData}
+                        dataKey="heartbeats"
+                        innerRadius={60}
+                        nameKey="key"
+                        strokeWidth={4}
+                      >
+                        <Label
+                          content={({ viewBox }) => {
+                            if (viewBox && 'cx' in viewBox && 'cy' in viewBox) {
+                              return (
+                                <text
+                                  dominantBaseline="middle"
+                                  textAnchor="middle"
+                                  x={viewBox.cx}
+                                  y={viewBox.cy}
+                                >
+                                  <tspan
+                                    className="fill-foreground text-2xl font-bold"
                                     x={viewBox.cx}
                                     y={viewBox.cy}
                                   >
-                                    <tspan
-                                      className="fill-foreground text-2xl font-bold"
-                                      x={viewBox.cx}
-                                      y={viewBox.cy}
-                                    >
-                                      {stats.total_heartbeats > 0
-                                        ? formatPercent(aiPct, 0)
-                                        : UNAVAILABLE}
-                                    </tspan>
-                                    <tspan
-                                      className="fill-muted-foreground text-xs"
-                                      x={viewBox.cx}
-                                      y={(viewBox.cy ?? 0) + 20}
-                                    >
-                                      AI heartbeats
-                                    </tspan>
-                                  </text>
-                                );
-                              }
-                              return null;
-                            }}
-                          />
-                        </Pie>
-                        <ChartLegend content={<ChartLegendContent nameKey="key" />} />
-                      </PieChart>
-                    </ChartContainer>
-                  </div>
-
-                  <div>
-                    <h3 className="mb-2 text-sm font-medium">Daily AI vs. human activity</h3>
-                    <ChartContainer className="h-64 w-full" config={dailyConfig}>
-                      <BarChart
-                        data={stats.daily.map((row) => ({
-                          ...row,
-                          unknown_lines_added:
-                            row.unknown_lines_added ?? row.unattributed_lines_added ?? 0,
-                        }))}
-                        margin={{ left: 4, right: 4 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                        <XAxis
-                          axisLine={false}
-                          dataKey="date"
-                          tickFormatter={(v: string) => v.slice(5)}
-                          tickLine={false}
+                                    {stats.total_heartbeats > 0
+                                      ? formatPercent(aiPct, 0)
+                                      : UNAVAILABLE}
+                                  </tspan>
+                                  <tspan
+                                    className="fill-muted-foreground text-xs"
+                                    x={viewBox.cx}
+                                    y={(viewBox.cy ?? 0) + 20}
+                                  >
+                                    AI heartbeats
+                                  </tspan>
+                                </text>
+                              );
+                            }
+                            return null;
+                          }}
                         />
-                        <YAxis axisLine={false} tickLine={false} width={40} />
-                        <ChartTooltip content={<ChartTooltipContent />} />
-                        <Bar
-                          dataKey="ai_lines_added"
-                          fill="var(--color-ai_lines_added)"
-                          radius={3}
-                        />
-                        <Bar
-                          dataKey="human_lines_added"
-                          fill="var(--color-human_lines_added)"
-                          radius={3}
-                        />
-                        <Bar
-                          dataKey="unknown_lines_added"
-                          fill="var(--color-unknown_lines_added)"
-                          radius={3}
-                        />
-                      </BarChart>
-                    </ChartContainer>
-                  </div>
+                      </Pie>
+                      <ChartLegend content={<ChartLegendContent nameKey="key" />} />
+                    </PieChart>
+                  </ChartContainer>
                 </div>
-                <AiAttributionLegend
-                  aiInferredPercent={stats.total_heartbeats > 0 ? aiInferredPct : null}
-                  aiVerifiedPercent={stats.total_heartbeats > 0 ? aiVerifiedPct : null}
-                  humanPercent={stats.total_heartbeats > 0 ? humanPct : null}
-                  unknownPercent={stats.total_heartbeats > 0 ? unknownPct : null}
-                />
-              </DashboardPanel>
 
-              <div>
-                <h3 className="mb-2 text-sm font-medium">Which AI?</h3>
-                {stats.agents.length > 0 ? (
-                  <AiAgentsTable agents={stats.agents} title={null} />
-                ) : (
-                  <p className="text-muted-foreground rounded-md border p-4 text-sm">
-                    No AI activity is available for this range.
-                  </p>
-                )}
+                <div className="bg-card rounded-xl border p-4">
+                  <h3 className="mb-2 text-sm font-medium">Daily AI vs. human activity</h3>
+                  <ChartContainer className="h-64 w-full" config={dailyConfig}>
+                    <BarChart
+                      data={stats.daily.map((row) => ({
+                        ...row,
+                        unknown_lines_added:
+                          row.unknown_lines_added ?? row.unattributed_lines_added ?? 0,
+                      }))}
+                      margin={{ left: 4, right: 4 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis
+                        axisLine={false}
+                        dataKey="date"
+                        tickFormatter={(v: string) => v.slice(5)}
+                        tickLine={false}
+                      />
+                      <YAxis axisLine={false} tickLine={false} width={40} />
+                      <ChartTooltip content={<ChartTooltipContent />} />
+                      <Bar dataKey="ai_lines_added" fill="var(--color-ai_lines_added)" radius={3} />
+                      <Bar
+                        dataKey="human_lines_added"
+                        fill="var(--color-human_lines_added)"
+                        radius={3}
+                      />
+                      <Bar
+                        dataKey="unknown_lines_added"
+                        fill="var(--color-unknown_lines_added)"
+                        radius={3}
+                      />
+                    </BarChart>
+                  </ChartContainer>
+                </div>
               </div>
+              <AiAttributionLegend
+                aiInferredPercent={stats.total_heartbeats > 0 ? aiInferredPct : null}
+                aiVerifiedPercent={stats.total_heartbeats > 0 ? aiVerifiedPct : null}
+                humanPercent={stats.total_heartbeats > 0 ? humanPct : null}
+                unknownPercent={stats.total_heartbeats > 0 ? unknownPct : null}
+              />
+            </DashboardPanel>
+
+            <div>
+              <h3 className="mb-2 text-sm font-medium">Which AI?</h3>
+              {stats.agents.length > 0 ? (
+                <AiAgentsTable agents={stats.agents} title={null} />
+              ) : (
+                <p className="text-muted-foreground rounded-md border p-4 text-sm">
+                  No AI activity is available for this range.
+                </p>
+              )}
             </div>
-          )}
-        </QueryState>
-      </CardContent>
-    </Card>
+          </div>
+        )}
+      </QueryState>
+    </section>
   );
 }
 
@@ -384,10 +372,17 @@ function AiDiagnosticsPanelContainer() {
   );
 }
 
+/** The page's range, in the toolbar; the panels read the same URL range. */
+function AiStatsRange() {
+  const { start, end, setRange } = useWakaclockRange(14);
+  return <RangePicker onChange={setRange} value={{ start, end }} />;
+}
+
 export default function AiStatsPage() {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <WakaclockPageHeader
+        actions={<AiStatsRange />}
         description="Received human and agent activity, measured changes, and evidence coverage."
         title="AI Stats"
       />
