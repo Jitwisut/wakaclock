@@ -1233,7 +1233,9 @@ impl OrganizationsService {
 }
 
 /// Caller holds the organization seat lock. Generic membership operations
-/// cannot change an Owner, even when several Owners exist.
+/// cannot change an active Owner, even when several Owners exist. A deactivated
+/// legacy Owner row holds no authority and is re-admitted only with an ordinary
+/// role (see `accept_invite`).
 pub(super) async fn require_editable_member(
     tx: &tokio_postgres::Transaction<'_>,
     org: Uuid,
@@ -1242,7 +1244,7 @@ pub(super) async fn require_editable_member(
     let owner = tx
         .query_opt(
             "SELECT 1 FROM organization_members
-         WHERE organization_id=$1 AND user_id=$2 AND role='owner' FOR SHARE",
+         WHERE organization_id=$1 AND user_id=$2 AND role='owner' AND deactivated_at IS NULL FOR SHARE",
             &[&org, &user],
         )
         .await?;
@@ -1273,31 +1275,79 @@ pub(super) async fn prepare_owned_workspaces_for_deletion(
             )
             .into());
         }
-        let other = tx.query_one("SELECT
+        let state = tx.query_one("SELECT
+            COALESCE(o.personal_owner_id=$2, FALSE),
             EXISTS(SELECT 1 FROM organization_members m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND m.user_id<>$2 AND m.role='owner' AND m.deactivated_at IS NULL AND u.is_active AND u.deleted_at IS NULL),
-            EXISTS(SELECT 1 FROM organization_members WHERE organization_id=$1 AND user_id<>$2 AND deactivated_at IS NULL)",
+            EXISTS(SELECT 1 FROM organization_members WHERE organization_id=$1 AND user_id<>$2 AND deactivated_at IS NULL),
+            EXISTS(SELECT 1 FROM team_analytics_entitlements WHERE organization_id=$1)
+             OR EXISTS(SELECT 1 FROM team_stripe_bindings WHERE organization_id=$1)
+             OR EXISTS(SELECT 1 FROM team_stripe_checkout_intents WHERE organization_id=$1)
+             OR EXISTS(SELECT 1 FROM team_stripe_customer_operations WHERE organization_id=$1)
+             OR EXISTS(SELECT 1 FROM team_organization_birth_receipts WHERE organization_id=$1)
+            FROM organizations o WHERE o.id=$1",
             &[&org,&user]).await?;
-        if other.get::<_, bool>(0) {
-            continue;
-        }
-        if !other.get::<_, bool>(1) {
-            let closed = tx
-                .execute(
+        let personal: bool = state.get(0);
+        let other_owner: bool = state.get(1);
+        let other_members: bool = state.get(2);
+        let commercial: bool = state.get(3);
+        match deletion_workspace_disposition(personal, other_owner, other_members, commercial) {
+            DeletionWorkspace::Keep => continue,
+            DeletionWorkspace::Close => {
+                tx.execute(
                     "UPDATE organizations SET deleted_at=now(), updated_at=now()
-                 WHERE id=$1 AND personal_owner_id=$2 AND deleted_at IS NULL",
-                    &[&org, &user],
+                     WHERE id=$1 AND deleted_at IS NULL",
+                    &[&org],
                 )
                 .await?;
-            if closed == 1 {
-                continue;
+                tx.execute(
+                    "INSERT INTO audit_logs(id,organization_id,actor_user_id,action,resource_type,resource_id)
+                     VALUES($1,$2,$3,'organization.closed_for_account_deletion','organization',$2)",
+                    &[&Uuid::now_v7(), &org, &user],
+                )
+                .await?;
+            }
+            DeletionWorkspace::Refuse(message) => {
+                return Err(OrganizationRequestError::Conflict(message).into());
             }
         }
-        return Err(OrganizationRequestError::Conflict(
-            "transfer organization ownership before deleting this account",
-        )
-        .into());
     }
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DeletionWorkspace {
+    /// Another active Owner keeps the workspace.
+    Keep,
+    /// Nobody else can inherit it, so it closes with the account.
+    Close,
+    Refuse(&'static str),
+}
+
+/// What happens to a workspace the deleting account owns. Personal ownership
+/// cannot be transferred, and a sole-member Team workspace has no successor, so
+/// both close with the account. A workspace with commercial state (billing,
+/// entitlement or onboarding records) is never closed from this path: its
+/// closure belongs to the financial flow.
+fn deletion_workspace_disposition(
+    personal: bool,
+    other_owner: bool,
+    other_members: bool,
+    commercial: bool,
+) -> DeletionWorkspace {
+    if other_owner {
+        return DeletionWorkspace::Keep;
+    }
+    if !personal && other_members {
+        return DeletionWorkspace::Refuse(
+            "transfer organization ownership before deleting this account",
+        );
+    }
+    if commercial {
+        return DeletionWorkspace::Refuse(
+            "this workspace has Team billing or onboarding records; contact support to close it before deleting this account",
+        );
+    }
+    DeletionWorkspace::Close
 }
 
 fn normalize_slug(value: &str) -> Result<String> {
@@ -1422,6 +1472,46 @@ mod tests {
         assert_eq!(normalize_slug("Acme  Dev").unwrap(), "acme-dev");
         assert!(normalize_slug("x").is_err());
         assert!(normalize_slug("!!!").is_err());
+    }
+
+    #[test]
+    fn account_deletion_closes_only_workspaces_nobody_can_inherit() {
+        use DeletionWorkspace::*;
+        // (personal, other_owner, other_members, commercial)
+        assert_eq!(
+            deletion_workspace_disposition(false, true, true, true),
+            Keep
+        );
+        assert_eq!(
+            deletion_workspace_disposition(true, true, false, false),
+            Keep
+        );
+        // A sole-member Team workspace has no successor and closes.
+        assert_eq!(
+            deletion_workspace_disposition(false, false, false, false),
+            Close
+        );
+        // Personal ownership is fixed, so it closes even with other members.
+        assert_eq!(
+            deletion_workspace_disposition(true, false, true, false),
+            Close
+        );
+        assert_eq!(
+            deletion_workspace_disposition(true, false, false, false),
+            Close
+        );
+        // A Team workspace with members must be handed over first.
+        assert!(matches!(
+            deletion_workspace_disposition(false, false, true, false),
+            Refuse(m) if m.contains("transfer")
+        ));
+        // Commercial state is never closed from the account-deletion path.
+        for personal in [false, true] {
+            assert!(matches!(
+                deletion_workspace_disposition(personal, false, false, true),
+                Refuse(m) if m.contains("billing")
+            ));
+        }
     }
 }
 

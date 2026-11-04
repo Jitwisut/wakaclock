@@ -408,17 +408,22 @@ impl EnterpriseService {
         let tx = db.transaction().await?;
         crate::repository::team_seats::lock(&tx, organization_id).await?;
         let Some(member) = tx.query_opt(
-            "SELECT m.role, m.seat_type FROM organization_members m JOIN users u ON u.id=m.user_id
+            "SELECT m.role, m.seat_type, (m.role='owner' AND m.deactivated_at IS NOT NULL)
+             FROM organization_members m JOIN users u ON u.id=m.user_id
              WHERE m.organization_id=$1 AND m.user_id=$2 AND u.deleted_at IS NULL FOR UPDATE OF m,u",
             &[&organization_id, &user_id],
         ).await? else { return Ok(None); };
         if let Some(active) = input.active {
+            // Reactivating a deactivated legacy Owner row restores membership,
+            // never ownership: it comes back as an ordinary member.
+            let legacy_owner: bool = member.get(2);
+            let restored_role = scim_restored_role(member.get(0), legacy_owner);
             if active {
                 crate::repository::team_seats::admit(
                     &tx,
                     organization_id,
                     user_id,
-                    member.get(0),
+                    restored_role,
                     member.get(1),
                 )
                 .await?;
@@ -426,8 +431,10 @@ impl EnterpriseService {
                 super::organizations::require_editable_member(&tx, organization_id, user_id)
                     .await?;
             }
-            tx.execute("UPDATE organization_members SET deactivated_at=CASE WHEN $3 THEN NULL ELSE COALESCE(deactivated_at, now()) END WHERE organization_id=$1 AND user_id=$2",
-                &[&organization_id, &user_id, &active]).await?;
+            tx.execute("UPDATE organization_members SET deactivated_at=CASE WHEN $3 THEN NULL ELSE COALESCE(deactivated_at, now()) END,
+                    role=CASE WHEN $3 THEN $4 ELSE role END
+                 WHERE organization_id=$1 AND user_id=$2",
+                &[&organization_id, &user_id, &active, &restored_role]).await?;
         }
         // SCIM active is tenant-scoped. Only a sole-tenant identity can have its
         // global inactive flag restored (including accounts provisioned before this fix).
@@ -621,4 +628,27 @@ fn scim_user_from_row(row: Row) -> Result<ScimUserRecord> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
+}
+
+/// The role a SCIM reactivation keeps. A deactivated legacy Owner row returns
+/// as an ordinary member; any other row keeps its role.
+fn scim_restored_role(role: &str, legacy_owner: bool) -> &str {
+    if legacy_owner {
+        "member"
+    } else {
+        role
+    }
+}
+
+#[cfg(test)]
+mod scim_role_tests {
+    use super::scim_restored_role;
+
+    #[test]
+    fn reactivating_a_deactivated_owner_never_restores_ownership() {
+        assert_eq!(scim_restored_role("owner", true), "member");
+        assert_eq!(scim_restored_role("owner", false), "owner");
+        assert_eq!(scim_restored_role("admin", false), "admin");
+        assert_eq!(scim_restored_role("viewer", false), "viewer");
+    }
 }

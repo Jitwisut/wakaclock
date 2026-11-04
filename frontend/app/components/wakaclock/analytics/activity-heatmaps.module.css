@@ -309,3 +309,74 @@
     transform: none;
   }
 }
+
+/* ---------- Motion Native ----------
+ * Same heatmap and charts on the preset's surfaces: hairline borders, soft elevation,
+ * rounded tiles and bars, a graphite intro panel, and no pixel bevels or text shadow.
+ */
+:global([data-theme-preset='motion-native']) .board [data-slot='card'] {
+  border-width: 1px;
+  border-radius: calc(var(--radius) * 1.2);
+  box-shadow: var(--elevation-raised);
+}
+:global([data-theme-preset='motion-native']) .intro {
+  color: oklch(0.95 0.003 265);
+  background: oklch(0.205 0.006 265);
+  border: 1px solid oklch(1 0 0 / 0.06);
+  border-radius: calc(var(--radius) * 1.4);
+  box-shadow: var(--elevation-raised);
+}
+:global([data-theme-preset='motion-native']) .kicker {
+  color: var(--primary-300);
+}
+:global([data-theme-preset='motion-native']) .intro h2 {
+  text-shadow: none;
+}
+:global([data-theme-preset='motion-native']) .intro p {
+  color: oklch(0.78 0.008 265);
+}
+:global([data-theme-preset='motion-native']) .pixelArt span {
+  background: var(--primary-400);
+  border: 0;
+  border-radius: 4px 4px 0 0;
+  box-shadow: none;
+}
+:global([data-theme-preset='motion-native']) .pixelArt span:nth-child(5) {
+  background: var(--warning);
+}
+:global([data-theme-preset='motion-native']) .stats > div {
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.2);
+  box-shadow: var(--elevation-raised);
+}
+:global([data-theme-preset='motion-native']) .scroll {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: none;
+}
+:global([data-theme-preset='motion-native']) .tile {
+  border-radius: 3px;
+  box-shadow: none;
+}
+:global([data-theme-preset='motion-native']) .tile[data-active='true'] {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+:global([data-theme-preset='motion-native']) .barPlot {
+  border-bottom-width: 1px;
+}
+:global([data-theme-preset='motion-native']) .bar {
+  background: var(--primary);
+  border: 0;
+  border-radius: 4px 4px 0 0;
+  box-shadow: none;
+}
+:global([data-theme-preset='motion-native']) .track {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: none;
+}
+:global([data-theme-preset='motion-native']) .trackFill {
+  background: var(--primary);
+  border-radius: 999px;
+  filter: none;
+}

@@ -3,7 +3,7 @@
 import * as React from 'react';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { UserMinusIcon, UserPlusIcon, UsersIcon } from 'lucide-react';
+import { UserMinusIcon, UserPlusIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -234,9 +234,7 @@ export function OrganizationTeamsPanel({ organizationId }: { organizationId: str
 
   return (
     <div className="space-y-3 rounded-md border p-3">
-      <p className="flex items-center gap-2 font-medium">
-        <UsersIcon aria-hidden className="size-4" /> Teams &amp; members
-      </p>
+      <p className="font-medium">Teams &amp; members</p>
       <QueryState
         emptyDescription={
           canManage ? 'Create the first team below.' : 'An organization admin can create teams.'
@@ -274,7 +272,7 @@ export function OrganizationTeamsPanel({ organizationId }: { organizationId: str
       {canManage ? (
         <form
           aria-label="Create a team"
-          className="flex flex-wrap gap-2"
+          className="flex flex-wrap items-center justify-center gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             if (name.trim()) create.mutate();
@@ -288,11 +286,11 @@ export function OrganizationTeamsPanel({ organizationId }: { organizationId: str
             placeholder="e.g. Platform squad"
             value={name}
           />
-          <Button disabled={!name.trim() || create.isPending} size="sm" type="submit">
+          <Button disabled={!name.trim() || create.isPending} type="submit">
             Create team
           </Button>
           {create.isError ? (
-            <p className="text-destructive w-full text-sm" role="alert">
+            <p className="text-destructive w-full text-center text-sm" role="alert">
               {errorMessage(create.error, 'Could not create the team.')}
             </p>
           ) : null}

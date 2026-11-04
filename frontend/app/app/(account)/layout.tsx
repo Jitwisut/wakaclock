@@ -59,7 +59,7 @@ export default async function AccountLayout({
 
   return (
     <RootDocument lang="en">
-      <ThemeProvider attribute="class" defaultTheme="light" disableTransitionOnChange enableSystem>
+      <ThemeProvider attribute="class" defaultTheme="system" disableTransitionOnChange enableSystem>
         {/* fontVariables belongs on the same element as the theme attributes — a preset's
             `--text-family` references a `--font-*` variable and resolves to nothing if that
             variable is not defined where the declaration lives. */}

@@ -220,3 +220,54 @@ async fn reinviting_an_inactive_legacy_owner_grants_only_the_invited_role() {
         ("viewer", "viewer")
     );
 }
+
+#[tokio::test]
+#[ignore = "isolated atoaxis_team_test only"]
+async fn deleting_the_sole_member_of_a_team_workspace_closes_it() {
+    let (pg, service, _, _) = fixture().await;
+    let solo = Uuid::now_v7();
+    pg.execute(
+        "INSERT INTO users(id,username) VALUES($1,$2)",
+        &[&solo, &solo.to_string()],
+    )
+    .await
+    .unwrap();
+    let team = service
+        .create(
+            solo,
+            CreateOrganizationRequest::Create(
+                crate::model::organization::CreateOrganizationFields {
+                    name: "Solo Team".into(),
+                    slug: Some(format!("solo-{}", solo.simple())),
+                    creation_request_id: None,
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(team.personal_owner_id.is_none());
+    let mut db = pg.transaction_client().await.unwrap();
+    let tx = db.transaction().await.unwrap();
+    prepare_owned_workspaces_for_deletion(&tx, solo)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(pg
+        .query_one(
+            "SELECT deleted_at IS NOT NULL FROM organizations WHERE id=$1",
+            &[&team.id]
+        )
+        .await
+        .unwrap()
+        .get::<_, bool>(0));
+    assert_eq!(
+        pg.query_one(
+            "SELECT count(*) FROM audit_logs WHERE organization_id=$1 AND action='organization.closed_for_account_deletion'",
+            &[&team.id]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        1
+    );
+}

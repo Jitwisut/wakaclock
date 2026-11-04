@@ -319,3 +319,89 @@
     transition: none !important;
   }
 }
+
+/* ---------- Motion Native ----------
+ * The archive keeps its composition (editorial headline, the little player, the
+ * equalizer) but trades the pixel bevels for the preset's surfaces: hairline borders,
+ * soft elevation, rounded corners, graphite screens and token colours.
+ */
+:global([data-theme-preset='motion-native']) .hero {
+  color: var(--card-foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.4);
+  box-shadow: var(--elevation-raised);
+}
+:global([data-theme-preset='motion-native']) .period {
+  border-top-color: var(--border);
+  color: var(--muted-foreground);
+}
+:global([data-theme-preset='motion-native']) .machine {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--elevation-hover);
+  transform: rotate(-3deg);
+}
+:global([data-theme-preset='motion-native']) .screen {
+  color: var(--primary-300);
+  background: oklch(0.205 0.006 265);
+  border: 1px solid oklch(1 0 0 / 0.08);
+  border-radius: calc(var(--radius) - 2px);
+  box-shadow: inset 0 1px 3px oklch(0 0 0 / 0.45);
+}
+:global([data-theme-preset='motion-native']) .keys i,
+:global([data-theme-preset='motion-native']) .keys b {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: var(--elevation-raised);
+}
+:global([data-theme-preset='motion-native']) .keys b {
+  background: var(--warning);
+}
+:global([data-theme-preset='motion-native']) .metrics > div {
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.2);
+  box-shadow: var(--elevation-raised);
+}
+:global([data-theme-preset='motion-native']) .rhythm {
+  color: oklch(0.95 0.003 265);
+  background: oklch(0.205 0.006 265);
+  border: 1px solid oklch(1 0 0 / 0.06);
+  border-radius: calc(var(--radius) * 1.4);
+  box-shadow: var(--elevation-raised);
+}
+:global([data-theme-preset='motion-native']) .rhythm .kicker,
+:global([data-theme-preset='motion-native']) .axis {
+  color: oklch(0.72 0.01 265);
+}
+:global([data-theme-preset='motion-native']) .rhythm p,
+:global([data-theme-preset='motion-native']) .readout span,
+:global([data-theme-preset='motion-native']) .equalizer small {
+  color: oklch(0.78 0.008 265);
+}
+:global([data-theme-preset='motion-native']) .readout strong {
+  color: var(--primary-300);
+}
+:global([data-theme-preset='motion-native']) .equalizer {
+  border-bottom-color: oklch(1 0 0 / 0.12);
+}
+:global([data-theme-preset='motion-native']) .tower {
+  background: var(--primary-500);
+  border-radius: 3px 3px 0 0;
+  box-shadow: none;
+}
+:global([data-theme-preset='motion-native']) .equalizer button:hover .tower,
+:global([data-theme-preset='motion-native']) .equalizer button[aria-pressed='true'] .tower {
+  background: var(--warning);
+  box-shadow: none;
+}
+:global([data-theme-preset='motion-native']) .board [data-slot='card'] {
+  border-width: 1px;
+  border-radius: calc(var(--radius) * 1.2);
+  box-shadow: var(--elevation-raised);
+}
+:global([data-theme-preset='motion-native']) .screen svg {
+  animation-iteration-count: 2;
+}

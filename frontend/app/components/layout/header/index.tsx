@@ -7,6 +7,7 @@ import { PanelLeftIcon } from 'lucide-react';
 import { Notifications, type NotificationsLabels } from '@/components/layout/header/notifications';
 import { Search, type SearchLabels } from '@/components/layout/header/search';
 import { ThemeSwitch } from '@/components/layout/header/theme-switch';
+import { ToolbarBreadcrumb } from '@/components/layout/header/toolbar-breadcrumb';
 import { UserMenu } from '@/components/layout/header/user-menu';
 import { ThemeCustomizerPanel } from '@/components/theme-customizer';
 import { Button } from '@/components/ui/button';
@@ -100,6 +101,7 @@ const SiteHeader = React.forwardRef<HTMLElement, SiteHeaderProps>(
             className="mx-2 hidden data-[orientation=vertical]:h-4 sm:block"
             orientation="vertical"
           />
+          <ToolbarBreadcrumb />
           <Search labels={searchLabels} />
 
           <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">

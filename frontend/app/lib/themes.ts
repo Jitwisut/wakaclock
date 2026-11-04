@@ -1,5 +1,5 @@
 export const DEFAULT_THEME = {
-  preset: 'retro-pixel',
+  preset: 'motion-native',
   radius: 'default',
   scale: 'none',
   contentLayout: 'full',
@@ -26,6 +26,11 @@ export type ThemeType = {
  * stops of each preset's primary and secondary ramps.
  */
 export const THEMES = [
+  {
+    name: 'Motion Native',
+    value: 'motion-native',
+    colors: ['oklch(0.52 0.12 158)'],
+  },
   {
     name: 'Retro Pixel 3D',
     value: 'retro-pixel',

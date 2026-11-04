@@ -3,7 +3,7 @@
 import * as React from 'react';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckIcon, MailPlusIcon, XIcon } from 'lucide-react';
+import { CheckIcon, XIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -89,12 +89,10 @@ export function OrganizationInvitesPanel({ organizationId }: { organizationId: s
 
   return (
     <div className="space-y-3 rounded-md border p-3">
-      <p className="flex items-center gap-2 font-medium">
-        <MailPlusIcon aria-hidden className="size-4" /> Invite people
-      </p>
+      <p className="text-center font-medium">Invite people</p>
       <form
         aria-label="Invite by username"
-        className="flex flex-wrap items-center gap-2"
+        className="flex flex-wrap items-center justify-center gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           setSentTo(null);
@@ -133,20 +131,20 @@ export function OrganizationInvitesPanel({ organizationId }: { organizationId: s
             </option>
           ))}
         </select>
-        <Button disabled={!username.trim() || invite.isPending} size="sm" type="submit">
+        <Button disabled={!username.trim() || invite.isPending} type="submit">
           Send invite
         </Button>
       </form>
-      <p className="text-muted-foreground text-xs">
+      <p className="text-muted-foreground text-center text-xs">
         They join only after accepting on their Teams page. Invites expire after 14 days.
       </p>
       {sentTo ? (
-        <p className="text-sm" role="status">
+        <p className="text-center text-sm" role="status">
           Invite sent to <strong>{sentTo}</strong>.
         </p>
       ) : null}
       {failure ? (
-        <p className="text-destructive text-sm" role="alert">
+        <p className="text-destructive text-center text-sm" role="alert">
           {errorMessage(failure, 'Could not update invites.')}
         </p>
       ) : null}
