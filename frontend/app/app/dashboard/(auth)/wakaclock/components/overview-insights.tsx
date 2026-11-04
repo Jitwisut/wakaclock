@@ -169,7 +169,7 @@ export function OverviewInsights() {
         }
         title="Highlights"
       >
-        <ul className="bg-border grid gap-px overflow-hidden rounded-lg border sm:grid-cols-2 xl:grid-cols-4">
+        <ul className="bg-border grid grid-cols-1 gap-px overflow-hidden rounded-lg border sm:grid-cols-2 xl:grid-cols-4">
           {insights.map((insight) => (
             <li className="bg-card flex min-w-0 flex-col gap-1 px-4 py-3.5" key={insight.label}>
               <span className="text-muted-foreground flex items-center gap-1.5 text-xs">

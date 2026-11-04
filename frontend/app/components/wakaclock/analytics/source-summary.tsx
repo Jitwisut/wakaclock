@@ -160,7 +160,7 @@ export function SourceSummary({
           )}
         </div>
       )}
-      <div className="grid gap-4 2xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
         <SegmentGroup
           isActive={(key) => selected === key || (!selected && key === undefined)}
           label="Source"

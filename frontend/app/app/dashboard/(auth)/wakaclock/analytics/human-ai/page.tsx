@@ -99,7 +99,7 @@ function HumanAiView(context: AnalyticsFrameContext) {
         ]}
       />
 
-      <div className="grid items-start gap-5 2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="grid grid-cols-1 items-start gap-5 2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <AttributionTimeline data={data} />
         <AttributionOverview
           data={data}
@@ -109,7 +109,7 @@ function HumanAiView(context: AnalyticsFrameContext) {
         />
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <AttributionMixList
           description={
             enabled

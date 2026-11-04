@@ -105,7 +105,7 @@ export function TeamOverviewHero({
         </Card>
       </Tilt3D>
 
-      <nav aria-label="Organization shortcuts" className="grid gap-3 sm:grid-cols-2">
+      <nav aria-label="Organization shortcuts" className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {ORGANIZATION_SECTIONS.filter((id) => id !== 'overview').map((id) => {
           const item = teamSection(id);
           return (

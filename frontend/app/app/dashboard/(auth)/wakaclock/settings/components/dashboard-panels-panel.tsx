@@ -83,7 +83,7 @@ export function DashboardPanelsPanel() {
         </div>
       </div>
 
-      <div className="grid gap-4 p-5 sm:p-6 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 p-5 sm:p-6 xl:grid-cols-2">
         {DASHBOARD_PANEL_PAGES.map((page) => (
           <section
             aria-labelledby={`panels-${page.id}`}

@@ -88,7 +88,7 @@ function MetricGroup({ children, title }: { children: React.ReactNode; title: st
   return (
     <section className={styles.metricGroup}>
       <h3 className={styles.metricGroupTitle}>{title}</h3>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{children}</div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">{children}</div>
     </section>
   );
 }
@@ -341,7 +341,7 @@ export function PhaseNineDashboard() {
               </DashboardPanel>
 
               <DashboardPanel id="overview.analytics-breakdowns">
-                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                   <BreakdownList items={data.breakdowns.languages.items} title="Languages" />
                   <BreakdownList items={data.breakdowns.editors.items} title="Editors" />
                   <BreakdownList items={data.breakdowns.models.items} title="AI models" />

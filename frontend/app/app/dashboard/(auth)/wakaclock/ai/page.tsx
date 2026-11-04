@@ -163,7 +163,7 @@ function AiStatsPanel() {
               . Human activity does not prove code authorship. Heartbeat shares are not code
               percentages.
             </p>
-            <div className="grid items-start gap-5 xl:grid-cols-2">
+            <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-2">
               <div className="bg-card rounded-xl border p-4 text-sm" role="status">
                 <p className="font-medium">
                   Attribution coverage: {coverageStatus.replaceAll('_', ' ')}

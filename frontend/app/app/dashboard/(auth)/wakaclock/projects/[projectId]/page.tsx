@@ -212,7 +212,7 @@ function DetailPanel() {
               },
             ]}
           />
-          <div className="grid gap-5 2xl:grid-cols-[2fr_1fr]">
+          <div className="grid grid-cols-1 gap-5 2xl:grid-cols-[2fr_1fr]">
             <Widget
               description="Lines added and deleted per day, by attribution."
               title="Daily activity"
@@ -295,7 +295,7 @@ function DetailPanel() {
             </Widget>
           </div>
 
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             <Breakdown items={detail.languages} title="Languages" />
             <Breakdown items={detail.editors} title="Editors" />
           </div>

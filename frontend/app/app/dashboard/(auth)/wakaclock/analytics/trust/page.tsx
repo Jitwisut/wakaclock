@@ -456,7 +456,7 @@ export default function MeasurementTrustPage() {
                                 ? 'unavailable'
                                 : `+${operation.lines_added} / -${operation.lines_deleted}`}
                             </p>
-                            <fieldset className="bg-muted/30 mt-3 grid gap-2 rounded-md p-3 sm:grid-cols-[auto_1fr_1fr_1fr] sm:items-end">
+                            <fieldset className="bg-muted/30 mt-3 grid grid-cols-1 gap-2 rounded-md p-3 sm:grid-cols-[auto_1fr_1fr_1fr] sm:items-end">
                               <legend className="sr-only">
                                 Correct measured outcome and line counts
                               </legend>

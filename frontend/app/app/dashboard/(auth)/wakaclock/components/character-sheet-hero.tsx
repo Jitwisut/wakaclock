@@ -136,7 +136,7 @@ export function CharacterSheetHero() {
     : (statusBar.data?.total_seconds ?? 0);
 
   return (
-    <div className="grid gap-5 sm:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+    <div className="grid grid-cols-1 gap-5 sm:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
       <Card aria-labelledby="today-heading" className="gap-4 px-5 py-5" role="region">
         <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs">
           <span className="inline-flex items-center gap-1.5">

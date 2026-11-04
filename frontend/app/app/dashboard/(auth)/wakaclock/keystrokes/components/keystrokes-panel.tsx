@@ -84,7 +84,7 @@ export function KeystrokesPanel() {
             </MetricGroup>
 
             <DashboardPanel id="keystrokes.chart">
-              <div className="grid gap-5 xl:grid-cols-3">
+              <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
                 <ChartContainer
                   className="bg-card h-64 w-full rounded-xl border p-3"
                   config={keystrokeChartConfig}
@@ -159,7 +159,7 @@ export function KeystrokesPanel() {
               </div>
             </DashboardPanel>
 
-            <MetricGroup className="sm:grid-cols-3">
+            <MetricGroup className="grid-cols-1 sm:grid-cols-3">
               <StatTile
                 label="Same file"
                 value={formatCompactNumber(stats.total_paste_same_file_actions)}

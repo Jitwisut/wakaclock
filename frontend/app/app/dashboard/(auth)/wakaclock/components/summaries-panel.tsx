@@ -135,7 +135,10 @@ export function SummariesPanel() {
             </ChartContainer>
 
             {(hasDurationV2 || hasActive) && (
-              <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-3">
+              <dl
+                aria-label="Duration comparison"
+                className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+              >
                 {hasActive && (
                   <div className="border-primary/30 bg-primary/5 rounded-md border p-3">
                     <dt className="text-muted-foreground text-xs">Measured Active</dt>

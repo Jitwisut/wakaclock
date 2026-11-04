@@ -12,6 +12,7 @@ import {
 } from '@/components/marketing/time/time-quality';
 import { Button } from '@/components/ui/button';
 import { QueryState } from '@/components/wakaclock/query-state';
+import { SEGMENTED_GROUP, SEGMENTED_ITEM } from '@/components/wakaclock/workspace';
 import type {
   ProjectCityModule,
   ProjectCityResponse,
@@ -363,32 +364,30 @@ export function CityPlayer({
             {playing ? <Pause /> : <Play />}
             {playLabel}
           </Button>
-          <div aria-label="Playback speed" className={styles.group} role="group">
+          <div aria-label="Playback speed" className={SEGMENTED_GROUP} role="group">
             {SPEEDS.map((value) => (
-              <Button
+              <button
                 aria-pressed={speed === value}
+                className={SEGMENTED_ITEM}
                 key={value}
                 onClick={() => setSpeed(value)}
-                size="sm"
                 type="button"
-                variant={speed === value ? 'default' : 'outline'}
               >
                 {value}x
-              </Button>
+              </button>
             ))}
           </div>
-          <div aria-label="Colour towers by" className={styles.group} role="group">
+          <div aria-label="Colour towers by" className={SEGMENTED_GROUP} role="group">
             {(['complexity', 'language'] as const).map((value) => (
-              <Button
+              <button
                 aria-pressed={lens === value}
+                className={SEGMENTED_ITEM}
                 key={value}
                 onClick={() => setLens(value)}
-                size="sm"
                 type="button"
-                variant={lens === value ? 'default' : 'outline'}
               >
                 {value === 'complexity' ? 'Complexity' : 'Language'}
-              </Button>
+              </button>
             ))}
           </div>
         </div>

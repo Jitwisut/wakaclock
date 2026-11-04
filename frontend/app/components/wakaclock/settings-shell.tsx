@@ -88,7 +88,7 @@ export function SettingsShell({
   return (
     <MotionConfig reducedMotion="user">
       <Card
-        className="group/shell grid min-h-[calc(100svh-var(--header-height,56px)-2*var(--content-padding,16px))] gap-0 overflow-clip py-0 md:grid-cols-[248px_minmax(0,1fr)]"
+        className="group/shell grid min-h-[calc(100svh-var(--header-height,56px)-2*var(--content-padding,16px))] grid-cols-1 gap-0 overflow-clip py-0 md:grid-cols-[248px_minmax(0,1fr)]"
         data-view={view}
         ref={shellRef}
       >

@@ -137,7 +137,10 @@ export function DurationTimeline() {
           <IncompleteTimeBadge />
           {(hasDurationV2 || activeAvailable) && (
             <>
-              <dl aria-label="Duration comparison" className="grid gap-3 sm:grid-cols-2">
+              <dl
+                aria-label="Duration comparison"
+                className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+              >
                 <div className="bg-primary/5 rounded-lg border px-3 py-2">
                   <dt className="text-muted-foreground text-xs">Measured Active</dt>
                   <dd className="mt-1 text-lg font-semibold">

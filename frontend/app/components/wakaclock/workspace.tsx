@@ -29,6 +29,12 @@ const COLUMN_CLASS: Record<number, string> = {
   6: 'lg:grid-cols-6',
 };
 
+/** A segmented control: a recessed track whose pressed button (`aria-pressed`) is raised. */
+export const SEGMENTED_GROUP =
+  'bg-muted inline-flex gap-0.5 rounded-lg p-0.5 shadow-[inset_0_0_0_1px_var(--border)]';
+export const SEGMENTED_ITEM =
+  'text-muted-foreground hover:text-foreground aria-pressed:bg-card aria-pressed:text-foreground min-h-8 rounded-md px-3 text-sm font-medium tabular-nums transition-colors aria-pressed:shadow-sm motion-reduce:transition-none';
+
 export interface Metric {
   /** Optional context under the value (unit, comparison, coverage). */
   hint?: React.ReactNode;
@@ -52,12 +58,18 @@ export function MetricStrip({
   const columns = COLUMN_CLASS[Math.min(Math.max(metrics.length, 3), 6)];
   return (
     <Card className={cn('gap-0 overflow-hidden py-0', className)} data-slot="metric-strip">
+      {/* Each cell draws its own right and bottom hairline; the list sits one pixel past
+          the card on those sides so the outer lines are clipped. An unfilled last row
+          then shows the card surface rather than a block of divider colour. */}
       <dl
         aria-label={ariaLabel}
-        className={cn('bg-border grid grid-cols-2 gap-px sm:grid-cols-3', columns)}
+        className={cn('-mr-px -mb-px grid grid-cols-2 sm:grid-cols-3', columns)}
       >
         {metrics.map((metric) => (
-          <div className="bg-card flex min-w-0 flex-col gap-1 px-4 py-3.5" key={metric.label}>
+          <div
+            className="flex min-w-0 flex-col gap-1 border-r border-b px-4 py-3.5"
+            key={metric.label}
+          >
             <dt className="text-muted-foreground truncate text-xs">{metric.label}</dt>
             <dd className="text-lg leading-tight font-semibold tracking-tight tabular-nums">
               {metric.value}
@@ -85,14 +97,17 @@ export function MetricGroup({
   className?: string;
 }) {
   return (
-    <div
-      className={cn(
-        'bg-border grid gap-px overflow-hidden rounded-xl border [&>*]:rounded-none [&>*]:border-0 [&>*]:shadow-none',
-        className
-      )}
-      data-slot="metric-group"
-    >
-      {children}
+    <div className="bg-card overflow-hidden rounded-xl border" data-slot="metric-group">
+      {/* Same hairline scheme as MetricStrip. The tiles are cards, so the inset line has to
+          outrank the theme's card elevation. */}
+      <div
+        className={cn(
+          '-mr-px -mb-px grid grid-cols-1 [&>*]:rounded-none [&>*]:border-0 [&>*]:!shadow-[inset_-1px_-1px_0_0_var(--border)]',
+          className
+        )}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -203,7 +218,7 @@ export function InspectorLayout({
   const [open, setOpen] = React.useState(false);
   return (
     <div
-      className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_288px]"
+      className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_288px]"
       data-slot="inspector-layout"
     >
       <div className="flex min-w-0 flex-col gap-5">

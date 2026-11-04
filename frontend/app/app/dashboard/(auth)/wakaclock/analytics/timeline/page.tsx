@@ -36,7 +36,7 @@ export default function ActivityTimelinePage() {
           {data.summary.total_seconds > 0 && (
             <>
               <DailyRhythm data={data} />
-              <div className="grid gap-5 lg:grid-cols-2">
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
                 <BreakdownList
                   description="Select a project to apply it as a filter."
                   items={data.breakdowns.projects}

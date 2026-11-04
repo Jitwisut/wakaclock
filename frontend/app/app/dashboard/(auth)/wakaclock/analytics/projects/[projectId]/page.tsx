@@ -112,11 +112,11 @@ export default function AnalyticsProjectDetailPage() {
             {data.summary.total_seconds === 0 && (
               <AnalyticsEmptyState message="No activity for this project matches the current filters." />
             )}
-            <div className="grid items-start gap-5 2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+            <div className="grid grid-cols-1 items-start gap-5 2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
               <ActivityTimelineChart data={data} />
               <ProjectRhythm data={data} />
             </div>
-            <div className="grid gap-5 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <StudioBreakdown
                 eyebrow="Languages"
                 items={data.breakdowns.languages}

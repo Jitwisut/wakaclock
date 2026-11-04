@@ -13,7 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
-import { Widget } from '@/components/wakaclock/workspace';
+import { SEGMENTED_GROUP, SEGMENTED_ITEM, Widget } from '@/components/wakaclock/workspace';
 import { useCapabilities } from '@/hooks/use-capabilities';
 import { useDeliveryHealth } from '@/hooks/use-delivery-health';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
@@ -414,15 +414,11 @@ export function UniversePlayer({ data, live }: { data: AgentUniverseResponse; li
               Live
             </Button>
           )}
-          <div
-            aria-label="Playback speed"
-            className="bg-muted inline-flex gap-0.5 rounded-lg p-0.5 shadow-[inset_0_0_0_1px_var(--border)]"
-            role="group"
-          >
+          <div aria-label="Playback speed" className={SEGMENTED_GROUP} role="group">
             {SPEEDS.map((value) => (
               <button
                 aria-pressed={speed === value}
-                className="text-muted-foreground hover:text-foreground aria-pressed:bg-card aria-pressed:text-foreground min-h-8 rounded-md px-3 text-sm font-medium tabular-nums transition-colors aria-pressed:shadow-sm"
+                className={SEGMENTED_ITEM}
                 key={value}
                 onClick={() => setSpeed(value)}
                 type="button"

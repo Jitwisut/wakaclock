@@ -233,7 +233,7 @@ function LeaderboardsPanel() {
   const noun = count === 1 ? 'board' : 'boards';
 
   return (
-    <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+    <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
       <section aria-labelledby="leaderboards-list-title" className="flex min-w-0 flex-col gap-3">
         <div className="px-1">
           <h2 className="text-sm font-semibold tracking-tight" id="leaderboards-list-title">
@@ -251,7 +251,7 @@ function LeaderboardsPanel() {
           isEmpty={!isLoading && !error && count === 0}
           isLoading={isLoading}
         >
-          <div className="grid gap-5 2xl:grid-cols-2">
+          <div className="grid grid-cols-1 gap-5 2xl:grid-cols-2">
             {data?.map((board) => (
               <Widget
                 action={
