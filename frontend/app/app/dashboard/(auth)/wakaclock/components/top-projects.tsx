@@ -82,7 +82,7 @@ export function TopProjects() {
                     >
                       <span className="truncate text-sm font-medium">{project.name}</span>
                     </Link>
-                    <span className="text-muted-foreground shrink-0 font-mono text-sm tabular-nums">
+                    <span className="text-muted-foreground shrink-0 text-sm tabular-nums">
                       {formatDurationShort(project.total_seconds)}
                     </span>
                   </div>

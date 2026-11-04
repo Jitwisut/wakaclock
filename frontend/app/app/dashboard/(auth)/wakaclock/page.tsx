@@ -13,7 +13,6 @@ import { RangeStats } from './components/range-stats';
 import { StatusTiles } from './components/status-tiles';
 import { SummariesPanel } from './components/summaries-panel';
 import { TopProjects } from './components/top-projects';
-import styles from './overview.module.css';
 
 /**
  * Reading order, most glanceable first: today → lifetime → highlights for the range →
@@ -22,74 +21,71 @@ import styles from './overview.module.css';
  */
 export default function WakaclockOverviewPage() {
   return (
-    <div className={styles.overview}>
+    <div className="flex flex-col gap-5">
       <WakaclockPageHeader
+        actions={<OverviewToolbar />}
         description="Your time, focus and progress at a glance."
-        title="Player dashboard"
+        title="Overview"
       />
       <RequireUser>
         <OverviewMotion>
-          <div className="flex flex-col gap-8">
-            {/* Each panel is individually switchable from Settings; see lib/dashboard-panels.ts. */}
+          {/*
+            A bento grid: each panel is a cell sized to its content, today first. Every
+            panel stays individually switchable from Settings (lib/dashboard-panels.ts).
+          */}
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
             <DashboardPanel id="overview.character-sheet">
-              <Reveal>
+              <Reveal className="lg:col-span-8">
                 <CharacterSheetHero />
               </Reveal>
             </DashboardPanel>
 
             <DashboardPanel id="overview.status-tiles">
-              <Reveal delay={0.08}>
+              <Reveal className="lg:col-span-4" delay={0.06}>
                 <StatusTiles />
               </Reveal>
             </DashboardPanel>
 
-            <OverviewToolbar />
-
             <DashboardPanel id="overview.insights">
-              <Reveal className={styles.section}>
-                <h2 className={styles.sectionLabel}>Highlights</h2>
+              <Reveal className="lg:col-span-12">
                 <OverviewInsights />
               </Reveal>
             </DashboardPanel>
 
-            <section className={styles.section}>
-              <h2 className={styles.sectionLabel}>Activity</h2>
-              <div className={styles.split}>
-                <DashboardPanel id="overview.range-stats">
-                  <Reveal>
-                    <RangeStats />
-                  </Reveal>
-                </DashboardPanel>
-                <DashboardPanel id="overview.top-projects">
-                  <Reveal delay={0.08}>
-                    <TopProjects />
-                  </Reveal>
-                </DashboardPanel>
-              </div>
-              <DashboardPanel id="overview.summaries">
-                <Reveal>
-                  <SummariesPanel />
-                </Reveal>
-              </DashboardPanel>
-            </section>
+            <DashboardPanel id="overview.range-stats">
+              <Reveal className="lg:col-span-7">
+                <RangeStats />
+              </Reveal>
+            </DashboardPanel>
+            <DashboardPanel id="overview.top-projects">
+              <Reveal className="lg:col-span-5" delay={0.06}>
+                <TopProjects />
+              </Reveal>
+            </DashboardPanel>
 
-            <DashboardPanel id="overview.browsing">
-              <section className={styles.section}>
-                <h2 className={styles.sectionLabel}>Browsing</h2>
-                <BrowsingPanel />
-              </section>
+            <DashboardPanel id="overview.summaries">
+              <Reveal className="lg:col-span-12">
+                <SummariesPanel />
+              </Reveal>
             </DashboardPanel>
 
             <DashboardPanel id="overview.analytics">
-              <Reveal className={styles.section}>
-                <h2 className={styles.sectionLabel}>AI &amp; code</h2>
+              <Reveal className="flex flex-col gap-3 lg:col-span-12">
+                <h2 className="text-sm font-semibold tracking-tight">AI &amp; code</h2>
                 <PhaseNineDashboard />
               </Reveal>
             </DashboardPanel>
 
+            <DashboardPanel id="overview.browsing">
+              <section className="flex flex-col gap-3 lg:col-span-12">
+                <h2 className="text-sm font-semibold tracking-tight">Browsing</h2>
+                <BrowsingPanel />
+              </section>
+            </DashboardPanel>
+
             <DashboardPanel id="overview.duration-timeline">
-              <Reveal className={`${styles.section} ${styles.timeline}`}>
-                <h2 className={styles.sectionLabel}>Sessions</h2>
+              <Reveal className="flex flex-col gap-3 lg:col-span-12">
+                <h2 className="text-sm font-semibold tracking-tight">Sessions</h2>
                 <DurationTimeline />
               </Reveal>
             </DashboardPanel>

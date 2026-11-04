@@ -1,17 +1,17 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { CalendarDaysIcon, ClockIcon, FlameIcon, ZapIcon } from 'lucide-react';
+import { ClockIcon } from 'lucide-react';
 
 import { useDashboardPanels } from '@/components/dashboard-panels';
+import { Skeleton } from '@/components/ui/skeleton';
 import { TodayQuestCard } from '@/components/wakaclock/rpg/today-quest-card';
 import { StatTile } from '@/components/wakaclock/stat-tile';
+import { Widget } from '@/components/wakaclock/workspace';
 import { getAllTime, getBrowserTimezone, getStatusBar } from '@/lib/wakaclock/endpoints';
 import { formatCompactNumber, formatDurationShort } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
-
-import styles from '../overview.module.css';
 
 /**
  * Lifetime totals. Today's running total lives in the hero above (same status-bar query),
@@ -19,6 +19,30 @@ import styles from '../overview.module.css';
  * in which case the Today tile and the quest card come back so today's time never
  * disappears from the page.
  */
+function LifetimeRow({
+  isLoading,
+  label,
+  subtext,
+  value,
+}: {
+  isLoading: boolean;
+  label: string;
+  subtext?: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 py-3">
+      <div className="min-w-0">
+        <dt className="text-sm">{label}</dt>
+        {subtext && <dd className="text-muted-foreground text-xs">{subtext}</dd>}
+      </div>
+      <dd className="shrink-0 text-lg font-semibold tracking-tight tabular-nums">
+        {isLoading ? <Skeleton className="h-6 w-16" /> : value}
+      </dd>
+    </div>
+  );
+}
+
 export function StatusTiles() {
   const userId = useWakaclockUserStore((s) => s.userId) ?? '';
   const timezone = getBrowserTimezone();
@@ -47,10 +71,10 @@ export function StatusTiles() {
     : (allTime.data?.data.total_seconds ?? 0);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex h-full flex-col gap-5">
       {showToday && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div className={styles.lift}>
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+          <div>
             <StatTile
               className="h-full"
               icon={<ClockIcon />}
@@ -64,16 +88,14 @@ export function StatusTiles() {
               }
             />
           </div>
-          <div className={styles.lift}>
+          <div>
             <TodayQuestCard isLoading={statusBar.isLoading} todaySeconds={todaySeconds} />
           </div>
         </div>
       )}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className={styles.lift}>
-          <StatTile
-            className="h-full"
-            icon={<ZapIcon />}
+      <Widget title="Lifetime">
+        <dl className="-my-1 divide-y">
+          <LifetimeRow
             isLoading={allTime.isLoading}
             label={allTimeActiveAvailable ? 'All-time active coding' : 'All-time total'}
             subtext={
@@ -87,21 +109,13 @@ export function StatusTiles() {
                 : (allTime.data?.data.text ?? '0m')
             }
           />
-        </div>
-        <div className={styles.lift}>
-          <StatTile
-            className="h-full"
-            icon={<FlameIcon />}
+          <LifetimeRow
             isLoading={allTime.isLoading}
             label="Days with activity"
             subtext="Distinct days with any coding, not a streak"
             value={String(allTime.data?.data.days_with_activity ?? 0)}
           />
-        </div>
-        <div className={styles.lift}>
-          <StatTile
-            className="h-full"
-            icon={<CalendarDaysIcon />}
+          <LifetimeRow
             isLoading={allTime.isLoading}
             label="Coding since"
             value={
@@ -110,8 +124,8 @@ export function StatusTiles() {
                 : '—'
             }
           />
-        </div>
-      </div>
+        </dl>
+      </Widget>
     </div>
   );
 }
