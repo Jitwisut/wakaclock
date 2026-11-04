@@ -1,173 +1,23 @@
-'use client';
+/*
+ * Theme facade: Motion Native renders the `analytics-filter-bar.native` layout, every other preset the
+ * `analytics-filter-bar.classic` one (the layout before the Motion Native redesign).
+ */
 
-import { Button } from '@/components/ui/button';
-import type {
-  AnalyticsActorTypeFilter,
-  AnalyticsFilterOption,
-  AnalyticsFilterOptions,
-  AnalyticsSourceFilter,
-} from '@/lib/wakaclock/analytics';
+import type * as React from 'react';
 
-interface AnalyticsFilterBarProps {
-  filters: {
-    actorType?: AnalyticsActorTypeFilter;
-    category?: string;
-    editor?: string;
-    end: string;
-    language?: string;
-    operatingSystem?: string;
-    projectId?: string;
-    source?: AnalyticsSourceFilter;
-    start: string;
-    timezone: string;
-  };
-  lockedProjectId?: string;
-  onReset: () => void;
-  onSetFilter: (
-    name:
-      | 'actor_type'
-      | 'category'
-      | 'editor'
-      | 'language'
-      | 'operating_system'
-      | 'project_id'
-      | 'source'
-      | 'timezone',
-    value?: string
-  ) => void;
-  options: AnalyticsFilterOptions;
-}
+import { LayoutSwitch } from '@/components/wakaclock/layout-switch';
 
-function FilterSelect({
-  label,
-  onChange,
-  options,
-  value,
-}: {
-  label: string;
-  onChange: (value?: string) => void;
-  options: AnalyticsFilterOption[];
-  value?: string;
-}) {
+import * as Classic from './analytics-filter-bar.classic';
+import * as Native from './analytics-filter-bar.native';
+
+export function AnalyticsFilterBar(
+  props: React.ComponentProps<typeof Classic.AnalyticsFilterBar> &
+    React.ComponentProps<typeof Native.AnalyticsFilterBar>
+) {
   return (
-    <label className="flex flex-col gap-1.5 text-xs font-medium">
-      <span className="text-muted-foreground">{label}</span>
-      <select
-        className="bg-background h-9 w-full rounded-md border px-2 text-sm"
-        onChange={(event) =>
-          onChange(event.target.value === 'all' ? undefined : event.target.value)
-        }
-        value={value ?? 'all'}
-      >
-        <option value="all">All</option>
-        {options.map((option) => (
-          <option key={option.key} value={option.key}>
-            {option.name}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-export function AnalyticsFilterBar({
-  filters,
-  lockedProjectId,
-  onReset,
-  onSetFilter,
-  options,
-}: AnalyticsFilterBarProps) {
-  let localTimezone = 'UTC';
-  try {
-    localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    // Keep the filter usable in restricted runtimes without IANA timezone support.
-  }
-  const timezoneOptions = [...new Set(['UTC', localTimezone, filters.timezone])];
-  const lockedProject = lockedProjectId
-    ? options.projects.find((option) => option.key === lockedProjectId)
-    : undefined;
-
-  return (
-    <div className="flex flex-col gap-3.5" data-slot="analytics-filters">
-      {lockedProjectId ? (
-        <div className="flex flex-col gap-1.5">
-          <span className="text-muted-foreground text-xs font-medium">Project</span>
-          <div className="bg-muted flex h-9 items-center rounded-md border px-3 text-sm font-medium">
-            {lockedProject?.name ?? 'Selected project'}
-          </div>
-        </div>
-      ) : (
-        <FilterSelect
-          label="Project"
-          onChange={(value) => onSetFilter('project_id', value)}
-          options={options.projects}
-          value={filters.projectId}
-        />
-      )}
-      <FilterSelect
-        label="Language"
-        onChange={(value) => onSetFilter('language', value)}
-        options={options.languages}
-        value={filters.language}
-      />
-      <FilterSelect
-        label="Editor"
-        onChange={(value) => onSetFilter('editor', value)}
-        options={options.editors}
-        value={filters.editor}
-      />
-      <FilterSelect
-        label="Category"
-        onChange={(value) => onSetFilter('category', value)}
-        options={options.categories}
-        value={filters.category}
-      />
-      <label className="flex flex-col gap-1.5 text-xs font-medium">
-        <span className="text-muted-foreground">Source</span>
-        <select
-          className="bg-background h-9 w-full rounded-md border px-2 text-sm"
-          onChange={(event) =>
-            onSetFilter('source', event.target.value === 'all' ? undefined : event.target.value)
-          }
-          value={filters.source ?? 'all'}
-        >
-          <option value="all">Human + AI + Other</option>
-          <option value="human">Human</option>
-          <option value="ai">AI</option>
-          <option value="other">Other / handover</option>
-        </select>
-      </label>
-      <FilterSelect
-        label="Actor type"
-        onChange={(value) => onSetFilter('actor_type', value)}
-        options={options.actor_types ?? []}
-        value={filters.actorType}
-      />
-      <FilterSelect
-        label="Operating system"
-        onChange={(value) => onSetFilter('operating_system', value)}
-        options={options.operating_systems}
-        value={filters.operatingSystem}
-      />
-      <label className="flex flex-col gap-1.5 text-xs font-medium">
-        <span className="text-muted-foreground">Timezone</span>
-        <select
-          aria-label="Timezone"
-          className="bg-background h-9 w-full rounded-md border px-2 text-sm"
-          onChange={(event) => onSetFilter('timezone', event.target.value)}
-          value={filters.timezone}
-        >
-          {timezoneOptions.map((timezone) => (
-            <option key={timezone} value={timezone}>
-              {timezone}
-            </option>
-          ))}
-        </select>
-      </label>
-      <Button className="mt-1 w-full" onClick={onReset} type="button" variant="outline">
-        Reset filters
-      </Button>
-    </div>
+    <LayoutSwitch
+      classic={<Classic.AnalyticsFilterBar {...props} />}
+      native={<Native.AnalyticsFilterBar {...props} />}
+    />
   );
 }

@@ -113,6 +113,26 @@ selectable in the theme customizer. Owner decision 2026-11-03.
 - Marketing pages (`app/(marketing)`, `marketing.css`) are a separate art-directed
   system and do not use presets; they were not redesigned in this pass.
 
+### Layouts are per theme — Motion Native only
+
+Owner rule (2026-11-04): a theme redesign must not change the other presets. The rebuilt
+page compositions (bento overview, analytics inspector, grouped forms, `workspace.tsx`
+primitives) render **only** for `motion-native`; every other preset (Retro Pixel 3D
+included) keeps the layout it had before that redesign.
+
+- Each redesigned module is split: `<name>.native.tsx` (Motion Native layout),
+  `<name>.classic.tsx` (the original layout) and a facade at `<name>.tsx` that renders one
+  through `components/wakaclock/layout-switch.tsx` (reads `useActivePreset()`). Changed
+  CSS modules have a `<name>.classic.module.css` twin. Import the facade path from other
+  code so test mocks keep applying; only `analytics-filter-bar` is imported per variant
+  because its props differ.
+- To change a page for Motion Native, edit the `.native` file; for the other presets, the
+  `.classic` file. Do not restyle a shared component in a way every preset sees unless the
+  owner asks for that.
+- Tests run twice (Vitest projects `motion-native` and `classic`; `test/setup-classic.ts`
+  forces the classic layout). `*.native.test.tsx` / `*.classic.test.tsx` hold checks that
+  apply to one layout only.
+
 ### Settings shell and 3D tilt — Teams page
 
 `components/wakaclock/settings-shell.tsx` is a settings-style split view (section list

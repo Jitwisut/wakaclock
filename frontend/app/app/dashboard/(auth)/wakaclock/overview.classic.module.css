@@ -1,0 +1,771 @@
+/*
+ * Overview visual system.
+ *
+ * Everything here is derived from the active theme preset's tokens (`--primary`,
+ * `--card`, `--border`, `--chart-*`, `--radius`) so the page follows whichever preset the
+ * viewer picked, light or dark. Under `retro-pixel` the preset's own `--radius: 0` and
+ * `border-radius: 0 !important` keep corners sharp and the depth token below swaps the
+ * soft shadow for the preset's hard offset one — the same composition, refined retro.
+ */
+.overview {
+  --ov-radius: calc(var(--radius) * 1.6);
+  /* Cartesian color mixing preserves low-chroma hues when fading to transparent. */
+  --ov-line: color-mix(in oklab, var(--border) 75%, transparent);
+  --ov-surface: color-mix(in oklab, var(--card) 92%, transparent);
+  --ov-surface-strong: color-mix(in oklab, var(--card) 96%, transparent);
+  --ov-glow: color-mix(in oklab, var(--primary) 22%, transparent);
+  --ov-depth:
+    0 1px 0 0 color-mix(in oklab, white 7%, transparent) inset, 0 1px 2px -1px oklch(0 0 0 / 0.08),
+    0 14px 36px -18px oklch(0 0 0 / 0.28);
+  --ov-depth-hover:
+    0 1px 0 0 color-mix(in oklab, white 9%, transparent) inset, 0 2px 4px -2px oklch(0 0 0 / 0.1),
+    0 24px 48px -20px oklch(0 0 0 / 0.36),
+    0 0 0 1px color-mix(in oklab, var(--primary) 26%, transparent);
+  --ov-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-width: 0;
+}
+
+:global([data-theme-preset='retro-pixel']) .overview {
+  --ov-depth: inset 2px 2px 0 #ffffff26, inset -2px -2px 0 #00000014, 4px 4px 0 var(--retro-shadow);
+  --ov-depth-hover:
+    inset 2px 2px 0 #ffffff26, inset -2px -2px 0 #00000014, 6px 6px 0 var(--retro-shadow),
+    0 0 0 2px color-mix(in oklab, var(--primary) 40%, transparent);
+}
+
+/* Ambient light behind the whole page: two soft pools in the preset's own hues. */
+.overview::before {
+  content: '';
+  position: absolute;
+  inset: -40px 0 auto;
+  height: 620px;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      48% 60% at 12% 0%,
+      color-mix(in oklab, var(--primary) 16%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      40% 50% at 92% 8%,
+      color-mix(in oklab, var(--chart-2) 14%, transparent),
+      transparent 70%
+    );
+  filter: blur(8px);
+}
+
+.overview h1 {
+  font-size: clamp(1.6rem, 3vw, 2.15rem);
+  letter-spacing: -0.035em;
+}
+
+/* ---------- Cards: glass surface, hairline border, layered depth ---------- */
+.overview.overview [data-slot='card'] {
+  border: 1px solid var(--ov-line);
+  border-radius: var(--ov-radius);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--foreground) 2.5%, transparent),
+      transparent 42%
+    ),
+    var(--ov-surface);
+  box-shadow: var(--ov-depth);
+  transition:
+    box-shadow 320ms var(--ov-ease),
+    transform 320ms var(--ov-ease),
+    border-color 320ms var(--ov-ease);
+}
+/* Nested cards read as recessed wells, not a second floating layer. */
+.overview.overview [data-slot='card'] [data-slot='card'] {
+  background: color-mix(in oklab, var(--muted) 45%, transparent);
+  box-shadow: none;
+}
+.overview [data-slot='card-title'] {
+  letter-spacing: -0.015em;
+}
+.overview [data-slot='stat-value'] {
+  font-size: clamp(1.45rem, 2.2vw, 1.9rem);
+  font-family: var(--font-mono), monospace;
+  letter-spacing: -0.03em;
+}
+.overview [data-slot='card-header'] > span[aria-hidden] {
+  border-radius: calc(var(--radius) * 1.2);
+}
+.overview [role='progressbar'] {
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.lift {
+  height: 100%;
+}
+@media (hover: hover) {
+  .lift:hover > [data-slot='card'],
+  .lift > [data-slot='card']:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--ov-depth-hover);
+  }
+}
+
+/* ---------- Section rhythm ---------- */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.sectionLabel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.sectionLabel::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--ov-line), transparent);
+}
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+@media (min-width: 1280px) {
+  .split {
+    grid-template-columns: minmax(0, 1.65fr) minmax(300px, 1fr);
+    align-items: start;
+  }
+}
+
+/* ---------- Sticky toolbar ---------- */
+.toolbar {
+  position: relative;
+  top: calc(var(--header-height) + 8px);
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 8px 8px 8px 16px;
+  border: 1px solid var(--ov-line);
+  border-radius: calc(var(--ov-radius) + 4px);
+  background: color-mix(in oklab, var(--background) 72%, transparent);
+  backdrop-filter: blur(16px) saturate(1.3);
+  box-shadow: var(--ov-depth);
+}
+/* Sticky only where it costs one short row; on a phone it would eat a third of the screen. */
+@media (min-width: 768px) {
+  .toolbar {
+    position: sticky;
+  }
+}
+.toolbarHint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.toolbarActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+@media (max-width: 639px) {
+  .toolbarHint {
+    display: none;
+  }
+  .toolbar {
+    padding: 8px;
+  }
+}
+.customize {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--ov-line);
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--ov-surface-strong);
+  color: var(--foreground);
+  transition:
+    background 200ms var(--ov-ease),
+    border-color 200ms var(--ov-ease);
+}
+.customize:hover {
+  border-color: color-mix(in oklch, var(--primary) 45%, var(--border));
+  background: color-mix(in oklch, var(--primary) 8%, var(--card));
+}
+.customize:focus-visible,
+.heroLink:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+
+/* ---------- Command-center hero ---------- */
+.heroGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+.hero {
+  /* A dark stage tinted by the preset's primary hue, in light and dark mode alike, so
+     the headline number always sits on the same high-contrast ground. */
+  --hero-bg: color-mix(in oklch, var(--primary) 16%, oklch(0.17 0.012 250));
+  --hero-fg: oklch(0.97 0.005 250);
+  --hero-muted: oklch(0.78 0.012 250);
+  --hero-accent: color-mix(in oklch, var(--primary) 65%, white);
+  --hero-line: oklch(1 0 0 / 0.1);
+  --mx: 70%;
+  --my: 20%;
+
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+  padding: clamp(22px, 3vw, 36px);
+  color: var(--hero-fg);
+  background: var(--hero-bg);
+  border: 1px solid var(--hero-line);
+  border-radius: calc(var(--ov-radius) + 6px);
+  box-shadow: var(--ov-depth);
+}
+:global([data-theme-preset='retro-pixel']) .hero {
+  border: 3px solid color-mix(in oklch, var(--primary) 40%, #0b211b);
+}
+/* Pointer-reactive light plus a slow aurora — both pure CSS gradients on one layer. */
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      420px circle at var(--mx) var(--my),
+      color-mix(in oklab, var(--primary) 34%, transparent),
+      transparent 65%
+    ),
+    radial-gradient(
+      60% 80% at 100% 100%,
+      color-mix(in oklab, var(--chart-2) 26%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      50% 70% at 0% 100%,
+      color-mix(in oklab, var(--chart-4) 18%, transparent),
+      transparent 70%
+    );
+  transition: background-position 400ms var(--ov-ease);
+}
+/* Fine dot grid for texture; masked so it fades toward the copy. */
+.hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: radial-gradient(oklch(1 0 0 / 0.09) 1px, transparent 1px);
+  background-size: 18px 18px;
+  mask-image: linear-gradient(115deg, transparent 30%, black 85%);
+}
+@media (min-width: 900px) {
+  .hero {
+    grid-template-columns: minmax(0, 1.35fr) minmax(240px, 1fr);
+    align-items: center;
+  }
+}
+.heroCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.eyebrow {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--hero-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 9px;
+  border: 1px solid var(--hero-line);
+  border-radius: 999px;
+  color: var(--hero-accent);
+  background: oklch(1 0 0 / 0.04);
+  letter-spacing: 0.08em;
+}
+.liveDot {
+  position: relative;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--hero-accent);
+}
+.liveDot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  animation: ping 2.4s var(--ov-ease) infinite;
+}
+.todayLabel {
+  color: var(--hero-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.todayValue {
+  margin: -4px 0 0;
+  font-family: var(--font-mono), monospace;
+  font-size: clamp(2.8rem, 6.4vw, 4.6rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.055em;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(180deg, var(--hero-fg) 30%, var(--hero-accent));
+  background-clip: text;
+  color: transparent;
+}
+.todayMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--hero-line);
+  border-radius: 999px;
+  background: oklch(1 0 0 / 0.05);
+  color: var(--hero-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.chip strong {
+  color: var(--hero-fg);
+  font-weight: 600;
+}
+.level {
+  margin-top: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--hero-line);
+  border-radius: var(--ov-radius);
+  background: oklch(1 0 0 / 0.04);
+  /* XpBar renders with the page tokens; point them at the hero's palette. */
+  --foreground: var(--hero-fg);
+  --muted-foreground: var(--hero-muted);
+  --muted: oklch(1 0 0 / 0.1);
+  --border: oklch(1 0 0 / 0.16);
+  --primary: var(--hero-accent);
+  --primary-foreground: oklch(0.2 0.02 250);
+}
+.heroLink {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--hero-accent);
+  color: oklch(0.18 0.02 250);
+  box-shadow: 0 8px 24px -10px var(--hero-accent);
+  transition:
+    transform 220ms var(--ov-ease),
+    box-shadow 220ms var(--ov-ease);
+}
+.heroLink:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px -10px var(--hero-accent);
+}
+
+/* ---------- Goal orb (subtle 3D) ---------- */
+.orbStage {
+  display: grid;
+  place-items: center;
+  perspective: 900px;
+}
+.orb {
+  --rx: 0deg;
+  --ry: 0deg;
+  position: relative;
+  width: min(100%, 250px);
+  aspect-ratio: 1;
+  transform: rotateX(var(--rx)) rotateY(var(--ry));
+  transform-style: preserve-3d;
+  transition: transform 500ms var(--ov-ease);
+}
+.orbGlow {
+  position: absolute;
+  inset: 14%;
+  border-radius: 999px;
+  background: radial-gradient(
+    circle at 35% 30%,
+    color-mix(in oklab, var(--hero-accent) 40%, transparent),
+    transparent 70%
+  );
+  filter: blur(18px);
+  transform: translateZ(-30px);
+}
+.orb > svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  transform: translateZ(10px);
+}
+.orbTrack {
+  stroke: oklch(1 0 0 / 0.1);
+}
+.orbTicks {
+  stroke: oklch(1 0 0 / 0.14);
+}
+.orbProgress {
+  stroke: var(--hero-accent);
+  filter: drop-shadow(0 0 10px color-mix(in oklab, var(--hero-accent) 70%, transparent));
+}
+.orbCenter {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  text-align: center;
+  transform: translateZ(40px);
+}
+.orbPercent {
+  font-family: var(--font-mono), monospace;
+  font-size: clamp(2rem, 4vw, 2.6rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+.orbCaption {
+  color: var(--hero-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.orbNote {
+  color: var(--hero-fg);
+  font-size: 12px;
+}
+.orbDone {
+  color: var(--hero-accent);
+}
+
+/* ---------- Insight cards ---------- */
+.headline {
+  margin: 0;
+  font-size: clamp(1rem, 1.6vw, 1.2rem);
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  color: var(--muted-foreground);
+}
+.headline strong {
+  color: var(--foreground);
+  font-weight: 650;
+}
+.insightGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (min-width: 1280px) {
+  .insightGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+.insight {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 18px;
+}
+.insight::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, var(--insight-color, var(--primary)), transparent 80%);
+  opacity: 0.9;
+}
+.insightIcon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: calc(var(--radius) * 1.2);
+  color: var(--insight-color, var(--primary));
+  background: color-mix(in oklab, var(--insight-color, var(--primary)) 14%, transparent);
+  border: 1px solid color-mix(in oklab, var(--insight-color, var(--primary)) 26%, transparent);
+}
+.insightIcon svg {
+  width: 17px;
+  height: 17px;
+}
+.insightLabel {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+.insightValue {
+  overflow: hidden;
+  font-size: clamp(1.1rem, 2vw, 1.6rem);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.insightSub {
+  margin-top: auto;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.trendUp {
+  color: var(--chart-2);
+}
+.trendDown {
+  color: var(--destructive);
+}
+
+/* ---------- Compact metric groups (analytics) ---------- */
+.metricGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.metricGroupTitle {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  height: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--ov-line);
+  border-radius: var(--ov-radius);
+  background: color-mix(in oklab, var(--muted) 38%, transparent);
+  transition:
+    border-color 240ms var(--ov-ease),
+    background 240ms var(--ov-ease);
+}
+.metric:hover {
+  border-color: color-mix(in oklch, var(--primary) 35%, var(--border));
+}
+.metricLabel {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.metricValue {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
+}
+.metricUnavailable {
+  color: var(--muted-foreground);
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.metricSub {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ---------- Breakdown bars ---------- */
+.bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--muted) 80%, transparent);
+}
+.barFill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--primary) 70%, var(--chart-2)),
+    var(--primary)
+  );
+  transform-origin: left;
+}
+
+/* ---------- Empty chart state ---------- */
+.chartEmpty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  min-height: 220px;
+  padding: 24px;
+  border: 1px dashed var(--ov-line);
+  border-radius: var(--ov-radius);
+  text-align: center;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0 43px,
+      color-mix(in oklab, var(--border) 45%, transparent) 43px 44px
+    ),
+    color-mix(in oklab, var(--muted) 25%, transparent);
+}
+.chartEmpty svg {
+  color: var(--muted-foreground);
+}
+.chartEmpty strong {
+  font-size: 14px;
+}
+.chartEmpty p {
+  max-width: 360px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+/* ---------- Disclosure ---------- */
+.disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.disclosure:hover {
+  color: var(--foreground);
+}
+.disclosure svg {
+  transition: transform 260ms var(--ov-ease);
+}
+.disclosure[data-state='open'] svg {
+  transform: rotate(180deg);
+}
+
+/* Session timeline: the panel is presentation-locked, so only its surface is tuned here. */
+.timeline :global(.overflow-hidden.rounded-md.border) {
+  border-radius: var(--ov-radius);
+}
+
+@keyframes ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  80%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liveDot::after {
+    animation: none;
+  }
+  .orb {
+    transform: none;
+    transition: none;
+  }
+  .overview *,
+  .overview *::before,
+  .overview *::after {
+    transition: none !important;
+  }
+}
+
+/* ---------- Motion Native ----------
+ * Same composition, calmer surface: elevation and timing come from the preset's tokens,
+ * the hero becomes a graphite stage without aurora, dot texture or blurred glow, and the
+ * live indicator pulses a few times instead of forever, so an idle page does no work.
+ */
+:global([data-theme-preset='motion-native']) .overview {
+  --ov-radius: calc(var(--radius) * 1.4);
+  --ov-surface: var(--card);
+  --ov-surface-strong: var(--card);
+  --ov-depth: var(--elevation-raised);
+  --ov-depth-hover: var(--elevation-hover);
+  --ov-ease: var(--ease-emphasized);
+}
+:global([data-theme-preset='motion-native']) .overview::before,
+:global([data-theme-preset='motion-native']) .hero::after,
+:global([data-theme-preset='motion-native']) .orbGlow {
+  display: none;
+}
+:global([data-theme-preset='motion-native']) .overview.overview [data-slot='card'] {
+  background: var(--card);
+  border-color: var(--border);
+}
+:global([data-theme-preset='motion-native']) .hero {
+  --hero-bg: oklch(0.205 0.006 265);
+  --hero-accent: var(--primary-400);
+  border-color: oklch(1 0 0 / 0.06);
+}
+:global([data-theme-preset='motion-native']) .hero::before {
+  background: radial-gradient(
+    480px circle at var(--mx) var(--my),
+    color-mix(in oklab, var(--primary-500) 12%, transparent),
+    transparent 70%
+  );
+}
+:global([data-theme-preset='motion-native']) .todayValue {
+  background: none;
+  color: var(--hero-fg);
+}
+:global([data-theme-preset='motion-native']) .liveDot::after {
+  animation-iteration-count: 3;
+}
+:global([data-theme-preset='motion-native']) .heroLink:hover {
+  box-shadow: var(--elevation-hover);
+}
