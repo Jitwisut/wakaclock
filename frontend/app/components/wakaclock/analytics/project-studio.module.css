@@ -727,3 +727,43 @@
 .panel[id] {
   scroll-margin-top: 90px;
 }
+
+/* ---------- Presentation rebuild (all presets) ----------
+ * The deep-dive panels (AI collaboration, files) share the dashboard's widget scale:
+ * a theme-radius surface with the preset's elevation, a compact title, pill badges and
+ * no monospace display type.
+ */
+.panel {
+  border-radius: calc(var(--radius) * 1.4);
+  box-shadow: var(--elevation-raised, none);
+}
+.chartHeader {
+  padding: 16px 20px 12px;
+}
+.chartHeader h3 {
+  margin: 0;
+  font-size: 0.875rem;
+  letter-spacing: -0.01em;
+}
+.chartHeader p {
+  font-size: 0.75rem;
+}
+.badge {
+  border-radius: 999px;
+  font: 500 11px/1.6 var(--font-sans, inherit);
+}
+.footer {
+  font-size: 11px;
+}
+.aiMetrics {
+  padding: 0 20px 20px;
+}
+.aiMetric strong {
+  font-size: 1.125rem;
+}
+.fileTile {
+  color: var(--card-foreground);
+}
+.fileTable th {
+  font-size: 11px;
+}

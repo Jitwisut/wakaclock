@@ -1,28 +1,27 @@
 'use client';
 
-import { createElement, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 import {
-  Activity,
   ArrowDown,
   ArrowUpRight,
   CalendarDays,
-  Clock3,
   Code2,
-  Compass,
   FolderGit2,
   GitBranch,
   Layers3,
   Monitor,
   Search,
-  Sparkles,
   Terminal,
 } from 'lucide-react';
 
 import { DashboardPanel } from '@/components/dashboard-panels';
+import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
+import { MetricStrip } from '@/components/wakaclock/workspace';
+import { cn } from '@/lib/utils';
 import { getBrowserTimezone, getInsights, getStats } from '@/lib/wakaclock/endpoints';
 import { formatDurationShort } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
@@ -33,6 +32,7 @@ import type {
   StatsResponse,
 } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+
 
 import styles from './insights-workspace.module.css';
 
@@ -79,58 +79,62 @@ export function InsightsWorkspace() {
   });
 
   return (
-    <main className={styles.workspace}>
-      <header className={styles.header}>
-        <div>
-          <span className={styles.eyebrow}>
-            <Compass size={13} /> PERSONAL ANALYTICS
-          </span>
-          <h1>Insights</h1>
-        </div>
-        <div aria-label="Insights period" className={styles.rangeControl} role="group">
-          {RANGES.map((item) => (
+    <div className={styles.workspace}>
+      <WakaclockPageHeader
+        actions={
+          <div
+            aria-label="Insights period"
+            className="bg-muted inline-flex gap-0.5 rounded-lg p-0.5 shadow-[inset_0_0_0_1px_var(--border)]"
+            role="group"
+          >
+            {RANGES.map((item) => (
+              <button
+                aria-pressed={range === item.value}
+                className={cn(
+                  'relative rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                  range === item.value
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                key={item.value}
+                onClick={() => setRange(item.value)}
+                type="button"
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        }
+        description={
+          timezone
+            ? `The tools, projects and habits that shape your work · ${timezone}.`
+            : 'The tools, projects and habits that shape your work.'
+        }
+        title="Insights"
+      >
+        <div
+          aria-label="Explore by"
+          className="no-scrollbar bg-muted inline-flex max-w-full gap-0.5 overflow-x-auto rounded-lg p-0.5 shadow-[inset_0_0_0_1px_var(--border)]"
+          role="group"
+        >
+          {DIMENSIONS.map(({ value, label }) => (
             <button
-              aria-pressed={range === item.value}
-              key={item.value}
-              onClick={() => setRange(item.value)}
+              aria-pressed={type === value}
+              className={cn(
+                'relative rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                type === value
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+              key={value}
+              onClick={() => setType(value)}
               type="button"
             >
-              {item.label}
+              {label}
             </button>
           ))}
         </div>
-      </header>
-      <section className={styles.intro}>
-        <div>
-          <span className={styles.eyebrow}>A LITTLE PERSPECTIVE GOES A LONG WAY</span>
-          <h2>
-            Your time.
-            <br />
-            <em>A clearer picture.</em>
-          </h2>
-          <p>Explore the tools, projects, and habits that shape your work.</p>
-        </div>
-        <div className={styles.introAside}>
-          <span aria-hidden="true" className={styles.orbit}>
-            <Compass size={44} strokeWidth={1} />
-          </span>
-          <span>OBSERVE. UNDERSTAND. REFINE.</span>
-          <small>{timezone ?? 'Your local time'}</small>
-        </div>
-      </section>
-      <div aria-label="Explore by" className={styles.dimensionControl} role="group">
-        {DIMENSIONS.map(({ value, label, icon: dimensionIcon }) => (
-          <button
-            aria-pressed={type === value}
-            key={value}
-            onClick={() => setType(value)}
-            type="button"
-          >
-            {createElement(dimensionIcon, { size: 15 })}
-            {label}
-          </button>
-        ))}
-      </div>
+      </WakaclockPageHeader>
       <QueryState
         emptyDescription="Try another period or dimension to explore your recorded work."
         emptyTitle="Your next insight starts with a little activity"
@@ -155,7 +159,7 @@ export function InsightsWorkspace() {
           Try again
         </button>
       )}
-    </main>
+    </div>
   );
 }
 
@@ -229,43 +233,38 @@ export function InsightsReport({
           {rows.length} {dimension.toLowerCase()} in view
         </span>
       </div>
-      <div className={styles.metrics}>
-        <div>
-          <span>
-            <Clock3 size={15} /> RECORDED TIME
-          </span>
-          <strong>{formatDurationShort(total)}</strong>
-          <small>Across {dimension.toLowerCase()}</small>
-        </div>
-        <div>
-          <span>
-            <CalendarDays size={15} /> ACTIVE DAYS
-          </span>
-          <strong>
-            {stat?.days_with_activity ?? unavailable}
-            <em>{stat ? ` / ${stat.days_included}` : ''}</em>
-          </strong>
-          <small>Days with recorded activity</small>
-        </div>
-        <div>
-          <span>
-            <Activity size={15} /> DAILY AVERAGE
-          </span>
-          <strong>{stat ? formatDurationShort(stat.daily_average_seconds) : unavailable}</strong>
-          <small>Per day with recorded activity</small>
-        </div>
-        <div>
-          <span>
-            <Sparkles size={15} /> BUSIEST DAY
-          </span>
-          <strong>
-            {stat?.best_day ? formatDurationShort(stat.best_day.total_seconds) : unavailable}
-          </strong>
-          <small>
-            {stat?.best_day ? dateLabel(stat.best_day.date) : 'No recorded day available'}
-          </small>
-        </div>
-      </div>
+      <MetricStrip
+        aria-label="Period summary"
+        metrics={[
+          {
+            label: 'Recorded time',
+            value: formatDurationShort(total),
+            hint: `Across ${dimension.toLowerCase()}`,
+          },
+          {
+            label: 'Active days',
+            value: (
+              <>
+                {stat?.days_with_activity ?? unavailable}
+                <span className="text-muted-foreground text-sm font-normal">
+                  {stat ? ` / ${stat.days_included}` : ''}
+                </span>
+              </>
+            ),
+            hint: 'Days with recorded activity',
+          },
+          {
+            label: 'Daily average',
+            value: stat ? formatDurationShort(stat.daily_average_seconds) : unavailable,
+            hint: 'Per day with recorded activity',
+          },
+          {
+            label: 'Busiest day',
+            value: stat?.best_day ? formatDurationShort(stat.best_day.total_seconds) : unavailable,
+            hint: stat?.best_day ? dateLabel(stat.best_day.date) : 'No recorded day available',
+          },
+        ]}
+      />
       {statsError && (
         <p className={styles.notice}>
           Daily statistics could not load. Your breakdown is still available.{' '}
@@ -281,7 +280,6 @@ export function InsightsReport({
           <section className={styles.composition}>
             <div className={styles.sectionHeading}>
               <div>
-                <span className={styles.eyebrow}>01 / THE BIG PICTURE</span>
                 <h3>Where your time goes</h3>
               </div>
               <span className={styles.pill}>{dimension}</span>
@@ -346,7 +344,7 @@ export function InsightsReport({
         <aside aria-label="Selected insight" aria-live="polite" className={styles.spotlight}>
           <div className={styles.spotlightContent} key={current.name}>
             <span className={styles.eyebrow}>
-              <span className={styles.liveDot} /> IN THE SPOTLIGHT
+              <span className={styles.liveDot} /> Selected
             </span>
             <h3>{current.name}</h3>
             <span className={styles.spotlightRank}>
@@ -391,8 +389,7 @@ export function InsightsReport({
       <section className={styles.details}>
         <div className={styles.sectionHeading}>
           <div>
-            <span className={styles.eyebrow}>02 / FOLLOW THE DETAILS</span>
-            <h3>Every entry, in perspective.</h3>
+            <h3>Every entry</h3>
             <p>Select any row to inspect its time and activity.</p>
           </div>
           <div className={styles.tableTools}>
@@ -493,8 +490,7 @@ export function InsightsReport({
       </section>
       <section className={styles.measurement}>
         <div>
-          <span className={styles.eyebrow}>03 / BEHIND THE NUMBERS</span>
-          <h3>A clearer view of time.</h3>
+          <h3>How these numbers are measured</h3>
           <p>
             Compare recorded activity with measured AI time. Missing measurements appear as
             unavailable.

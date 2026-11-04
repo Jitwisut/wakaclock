@@ -10,8 +10,11 @@ import { Button } from '@/components/ui/button';
 import { AnalyticsFilterBar } from '@/components/wakaclock/analytics/analytics-filter-bar';
 import { TimeMachineCity } from '@/components/wakaclock/analytics/time-machine-city';
 import { QueryState } from '@/components/wakaclock/query-state';
+import { RangePicker } from '@/components/wakaclock/range-picker';
+import { InspectorLayout } from '@/components/wakaclock/workspace';
 import { useAnalyticsFilters } from '@/hooks/use-analytics-filters';
 import { useCapabilities } from '@/hooks/use-capabilities';
+import { cn } from '@/lib/utils';
 import type {
   AnalyticsFilterOptions,
   ReplayEvent,
@@ -371,18 +374,26 @@ export function TimeMachinePanel() {
   }
 
   const viewPicker = (
-    <div aria-label="Time Machine view" className={styles.views} role="group">
+    <div
+      aria-label="Time Machine view"
+      className="bg-muted inline-flex gap-0.5 rounded-lg p-0.5 shadow-[inset_0_0_0_1px_var(--border)]"
+      role="group"
+    >
       {(['city', 'timeline'] as const).map((value) => (
-        <Button
+        <button
           aria-pressed={view === value}
+          className={cn(
+            'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+            view === value
+              ? 'bg-card text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
           key={value}
           onClick={() => setView(value)}
-          size="sm"
           type="button"
-          variant={view === value ? 'default' : 'outline'}
         >
           {value === 'city' ? 'City' : 'Timeline'}
-        </Button>
+        </button>
       ))}
     </div>
   );
@@ -396,49 +407,71 @@ export function TimeMachinePanel() {
     );
   }
 
+  const activeFilters = [
+    filters.projectId,
+    filters.language,
+    filters.editor,
+    filters.category,
+    filters.source,
+    filters.actorType,
+    filters.operatingSystem,
+  ].filter(Boolean).length;
+
   return (
     <div className="space-y-4">
-      {viewPicker}
-      {/* Stays outside QueryState: a refused range must remain fixable from here. */}
-      <AnalyticsFilterBar
-        filters={filters}
-        onReset={reset}
-        onSetFilter={setFilter}
-        onSetRange={setRange}
-        options={query.data?.filter_options ?? NO_FILTER_OPTIONS}
-      />
-      {organizationList.length > 1 && (
-        <label className={styles.organization}>
-          GitHub organization
-          <select
-            onChange={(event) => setChosenOrganization(event.target.value)}
-            value={organizationId}
-          >
-            {organizationList.map((organization) => (
-              <option key={organization.id} value={organization.id}>
-                {organization.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <QueryState
-        emptyDescription="No activity matches this range and these filters."
-        emptyTitle="Nothing to replay"
-        error={query.error}
-        isEmpty={!query.data?.segments.length}
-        isLoading={query.isLoading}
-        skeletonClassName="h-96 w-full"
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {viewPicker}
+        {/* Stays outside QueryState: a refused range must remain fixable from here. */}
+        <RangePicker onChange={setRange} value={{ start: filters.start, end: filters.end }} />
+      </div>
+      <InspectorLayout
+        activeCount={activeFilters}
+        inspector={
+          <div className="flex flex-col gap-3.5">
+            <AnalyticsFilterBar
+              filters={filters}
+              onReset={reset}
+              onSetFilter={setFilter}
+              options={query.data?.filter_options ?? NO_FILTER_OPTIONS}
+            />
+            {organizationList.length > 1 && (
+              <label className={styles.organization}>
+                GitHub organization
+                <select
+                  onChange={(event) => setChosenOrganization(event.target.value)}
+                  value={organizationId}
+                >
+                  {organizationList.map((organization) => (
+                    <option key={organization.id} value={organization.id}>
+                      {organization.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+        }
+        inspectorDescription="The replay follows these filters."
+        inspectorTitle="Filters"
       >
-        {query.data && (
-          <TimeMachinePlayer
-            data={query.data}
-            events={visibleEvents}
-            githubStatus={githubStatus}
-            key={query.data.generated_at}
-          />
-        )}
-      </QueryState>
+        <QueryState
+          emptyDescription="No activity matches this range and these filters."
+          emptyTitle="Nothing to replay"
+          error={query.error}
+          isEmpty={!query.data?.segments.length}
+          isLoading={query.isLoading}
+          skeletonClassName="h-96 w-full"
+        >
+          {query.data && (
+            <TimeMachinePlayer
+              data={query.data}
+              events={visibleEvents}
+              githubStatus={githubStatus}
+              key={query.data.generated_at}
+            />
+          )}
+        </QueryState>
+      </InspectorLayout>
     </div>
   );
 }

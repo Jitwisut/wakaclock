@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CharacterSheetHero } from '@/app/dashboard/(auth)/wakaclock/components/character-sheet-hero';
@@ -354,7 +354,7 @@ describe('CharacterSheetHero', () => {
     expect(screen.getByText('··')).toBeInTheDocument();
   });
 
-  it('follows a mouse pointer with light and tilt, ignores touch, and resets on leave', async () => {
+  it('shows today and the daily quest as separate widgets', async () => {
     api.getStatusBar.mockResolvedValue(statusBar());
     api.getAllTime.mockResolvedValue({
       data: { days_with_activity: 0, since: null, total_seconds: 0 },
@@ -362,56 +362,14 @@ describe('CharacterSheetHero', () => {
 
     wrap(<CharacterSheetHero />);
 
-    const hero = await screen.findByRole('region', { name: /coded today/ });
-    const orb = within(hero)
-      .getByRole('progressbar', { name: "Today's quest progress" })
-      .closest('div')!.parentElement as HTMLElement;
-    const stage = orb.parentElement as HTMLElement;
-
-    act(() => {
-      fireEvent.pointerMove(hero, { clientX: 40, clientY: 20, pointerType: 'mouse' });
-    });
-    expect(hero.style.getPropertyValue('--mx')).toBe('40px');
-
-    act(() => {
-      fireEvent.pointerMove(stage, { clientX: 10, clientY: 10, pointerType: 'mouse' });
-    });
-    expect(orb.style.getPropertyValue('--ry')).not.toBe('');
-
-    act(() => {
-      fireEvent.pointerMove(stage, { clientX: 90, clientY: 90, pointerType: 'touch' });
-    });
-    expect(hero.style.getPropertyValue('--mx')).toBe('10px');
-
-    act(() => {
-      fireEvent.pointerLeave(stage);
-    });
-    expect(orb.style.getPropertyValue('--rx')).toBe('0deg');
-  });
-
-  it('keeps still under reduced motion', async () => {
-    reduced.value = true;
-    api.getStatusBar.mockResolvedValue(statusBar());
-    api.getAllTime.mockResolvedValue({
-      data: { days_with_activity: 0, since: null, total_seconds: 0 },
-    });
-
-    wrap(<CharacterSheetHero />);
-
-    const hero = await screen.findByRole('region', { name: /coded today/ });
-    const orb = within(hero)
-      .getByRole('progressbar', { name: "Today's quest progress" })
-      .closest('div')!.parentElement as HTMLElement;
-    act(() => {
-      fireEvent.pointerMove(hero, { clientX: 40, clientY: 20, pointerType: 'mouse' });
-      fireEvent.pointerMove(orb.parentElement as HTMLElement, {
-        clientX: 10,
-        clientY: 10,
-        pointerType: 'mouse',
-      });
-    });
-    expect(hero.style.getPropertyValue('--mx')).toBe('');
-    expect(orb.style.getPropertyValue('--ry')).toBe('');
+    const today = await screen.findByRole('region', { name: /coded today/ });
+    const quest = screen.getByRole('progressbar', { name: "Today's quest progress" });
+    expect(today.contains(quest)).toBe(false);
+    expect(quest.closest('[data-slot="quest-widget"]')).not.toBeNull();
+    expect(within(today).getByRole('link', { name: /Explore your activity/ })).toHaveAttribute(
+      'href',
+      '/dashboard/wakaclock/analytics/timeline'
+    );
   });
 });
 

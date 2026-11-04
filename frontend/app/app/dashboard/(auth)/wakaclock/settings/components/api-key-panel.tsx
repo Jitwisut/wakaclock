@@ -152,7 +152,7 @@ function QuickSetup() {
               </p>
             </div>
           ) : (
-            <ol className="grid gap-2 sm:grid-cols-3">
+            <ol className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               {[
                 ['Open the Command Palette', '⌘⇧P on macOS, Ctrl+Shift+P elsewhere'],
                 ['Run “AtoAxis: Set API Key”', 'Start typing “API key” to find it'],

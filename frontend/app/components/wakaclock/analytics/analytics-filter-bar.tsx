@@ -1,8 +1,6 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { RangePicker } from '@/components/wakaclock/range-picker';
 import type {
   AnalyticsActorTypeFilter,
   AnalyticsFilterOption,
@@ -37,7 +35,6 @@ interface AnalyticsFilterBarProps {
       | 'timezone',
     value?: string
   ) => void;
-  onSetRange: (range: { end: string; start: string }) => void;
   options: AnalyticsFilterOptions;
 }
 
@@ -53,10 +50,10 @@ function FilterSelect({
   value?: string;
 }) {
   return (
-    <label className="flex min-w-36 flex-col gap-1 text-xs font-medium">
+    <label className="flex flex-col gap-1.5 text-xs font-medium">
       <span className="text-muted-foreground">{label}</span>
       <select
-        className="bg-background h-9 rounded-md border px-2 text-sm"
+        className="bg-background h-9 w-full rounded-md border px-2 text-sm"
         onChange={(event) =>
           onChange(event.target.value === 'all' ? undefined : event.target.value)
         }
@@ -78,7 +75,6 @@ export function AnalyticsFilterBar({
   lockedProjectId,
   onReset,
   onSetFilter,
-  onSetRange,
   options,
 }: AnalyticsFilterBarProps) {
   let localTimezone = 'UTC';
@@ -93,91 +89,85 @@ export function AnalyticsFilterBar({
     : undefined;
 
   return (
-    <Card>
-      <CardContent className="flex flex-wrap items-end gap-3 p-4">
-        <div className="flex flex-col gap-1">
-          <span className="text-muted-foreground text-xs font-medium">Date range</span>
-          <RangePicker onChange={onSetRange} value={{ start: filters.start, end: filters.end }} />
-        </div>
-        {lockedProjectId ? (
-          <div className="flex min-w-36 flex-col gap-1">
-            <span className="text-muted-foreground text-xs font-medium">Project</span>
-            <div className="bg-muted flex h-9 items-center rounded-md border px-3 text-sm font-medium">
-              {lockedProject?.name ?? 'Selected project'}
-            </div>
+    <div className="flex flex-col gap-3.5" data-slot="analytics-filters">
+      {lockedProjectId ? (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-muted-foreground text-xs font-medium">Project</span>
+          <div className="bg-muted flex h-9 items-center rounded-md border px-3 text-sm font-medium">
+            {lockedProject?.name ?? 'Selected project'}
           </div>
-        ) : (
-          <FilterSelect
-            label="Project"
-            onChange={(value) => onSetFilter('project_id', value)}
-            options={options.projects}
-            value={filters.projectId}
-          />
-        )}
+        </div>
+      ) : (
         <FilterSelect
-          label="Language"
-          onChange={(value) => onSetFilter('language', value)}
-          options={options.languages}
-          value={filters.language}
+          label="Project"
+          onChange={(value) => onSetFilter('project_id', value)}
+          options={options.projects}
+          value={filters.projectId}
         />
-        <FilterSelect
-          label="Editor"
-          onChange={(value) => onSetFilter('editor', value)}
-          options={options.editors}
-          value={filters.editor}
-        />
-        <FilterSelect
-          label="Category"
-          onChange={(value) => onSetFilter('category', value)}
-          options={options.categories}
-          value={filters.category}
-        />
-        <label className="flex min-w-32 flex-col gap-1 text-xs font-medium">
-          <span className="text-muted-foreground">Source</span>
-          <select
-            className="bg-background h-9 rounded-md border px-2 text-sm"
-            onChange={(event) =>
-              onSetFilter('source', event.target.value === 'all' ? undefined : event.target.value)
-            }
-            value={filters.source ?? 'all'}
-          >
-            <option value="all">Human + AI + Other</option>
-            <option value="human">Human</option>
-            <option value="ai">AI</option>
-            <option value="other">Other / handover</option>
-          </select>
-        </label>
-        <FilterSelect
-          label="Actor type"
-          onChange={(value) => onSetFilter('actor_type', value)}
-          options={options.actor_types ?? []}
-          value={filters.actorType}
-        />
-        <FilterSelect
-          label="Operating system"
-          onChange={(value) => onSetFilter('operating_system', value)}
-          options={options.operating_systems}
-          value={filters.operatingSystem}
-        />
-        <label className="flex min-w-36 flex-col gap-1 text-xs font-medium">
-          <span className="text-muted-foreground">Timezone</span>
-          <select
-            aria-label="Timezone"
-            className="bg-background h-9 rounded-md border px-2 text-sm"
-            onChange={(event) => onSetFilter('timezone', event.target.value)}
-            value={filters.timezone}
-          >
-            {timezoneOptions.map((timezone) => (
-              <option key={timezone} value={timezone}>
-                {timezone}
-              </option>
-            ))}
-          </select>
-        </label>
-        <Button className="ml-auto" onClick={onReset} type="button" variant="outline">
-          Reset filters
-        </Button>
-      </CardContent>
-    </Card>
+      )}
+      <FilterSelect
+        label="Language"
+        onChange={(value) => onSetFilter('language', value)}
+        options={options.languages}
+        value={filters.language}
+      />
+      <FilterSelect
+        label="Editor"
+        onChange={(value) => onSetFilter('editor', value)}
+        options={options.editors}
+        value={filters.editor}
+      />
+      <FilterSelect
+        label="Category"
+        onChange={(value) => onSetFilter('category', value)}
+        options={options.categories}
+        value={filters.category}
+      />
+      <label className="flex flex-col gap-1.5 text-xs font-medium">
+        <span className="text-muted-foreground">Source</span>
+        <select
+          className="bg-background h-9 w-full rounded-md border px-2 text-sm"
+          onChange={(event) =>
+            onSetFilter('source', event.target.value === 'all' ? undefined : event.target.value)
+          }
+          value={filters.source ?? 'all'}
+        >
+          <option value="all">Human + AI + Other</option>
+          <option value="human">Human</option>
+          <option value="ai">AI</option>
+          <option value="other">Other / handover</option>
+        </select>
+      </label>
+      <FilterSelect
+        label="Actor type"
+        onChange={(value) => onSetFilter('actor_type', value)}
+        options={options.actor_types ?? []}
+        value={filters.actorType}
+      />
+      <FilterSelect
+        label="Operating system"
+        onChange={(value) => onSetFilter('operating_system', value)}
+        options={options.operating_systems}
+        value={filters.operatingSystem}
+      />
+      <label className="flex flex-col gap-1.5 text-xs font-medium">
+        <span className="text-muted-foreground">Timezone</span>
+        <select
+          aria-label="Timezone"
+          className="bg-background h-9 w-full rounded-md border px-2 text-sm"
+          onChange={(event) => onSetFilter('timezone', event.target.value)}
+          value={filters.timezone}
+        >
+          {timezoneOptions.map((timezone) => (
+            <option key={timezone} value={timezone}>
+              {timezone}
+            </option>
+          ))}
+        </select>
+      </label>
+      <Button className="mt-1 w-full" onClick={onReset} type="button" variant="outline">
+        Reset filters
+      </Button>
+    </div>
   );
 }

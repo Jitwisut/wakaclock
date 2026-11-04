@@ -5,7 +5,7 @@ import { SyncStatusPanel } from './components/sync-status-panel';
 
 export default function WakaclockSyncPage() {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <WakaclockPageHeader
         description="Whether your devices' activity has reached the server, and what is still waiting."
         title="Sync status"

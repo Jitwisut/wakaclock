@@ -12,11 +12,10 @@ import {
   TrendingDownIcon,
   TrendingUpIcon,
 } from 'lucide-react';
-import { motion } from 'motion/react';
 import Link from 'next/link';
 
-import { Card } from '@/components/ui/card';
 import { QueryState } from '@/components/wakaclock/query-state';
+import { Widget } from '@/components/wakaclock/workspace';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
 import { presentPeriodComparison } from '@/lib/wakaclock/dashboard-analytics-presenters';
 import { getDashboardAnalytics, getProjectAnalytics } from '@/lib/wakaclock/endpoints';
@@ -24,8 +23,6 @@ import { formatDurationShort } from '@/lib/wakaclock/format';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import type { BreakdownItem, PeriodComparison } from '@/lib/wakaclock/types';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
-
-import styles from '../overview.module.css';
 
 import { OVERVIEW_RANGE_DAYS } from './overview-toolbar';
 import { TOP_PROJECTS_LIMIT } from './top-projects';
@@ -42,9 +39,9 @@ interface Insight {
 
 const TREND: Record<PeriodComparison['direction'], { className?: string; icon: React.ReactNode }> =
   {
-    decrease: { className: styles.trendDown, icon: <TrendingDownIcon /> },
-    increase: { className: styles.trendUp, icon: <TrendingUpIcon /> },
-    new_activity: { className: styles.trendUp, icon: <SparklesIcon /> },
+    decrease: { className: 'text-destructive', icon: <TrendingDownIcon /> },
+    increase: { className: 'text-primary', icon: <TrendingUpIcon /> },
+    new_activity: { className: 'text-primary', icon: <SparklesIcon /> },
     unchanged: { icon: <MinusIcon /> },
   };
 
@@ -149,57 +146,59 @@ export function OverviewInsights() {
       isLoading={analytics.isLoading}
       skeletonClassName="h-40 w-full"
     >
-      <div className="flex flex-col gap-4">
-        {comparison && (
-          <p className={styles.headline}>
-            <strong>{formatDurationShort(comparison.current_seconds)}</strong> logged across the
-            last {days} {days === 1 ? 'day' : 'days'}
-            {period && (
-              <>
-                {' '}
-                · <strong className={TREND[comparison.direction].className}>
-                  {period.value}
-                </strong>{' '}
-                vs the previous period
-              </>
-            )}
-          </p>
-        )}
-        <ul className={styles.insightGrid}>
-          {insights.map((insight, index) => (
-            <motion.li
-              animate={{ opacity: 1, y: 0 }}
-              className={styles.lift}
-              initial={{ opacity: 0, y: 14 }}
-              key={insight.label}
-              transition={{ delay: 0.08 * index }}
-            >
-              <Card
-                className={`${styles.insight} gap-2 p-4 sm:gap-2.5 sm:p-5`}
-                style={{ '--insight-color': insight.color } as React.CSSProperties}
-              >
-                <span aria-hidden className={styles.insightIcon}>
-                  {insight.icon}
+      <Widget
+        description={
+          comparison ? (
+            <>
+              <strong className="text-foreground">
+                {formatDurationShort(comparison.current_seconds)}
+              </strong>{' '}
+              logged across the last {days} {days === 1 ? 'day' : 'days'}
+              {period && (
+                <>
+                  {' '}
+                  ·{' '}
+                  <strong className={TREND[comparison.direction].className}>
+                    {period.value}
+                  </strong>{' '}
+                  vs the previous period
+                </>
+              )}
+            </>
+          ) : undefined
+        }
+        title="Highlights"
+      >
+        <ul className="bg-border grid grid-cols-1 gap-px overflow-hidden rounded-lg border sm:grid-cols-2 xl:grid-cols-4">
+          {insights.map((insight) => (
+            <li className="bg-card flex min-w-0 flex-col gap-1 px-4 py-3.5" key={insight.label}>
+              <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
+                <span
+                  aria-hidden
+                  className="size-2 shrink-0 rounded-full"
+                  style={{ background: insight.color }}
+                />
+                {insight.label}
+              </span>
+              {insight.href ? (
+                <Link
+                  className="hover:text-primary focus-visible:ring-ring truncate rounded-sm text-lg font-semibold tracking-tight underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none"
+                  href={insight.href}
+                >
+                  {insight.value}
+                </Link>
+              ) : (
+                <span
+                  className={`truncate text-lg font-semibold tracking-tight tabular-nums ${insight.valueClassName ?? ''}`}
+                >
+                  {insight.value}
                 </span>
-                <span className={styles.insightLabel}>{insight.label}</span>
-                {insight.href ? (
-                  <Link
-                    className={`${styles.insightValue} hover:text-primary focus-visible:ring-ring rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none`}
-                    href={insight.href}
-                  >
-                    {insight.value}
-                  </Link>
-                ) : (
-                  <span className={`${styles.insightValue} ${insight.valueClassName ?? ''}`}>
-                    {insight.value}
-                  </span>
-                )}
-                <span className={styles.insightSub}>{insight.sub}</span>
-              </Card>
-            </motion.li>
+              )}
+              <span className="text-muted-foreground text-xs">{insight.sub}</span>
+            </li>
           ))}
         </ul>
-      </div>
+      </Widget>
     </QueryState>
   );
 }

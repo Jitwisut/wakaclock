@@ -18,6 +18,7 @@ import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
+import { InspectorLayout, MetricStrip } from '@/components/wakaclock/workspace';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
 import { getBrowserTimezone, getProjectAnalytics } from '@/lib/wakaclock/endpoints';
 import {
@@ -183,83 +184,50 @@ export default function MeasurementTrustPage() {
   return (
     <div className="flex flex-col gap-4">
       <WakaclockPageHeader
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <RangePicker onChange={setRange} value={{ start, end }} />
-            <label className="text-muted-foreground text-sm" htmlFor="trust-project-filter">
-              Project
-            </label>
-            <select
-              className="bg-background h-9 rounded-md border px-2 text-sm"
-              id="trust-project-filter"
-              onChange={(event) => setProjectId(event.target.value)}
-              value={projectId}
-            >
-              <option value="all">All projects</option>
-              {projectOptions.map((project) => (
-                <option key={project.project_id} value={project.project_id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
-            {projects.hasNextPage && (
-              <button
-                className="h-9 rounded-md border px-2 text-sm disabled:opacity-50"
-                disabled={projects.isFetchingNextPage}
-                onClick={() => void projects.fetchNextPage()}
-                type="button"
-              >
-                {projects.isFetchingNextPage ? 'Loading projects…' : 'More projects'}
-              </button>
-            )}
-          </div>
-        }
-        description="See which totals come from observed activity, which include bridged time, and where evidence is unavailable."
+        actions={<RangePicker onChange={setRange} value={{ start, end }} />}
+        description="Which totals come from observed activity, which include bridged time, and where evidence is unavailable."
         title="Measurement Trust"
-      />
-      <RequireUser>
-        <p className="text-muted-foreground text-sm">
-          Delivery and queue health moved to{' '}
-          <Link className="text-foreground underline underline-offset-4" href={SYNC_STATUS_HREF}>
-            Sync status
-          </Link>
-          .
-        </p>
+      >
         <AnalyticsNav href={(path) => `${path}?start=${start}&end=${end}`} />
-        <QueryState error={report.error} isLoading={report.isLoading}>
-          {data && (
-            <div className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-3">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Reported coding time</CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-2xl font-semibold">
-                    {formatDurationShort(data.total_seconds)}
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Observed evidence</CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-2xl font-semibold">
-                    {formatDurationShort(data.proven_seconds)}
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Time bridged between observations</CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-2xl font-semibold">
-                    {formatDurationShort(data.inferred_seconds)}
-                  </CardContent>
-                </Card>
+      </WakaclockPageHeader>
+      <RequireUser>
+        <InspectorLayout
+          inspector={
+            <div className="flex flex-col gap-4 text-sm">
+              <div className="flex flex-col gap-2">
+                <label
+                  className="text-muted-foreground text-xs font-medium"
+                  htmlFor="trust-project-filter"
+                >
+                  Project
+                </label>
+                <select
+                  className="bg-background h-9 w-full rounded-md border px-2 text-sm"
+                  id="trust-project-filter"
+                  onChange={(event) => setProjectId(event.target.value)}
+                  value={projectId}
+                >
+                  <option value="all">All projects</option>
+                  {projectOptions.map((project) => (
+                    <option key={project.project_id} value={project.project_id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+                {projects.hasNextPage && (
+                  <button
+                    className="h-9 rounded-md border px-2 text-sm disabled:opacity-50"
+                    disabled={projects.isFetchingNextPage}
+                    onClick={() => void projects.fetchNextPage()}
+                    type="button"
+                  >
+                    {projects.isFetchingNextPage ? 'Loading projects…' : 'More projects'}
+                  </button>
+                )}
               </div>
-              <Card>
-                <CardHeader>
-                  <CardTitle>How to read these numbers</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
+              {data && (
+                <div className="flex flex-col gap-2 border-t pt-4">
+                  <p className="text-sm font-semibold">How to read these numbers</p>
                   <p>
                     Calculation: {data.calculation_version}; idle timeout:{' '}
                     {Math.round(data.timeout_seconds)} seconds; timezone: {data.timezone}.
@@ -324,399 +292,436 @@ export default function MeasurementTrustPage() {
                       </ul>
                     )}
                   </div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Line metrics by measurement version</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  {data.line_metric_coverage.length === 0 ? (
-                    <p>No line metric records in this range.</p>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[38rem] text-sm">
-                        <thead>
-                          <tr className="border-b text-left">
-                            <th className="py-2">Version</th>
-                            <th>Status</th>
-                            <th>Heartbeats</th>
-                            <th>Attributed lines</th>
-                            <th>Unknown lines</th>
-                            <th>Coverage</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {data.line_metric_coverage.map((metric) => (
-                            <tr
-                              className="border-b"
-                              key={`${metric.version}:${metric.status}:${metric.reason ?? 'none'}`}
-                            >
-                              <th className="py-2 text-left font-medium" scope="row">
-                                {metric.version}
-                              </th>
-                              <td>
-                                {metric.status}
-                                {metric.reason ? ` · ${metric.reason}` : ''}
-                              </td>
-                              <td>{metric.heartbeats}</td>
-                              <td>{metric.ai_line_changes + metric.human_line_changes}</td>
-                              <td>{metric.unknown_line_changes}</td>
-                              <td>
-                                {metric.line_coverage_percent == null
-                                  ? 'unavailable'
-                                  : formatPercent(metric.line_coverage_percent)}
-                              </td>
+                </div>
+              )}
+              <p className="text-muted-foreground border-t pt-4 text-xs">
+                Delivery and queue health moved to{' '}
+                <Link
+                  className="text-foreground underline underline-offset-4"
+                  href={SYNC_STATUS_HREF}
+                >
+                  Sync status
+                </Link>
+                .
+              </p>
+            </div>
+          }
+          inspectorTitle="Scope & method"
+        >
+          <QueryState error={report.error} isLoading={report.isLoading}>
+            {data && (
+              <div className="space-y-4">
+                <MetricStrip
+                  aria-label="Measurement summary"
+                  metrics={[
+                    {
+                      label: 'Reported coding time',
+                      value: formatDurationShort(data.total_seconds),
+                    },
+                    { label: 'Observed evidence', value: formatDurationShort(data.proven_seconds) },
+                    {
+                      label: 'Time bridged between observations',
+                      value: formatDurationShort(data.inferred_seconds),
+                    },
+                    {
+                      label: 'Line attribution coverage',
+                      value: lineCoverage == null ? 'Unavailable' : formatPercent(lineCoverage),
+                    },
+                  ]}
+                />
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Line metrics by measurement version</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-sm">
+                    {data.line_metric_coverage.length === 0 ? (
+                      <p>No line metric records in this range.</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[38rem] text-sm">
+                          <thead>
+                            <tr className="border-b text-left">
+                              <th className="py-2">Version</th>
+                              <th>Status</th>
+                              <th>Heartbeats</th>
+                              <th>Attributed lines</th>
+                              <th>Unknown lines</th>
+                              <th>Coverage</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  <p className="text-muted-foreground">
-                    Unversioned history stays separate. Unknown edits remain unknown, and an empty
-                    line counter is not treated as a measured zero. Owner supplied repairs use a
-                    separate version and do not enter editor measurement coverage.
-                  </p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Evidence by day</CardTitle>
-                </CardHeader>
-                <CardContent className="overflow-x-auto">
-                  <table className="w-full min-w-[34rem] text-sm">
-                    <thead>
-                      <tr className="border-b text-left">
-                        <th className="py-2">Date</th>
-                        <th>Reported</th>
-                        <th>Observed</th>
-                        <th>Bridged</th>
-                        <th>Active coverage</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.days.map((day) => (
-                        <tr className="border-b" key={day.date}>
-                          <th className="py-2 text-left font-medium" scope="row">
-                            {day.date}
-                          </th>
-                          <td>{formatDurationShort(day.total_seconds)}</td>
-                          <td>{formatDurationShort(day.proven_seconds)}</td>
-                          <td>{formatDurationShort(day.inferred_seconds)}</td>
-                          <td>{day.active_coverage ?? 'unavailable'}</td>
-                          <td>
-                            {day.status === 'no_observation'
-                              ? 'No observation; cause unknown'
-                              : `${day.heartbeat_count} heartbeats`}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle>AI operation receipts</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <QueryState
-                    error={evidence.data ? undefined : evidence.error}
-                    isLoading={evidence.isLoading}
-                  >
-                    <div className="space-y-3 text-sm">
-                      {operations.length === 0 && (
-                        <p>No AI operation evidence recorded for this range.</p>
-                      )}
-                      {operations.map((operation) => (
-                        <div className="rounded-md border p-3" key={operation.event_id}>
-                          <div className="flex flex-wrap justify-between gap-2">
-                            <span className="font-medium">
-                              {operation.actor === 'ai_verified'
-                                ? `${operation.agent ?? 'AI'} · ${operation.model ?? 'model unavailable'}`
-                                : 'Identity unverified'}
-                            </span>
-                            <time dateTime={new Date(operation.occurred_at * 1000).toISOString()}>
-                              {new Date(operation.occurred_at * 1000).toLocaleString()}
-                            </time>
-                          </div>
-                          <p className="text-muted-foreground mt-1">
-                            Evidence {operation.event_id.slice(0, 12)} ·{' '}
-                            {operation.identity_source ?? 'source unavailable'} ·{' '}
-                            {operation.identity_reason ?? 'no reported identity issue'}
-                          </p>
-                          <p className="mt-1">
-                            Line changes:{' '}
-                            {operation.lines_added == null || operation.lines_deleted == null
-                              ? 'unavailable'
-                              : `+${operation.lines_added} / -${operation.lines_deleted}`}
-                          </p>
-                          <fieldset className="bg-muted/30 mt-3 grid gap-2 rounded-md p-3 sm:grid-cols-[auto_1fr_1fr_1fr] sm:items-end">
-                            <legend className="sr-only">
-                              Correct measured outcome and line counts
-                            </legend>
-                            <label className="flex items-center gap-2 pb-2 text-sm">
-                              <input
-                                checked={
-                                  repairDrafts[operation.repair_reference]?.selected ?? false
-                                }
-                                onChange={(event) =>
-                                  setRepairDrafts((drafts) => {
-                                    const current =
-                                      drafts[operation.repair_reference] ??
-                                      defaultRepairDraft(operation);
-                                    return {
-                                      ...drafts,
-                                      [operation.repair_reference]: {
-                                        ...current,
-                                        selected: event.target.checked,
-                                      },
-                                    };
-                                  })
-                                }
-                                type="checkbox"
-                              />
-                              Include for repair preview
-                            </label>
-                            <label className="grid gap-1 text-sm">
-                              Outcome
-                              <select
-                                className="bg-background h-9 rounded-md border px-2"
-                                onChange={(event) =>
-                                  setRepairDrafts((drafts) => {
-                                    const current =
-                                      drafts[operation.repair_reference] ??
-                                      defaultRepairDraft(operation);
-                                    return {
-                                      ...drafts,
-                                      [operation.repair_reference]: {
-                                        ...current,
-                                        selected: true,
-                                        outcome: event.target.value as MeasurementRepairOutcome,
-                                      },
-                                    };
-                                  })
-                                }
-                                value={
-                                  repairDrafts[operation.repair_reference]?.outcome ?? 'unknown'
-                                }
+                          </thead>
+                          <tbody>
+                            {data.line_metric_coverage.map((metric) => (
+                              <tr
+                                className="border-b"
+                                key={`${metric.version}:${metric.status}:${metric.reason ?? 'none'}`}
                               >
-                                <option value="unknown">Unknown</option>
-                                <option value="success">Success</option>
-                                <option value="partial">Partial</option>
-                                <option value="failed">Failed</option>
-                              </select>
-                            </label>
-                            {repairDrafts[operation.repair_reference]?.outcome !== 'failed' && (
-                              <>
-                                <label className="grid gap-1 text-sm">
-                                  Lines added
-                                  <input
-                                    className="bg-background h-9 rounded-md border px-2"
-                                    min="0"
-                                    onChange={(event) =>
-                                      setRepairDrafts((drafts) => ({
+                                <th className="py-2 text-left font-medium" scope="row">
+                                  {metric.version}
+                                </th>
+                                <td>
+                                  {metric.status}
+                                  {metric.reason ? ` · ${metric.reason}` : ''}
+                                </td>
+                                <td>{metric.heartbeats}</td>
+                                <td>{metric.ai_line_changes + metric.human_line_changes}</td>
+                                <td>{metric.unknown_line_changes}</td>
+                                <td>
+                                  {metric.line_coverage_percent == null
+                                    ? 'unavailable'
+                                    : formatPercent(metric.line_coverage_percent)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    <p className="text-muted-foreground">
+                      Unversioned history stays separate. Unknown edits remain unknown, and an empty
+                      line counter is not treated as a measured zero. Owner supplied repairs use a
+                      separate version and do not enter editor measurement coverage.
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Evidence by day</CardTitle>
+                  </CardHeader>
+                  <CardContent className="overflow-x-auto">
+                    <table className="w-full min-w-[34rem] text-sm">
+                      <thead>
+                        <tr className="border-b text-left">
+                          <th className="py-2">Date</th>
+                          <th>Reported</th>
+                          <th>Observed</th>
+                          <th>Bridged</th>
+                          <th>Active coverage</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.days.map((day) => (
+                          <tr className="border-b" key={day.date}>
+                            <th className="py-2 text-left font-medium" scope="row">
+                              {day.date}
+                            </th>
+                            <td>{formatDurationShort(day.total_seconds)}</td>
+                            <td>{formatDurationShort(day.proven_seconds)}</td>
+                            <td>{formatDurationShort(day.inferred_seconds)}</td>
+                            <td>{day.active_coverage ?? 'unavailable'}</td>
+                            <td>
+                              {day.status === 'no_observation'
+                                ? 'No observation; cause unknown'
+                                : `${day.heartbeat_count} heartbeats`}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>AI operation receipts</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <QueryState
+                      error={evidence.data ? undefined : evidence.error}
+                      isLoading={evidence.isLoading}
+                    >
+                      <div className="space-y-3 text-sm">
+                        {operations.length === 0 && (
+                          <p>No AI operation evidence recorded for this range.</p>
+                        )}
+                        {operations.map((operation) => (
+                          <div className="rounded-md border p-3" key={operation.event_id}>
+                            <div className="flex flex-wrap justify-between gap-2">
+                              <span className="font-medium">
+                                {operation.actor === 'ai_verified'
+                                  ? `${operation.agent ?? 'AI'} · ${operation.model ?? 'model unavailable'}`
+                                  : 'Identity unverified'}
+                              </span>
+                              <time dateTime={new Date(operation.occurred_at * 1000).toISOString()}>
+                                {new Date(operation.occurred_at * 1000).toLocaleString()}
+                              </time>
+                            </div>
+                            <p className="text-muted-foreground mt-1">
+                              Evidence {operation.event_id.slice(0, 12)} ·{' '}
+                              {operation.identity_source ?? 'source unavailable'} ·{' '}
+                              {operation.identity_reason ?? 'no reported identity issue'}
+                            </p>
+                            <p className="mt-1">
+                              Line changes:{' '}
+                              {operation.lines_added == null || operation.lines_deleted == null
+                                ? 'unavailable'
+                                : `+${operation.lines_added} / -${operation.lines_deleted}`}
+                            </p>
+                            <fieldset className="bg-muted/30 mt-3 grid grid-cols-1 gap-2 rounded-md p-3 sm:grid-cols-[auto_1fr_1fr_1fr] sm:items-end">
+                              <legend className="sr-only">
+                                Correct measured outcome and line counts
+                              </legend>
+                              <label className="flex items-center gap-2 pb-2 text-sm">
+                                <input
+                                  checked={
+                                    repairDrafts[operation.repair_reference]?.selected ?? false
+                                  }
+                                  onChange={(event) =>
+                                    setRepairDrafts((drafts) => {
+                                      const current =
+                                        drafts[operation.repair_reference] ??
+                                        defaultRepairDraft(operation);
+                                      return {
                                         ...drafts,
                                         [operation.repair_reference]: {
-                                          selected:
-                                            drafts[operation.repair_reference]?.selected ?? true,
-                                          outcome:
-                                            drafts[operation.repair_reference]?.outcome ??
-                                            'unknown',
-                                          linesDeleted:
-                                            drafts[operation.repair_reference]?.linesDeleted ?? '',
-                                          linesAdded: event.target.value,
+                                          ...current,
+                                          selected: event.target.checked,
                                         },
-                                      }))
-                                    }
-                                    type="number"
-                                    value={
-                                      repairDrafts[operation.repair_reference]?.linesAdded ?? ''
-                                    }
-                                  />
-                                </label>
-                                <label className="grid gap-1 text-sm">
-                                  Lines deleted
-                                  <input
-                                    className="bg-background h-9 rounded-md border px-2"
-                                    min="0"
-                                    onChange={(event) =>
-                                      setRepairDrafts((drafts) => ({
+                                      };
+                                    })
+                                  }
+                                  type="checkbox"
+                                />
+                                Include for repair preview
+                              </label>
+                              <label className="grid gap-1 text-sm">
+                                Outcome
+                                <select
+                                  className="bg-background h-9 rounded-md border px-2"
+                                  onChange={(event) =>
+                                    setRepairDrafts((drafts) => {
+                                      const current =
+                                        drafts[operation.repair_reference] ??
+                                        defaultRepairDraft(operation);
+                                      return {
                                         ...drafts,
                                         [operation.repair_reference]: {
-                                          selected:
-                                            drafts[operation.repair_reference]?.selected ?? true,
-                                          outcome:
-                                            drafts[operation.repair_reference]?.outcome ??
-                                            'unknown',
-                                          linesAdded:
-                                            drafts[operation.repair_reference]?.linesAdded ?? '',
-                                          linesDeleted: event.target.value,
+                                          ...current,
+                                          selected: true,
+                                          outcome: event.target.value as MeasurementRepairOutcome,
                                         },
-                                      }))
-                                    }
-                                    type="number"
-                                    value={
-                                      repairDrafts[operation.repair_reference]?.linesDeleted ?? ''
-                                    }
-                                  />
-                                </label>
-                              </>
-                            )}
-                          </fieldset>
-                        </div>
-                      ))}
-                      {evidence.hasNextPage && (
-                        <button
-                          className="h-9 rounded-md border px-3 font-medium disabled:opacity-50"
-                          disabled={evidence.isFetchingNextPage}
-                          onClick={() => void evidence.fetchNextPage()}
-                          type="button"
-                        >
-                          {evidence.isFetchingNextPage ? 'Loading…' : 'Load more operations'}
-                        </button>
-                      )}
-                      {evidence.error && evidence.data && (
-                        <div className="space-y-2 rounded-md border border-amber-500/50 p-3">
-                          <p>
-                            This page could not be loaded. Its cursor may have expired; the list is
-                            not complete.
-                          </p>
+                                      };
+                                    })
+                                  }
+                                  value={
+                                    repairDrafts[operation.repair_reference]?.outcome ?? 'unknown'
+                                  }
+                                >
+                                  <option value="unknown">Unknown</option>
+                                  <option value="success">Success</option>
+                                  <option value="partial">Partial</option>
+                                  <option value="failed">Failed</option>
+                                </select>
+                              </label>
+                              {repairDrafts[operation.repair_reference]?.outcome !== 'failed' && (
+                                <>
+                                  <label className="grid gap-1 text-sm">
+                                    Lines added
+                                    <input
+                                      className="bg-background h-9 rounded-md border px-2"
+                                      min="0"
+                                      onChange={(event) =>
+                                        setRepairDrafts((drafts) => ({
+                                          ...drafts,
+                                          [operation.repair_reference]: {
+                                            selected:
+                                              drafts[operation.repair_reference]?.selected ?? true,
+                                            outcome:
+                                              drafts[operation.repair_reference]?.outcome ??
+                                              'unknown',
+                                            linesDeleted:
+                                              drafts[operation.repair_reference]?.linesDeleted ??
+                                              '',
+                                            linesAdded: event.target.value,
+                                          },
+                                        }))
+                                      }
+                                      type="number"
+                                      value={
+                                        repairDrafts[operation.repair_reference]?.linesAdded ?? ''
+                                      }
+                                    />
+                                  </label>
+                                  <label className="grid gap-1 text-sm">
+                                    Lines deleted
+                                    <input
+                                      className="bg-background h-9 rounded-md border px-2"
+                                      min="0"
+                                      onChange={(event) =>
+                                        setRepairDrafts((drafts) => ({
+                                          ...drafts,
+                                          [operation.repair_reference]: {
+                                            selected:
+                                              drafts[operation.repair_reference]?.selected ?? true,
+                                            outcome:
+                                              drafts[operation.repair_reference]?.outcome ??
+                                              'unknown',
+                                            linesAdded:
+                                              drafts[operation.repair_reference]?.linesAdded ?? '',
+                                            linesDeleted: event.target.value,
+                                          },
+                                        }))
+                                      }
+                                      type="number"
+                                      value={
+                                        repairDrafts[operation.repair_reference]?.linesDeleted ?? ''
+                                      }
+                                    />
+                                  </label>
+                                </>
+                              )}
+                            </fieldset>
+                          </div>
+                        ))}
+                        {evidence.hasNextPage && (
                           <button
-                            className="h-9 rounded-md border px-3 font-medium"
-                            onClick={() => setEvidenceGeneration((generation) => generation + 1)}
+                            className="h-9 rounded-md border px-3 font-medium disabled:opacity-50"
+                            disabled={evidence.isFetchingNextPage}
+                            onClick={() => void evidence.fetchNextPage()}
                             type="button"
                           >
-                            Restart from newest
+                            {evidence.isFetchingNextPage ? 'Loading…' : 'Load more operations'}
                           </button>
-                        </div>
-                      )}
-                    </div>
-                  </QueryState>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Historical measurement repair</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4 text-sm">
-                  <p className="text-muted-foreground">
-                    Select AI operation receipts, enter corrected outcome and line counts, then
-                    review the server preview. Only metadata is sent; source code and diffs are not
-                    included. Applying or rolling back creates an auditable revision.
-                  </p>
-                  <p className="text-muted-foreground">
-                    To reparse local transcripts, run{' '}
-                    <code className="break-all">
-                      wakaclock ai repair-measurements --from YYYY-MM-DD --to YYYY-MM-DD --timezone
-                      Asia/Bangkok
-                    </code>{' '}
-                    with the dates replaced, then refresh this page. The CLI sends only opaque
-                    operation references and measured line metadata; apply the resulting preview
-                    here.
-                  </p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      className="h-9 rounded-md border px-3 font-medium disabled:opacity-50"
-                      disabled={selectedCandidates.length === 0 || createRepair.isPending}
-                      onClick={() => createRepair.mutate(selectedCandidates)}
-                      type="button"
-                    >
-                      {createRepair.isPending
-                        ? 'Preparing preview…'
-                        : `Preview ${selectedCandidates.length} selected`}
-                    </button>
-                    <label className="flex items-center gap-2">
-                      Repair history
-                      <select
-                        className="bg-background h-9 rounded-md border px-2"
-                        onChange={(event) => setActiveRepairId(event.target.value)}
-                        value={activeRepairId}
-                      >
-                        <option value="">Select a repair job</option>
-                        {repairHistory.data?.map((job) => (
-                          <option key={job.repair_id} value={job.repair_id}>
-                            {job.created_at.slice(0, 16)} · {job.status} · {job.ready} ready
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  {(createRepair.error || applyRepair.error || rollbackRepair.error) && (
-                    <p className="text-destructive" role="alert">
-                      {(createRepair.error ?? applyRepair.error ?? rollbackRepair.error)?.message}
+                        )}
+                        {evidence.error && evidence.data && (
+                          <div className="space-y-2 rounded-md border border-amber-500/50 p-3">
+                            <p>
+                              This page could not be loaded. Its cursor may have expired; the list
+                              is not complete.
+                            </p>
+                            <button
+                              className="h-9 rounded-md border px-3 font-medium"
+                              onClick={() => setEvidenceGeneration((generation) => generation + 1)}
+                              type="button"
+                            >
+                              Restart from newest
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </QueryState>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Historical measurement repair</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4 text-sm">
+                    <p className="text-muted-foreground">
+                      Select AI operation receipts, enter corrected outcome and line counts, then
+                      review the server preview. Only metadata is sent; source code and diffs are
+                      not included. Applying or rolling back creates an auditable revision.
                     </p>
-                  )}
-                  {activeRepair && (
-                    <div className="space-y-3 rounded-md border p-3">
-                      <div className="flex flex-wrap justify-between gap-2">
-                        <span className="font-medium">
-                          Preview status: {activeRepair.status} · {activeRepair.ready} ready ·{' '}
-                          {activeRepair.unchanged} unchanged · {activeRepair.unresolved} unresolved
-                          · {activeRepair.conflict_count} conflicts
-                        </span>
-                        <span>
-                          AI lines +{activeRepair.before_added_total ?? 'unavailable'} / -
-                          {activeRepair.before_deleted_total ?? 'unavailable'} → +
-                          {activeRepair.after_added_total ?? 'unavailable'} / -
-                          {activeRepair.after_deleted_total ?? 'unavailable'}
-                        </span>
-                      </div>
-                      <ul className="max-h-64 space-y-2 overflow-auto">
-                        {activeRepair.items.map((item) => (
-                          <li className="rounded border p-2" key={item.repair_reference}>
-                            <span className="font-medium">{item.status}</span>
-                            {' · '}
-                            {item.repair_reference.slice(0, 12)}
-                            {item.reason ? ` · ${item.reason}` : ''}
-                            {item.before && item.after && (
-                              <span className="text-muted-foreground ml-2">
-                                ({item.before.ai_lines_added ?? 'unknown'} added →{' '}
-                                {item.after.ai_lines_added ?? 'unknown'}; revision{' '}
-                                {item.base_revision ?? 'unknown'} →{' '}
-                                {item.applied_revision ?? 'pending'})
-                              </span>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                      <div className="flex flex-wrap gap-2">
-                        {(activeRepair.status === 'preview' ||
-                          activeRepair.status === 'applying') &&
-                          activeRepair.ready > 0 && (
-                            <button
-                              className="h-9 rounded-md border px-3 font-medium disabled:opacity-50"
-                              disabled={applyRepair.isPending}
-                              onClick={() => applyRepair.mutate(activeRepair.repair_id)}
-                              type="button"
-                            >
-                              {applyRepair.isPending ? 'Applying…' : 'Apply reviewed corrections'}
-                            </button>
-                          )}
-                        {(activeRepair.status === 'applied' ||
-                          activeRepair.status === 'conflict') &&
-                          activeRepair.applied > activeRepair.rolled_back && (
-                            <button
-                              className="h-9 rounded-md border px-3 font-medium disabled:opacity-50"
-                              disabled={rollbackRepair.isPending}
-                              onClick={() => rollbackRepair.mutate(activeRepair.repair_id)}
-                              type="button"
-                            >
-                              {rollbackRepair.isPending
-                                ? 'Rolling back…'
-                                : 'Rollback applied revisions'}
-                            </button>
-                          )}
-                      </div>
+                    <p className="text-muted-foreground">
+                      To reparse local transcripts, run{' '}
+                      <code className="break-all">
+                        wakaclock ai repair-measurements --from YYYY-MM-DD --to YYYY-MM-DD
+                        --timezone Asia/Bangkok
+                      </code>{' '}
+                      with the dates replaced, then refresh this page. The CLI sends only opaque
+                      operation references and measured line metadata; apply the resulting preview
+                      here.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        className="h-9 rounded-md border px-3 font-medium disabled:opacity-50"
+                        disabled={selectedCandidates.length === 0 || createRepair.isPending}
+                        onClick={() => createRepair.mutate(selectedCandidates)}
+                        type="button"
+                      >
+                        {createRepair.isPending
+                          ? 'Preparing preview…'
+                          : `Preview ${selectedCandidates.length} selected`}
+                      </button>
+                      <label className="flex items-center gap-2">
+                        Repair history
+                        <select
+                          className="bg-background h-9 rounded-md border px-2"
+                          onChange={(event) => setActiveRepairId(event.target.value)}
+                          value={activeRepairId}
+                        >
+                          <option value="">Select a repair job</option>
+                          {repairHistory.data?.map((job) => (
+                            <option key={job.repair_id} value={job.repair_id}>
+                              {job.created_at.slice(0, 16)} · {job.status} · {job.ready} ready
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                     </div>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          )}
-        </QueryState>
+                    {(createRepair.error || applyRepair.error || rollbackRepair.error) && (
+                      <p className="text-destructive" role="alert">
+                        {(createRepair.error ?? applyRepair.error ?? rollbackRepair.error)?.message}
+                      </p>
+                    )}
+                    {activeRepair && (
+                      <div className="space-y-3 rounded-md border p-3">
+                        <div className="flex flex-wrap justify-between gap-2">
+                          <span className="font-medium">
+                            Preview status: {activeRepair.status} · {activeRepair.ready} ready ·{' '}
+                            {activeRepair.unchanged} unchanged · {activeRepair.unresolved}{' '}
+                            unresolved · {activeRepair.conflict_count} conflicts
+                          </span>
+                          <span>
+                            AI lines +{activeRepair.before_added_total ?? 'unavailable'} / -
+                            {activeRepair.before_deleted_total ?? 'unavailable'} → +
+                            {activeRepair.after_added_total ?? 'unavailable'} / -
+                            {activeRepair.after_deleted_total ?? 'unavailable'}
+                          </span>
+                        </div>
+                        <ul className="max-h-64 space-y-2 overflow-auto">
+                          {activeRepair.items.map((item) => (
+                            <li className="rounded border p-2" key={item.repair_reference}>
+                              <span className="font-medium">{item.status}</span>
+                              {' · '}
+                              {item.repair_reference.slice(0, 12)}
+                              {item.reason ? ` · ${item.reason}` : ''}
+                              {item.before && item.after && (
+                                <span className="text-muted-foreground ml-2">
+                                  ({item.before.ai_lines_added ?? 'unknown'} added →{' '}
+                                  {item.after.ai_lines_added ?? 'unknown'}; revision{' '}
+                                  {item.base_revision ?? 'unknown'} →{' '}
+                                  {item.applied_revision ?? 'pending'})
+                                </span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="flex flex-wrap gap-2">
+                          {(activeRepair.status === 'preview' ||
+                            activeRepair.status === 'applying') &&
+                            activeRepair.ready > 0 && (
+                              <button
+                                className="h-9 rounded-md border px-3 font-medium disabled:opacity-50"
+                                disabled={applyRepair.isPending}
+                                onClick={() => applyRepair.mutate(activeRepair.repair_id)}
+                                type="button"
+                              >
+                                {applyRepair.isPending ? 'Applying…' : 'Apply reviewed corrections'}
+                              </button>
+                            )}
+                          {(activeRepair.status === 'applied' ||
+                            activeRepair.status === 'conflict') &&
+                            activeRepair.applied > activeRepair.rolled_back && (
+                              <button
+                                className="h-9 rounded-md border px-3 font-medium disabled:opacity-50"
+                                disabled={rollbackRepair.isPending}
+                                onClick={() => rollbackRepair.mutate(activeRepair.repair_id)}
+                                type="button"
+                              >
+                                {rollbackRepair.isPending
+                                  ? 'Rolling back…'
+                                  : 'Rollback applied revisions'}
+                              </button>
+                            )}
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+          </QueryState>
+        </InspectorLayout>
       </RequireUser>
     </div>
   );

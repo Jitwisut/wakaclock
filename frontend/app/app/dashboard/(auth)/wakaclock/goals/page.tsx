@@ -7,7 +7,6 @@ import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NativeSelect } from '@/components/ui/native-select';
@@ -15,6 +14,7 @@ import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { RequiresPostgres } from '@/components/wakaclock/requires-postgres';
+import { FieldGroup, Widget } from '@/components/wakaclock/workspace';
 import { getProjects } from '@/lib/wakaclock/endpoints';
 import { createGoal, deleteGoal, getGoalProgress, listGoals } from '@/lib/wakaclock/endpoints-v2';
 import { daysAgoDateString, formatSeconds, todayDateString } from '@/lib/wakaclock/format';
@@ -82,26 +82,26 @@ function GoalProgressBar({ goal, userId }: { goal: Goal; userId: string }) {
 
   return (
     <div>
-      <div className="mb-1 flex items-baseline justify-between gap-2 text-xs">
-        <span className="font-medium">
+      <div className="mb-1.5 flex items-baseline justify-between gap-2 text-xs">
+        <span className="font-medium tabular-nums">
           {formatSeconds(data.current_seconds)} of {formatSeconds(data.target_seconds)}
         </span>
         <span className="text-muted-foreground">
           {data.on_track ? 'On track' : 'Behind'} · {percentage.toFixed(0)}%
         </span>
       </div>
-      {/* Markup borrowed from the RPG xp bar, not the component: that one derives a level
-          from all-time seconds, which is a different measurement entirely. */}
+      {/* Not the RPG xp bar component: that one derives a level from all-time seconds,
+          which is a different measurement entirely. */}
       <div
         aria-label={`${goal.name} progress`}
         aria-valuemax={100}
         aria-valuemin={0}
         aria-valuenow={Math.round(percentage)}
-        className="border-border bg-muted h-3 w-full border-2"
+        className="bg-muted h-2 w-full overflow-hidden rounded-full"
         role="progressbar"
       >
         <div
-          className="bg-primary h-full transition-[width] duration-300"
+          className="bg-primary h-full rounded-full transition-[width] duration-300 motion-reduce:transition-none"
           style={{ width: `${percentage}%` }}
         />
       </div>
@@ -159,119 +159,131 @@ function GoalForm({ onCreated, userId }: { onCreated: () => void; userId: string
 
   return (
     <form
-      className="grid gap-4 md:grid-cols-2"
+      aria-labelledby="new-goal-title"
+      className="flex flex-col gap-5"
       onSubmit={(event) => {
         event.preventDefault();
         if (canSubmit) mutation.mutate();
       }}
     >
-      <div className="grid gap-1.5">
-        <Label htmlFor="goal-name">Name</Label>
-        <Input
-          id="goal-name"
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Two focused hours"
-          value={name}
-        />
+      <div>
+        <h2 className="text-sm font-semibold tracking-tight" id="new-goal-title">
+          New goal
+        </h2>
+        <p className="text-muted-foreground mt-0.5 text-xs">
+          A goal measures activity you already track — it does not change what is recorded.
+        </p>
       </div>
 
-      <div className="grid gap-1.5">
-        <Label htmlFor="goal-target">Target (hours)</Label>
-        <Input
-          id="goal-target"
-          min="0"
-          onChange={(event) => setTargetHours(event.target.value)}
-          step="0.25"
-          type="number"
-          value={targetHours}
-        />
-      </div>
-
-      <div className="grid gap-1.5">
-        <Label htmlFor="goal-metric">Measure</Label>
-        <NativeSelect
-          id="goal-metric"
-          onChange={(event) => setMetric(event.target.value)}
-          value={metric}
-        >
-          {METRICS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </NativeSelect>
-      </div>
-
-      <div className="grid gap-1.5">
-        <Label htmlFor="goal-period">Period</Label>
-        <NativeSelect
-          id="goal-period"
-          onChange={(event) => setPeriod(event.target.value)}
-          value={period}
-        >
-          {PERIODS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </NativeSelect>
-      </div>
-
-      <div className="grid gap-1.5">
-        <Label htmlFor="goal-direction">Goal is to spend</Label>
-        <NativeSelect
-          id="goal-direction"
-          onChange={(event) => setDirection(event.target.value)}
-          value={direction}
-        >
-          {DIRECTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </NativeSelect>
-      </div>
-
-      <div className="grid gap-1.5">
-        <Label htmlFor="goal-filter">Scope</Label>
-        <NativeSelect
-          id="goal-filter"
-          onChange={(event) => setFilterKind(event.target.value)}
-          value={filterKind}
-        >
-          {FILTERS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </NativeSelect>
-      </div>
-
-      {filterKind !== 'all' && (
+      <FieldGroup legend="Target">
         <div className="grid gap-1.5">
-          <Label htmlFor="goal-filter-value">Which one</Label>
+          <Label htmlFor="goal-name">Name</Label>
           <Input
-            id="goal-filter-value"
-            list={filterKind === 'project' ? 'goal-project-options' : undefined}
-            onChange={(event) => setFilterValue(event.target.value)}
-            placeholder={filterKind === 'language' ? 'Rust' : 'wakaclock'}
-            value={filterValue}
+            id="goal-name"
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Two focused hours"
+            value={name}
           />
-          {filterKind === 'project' && (
-            <datalist id="goal-project-options">
-              {projects?.data.map((project) => (
-                <option key={project.name} value={project.name} />
-              ))}
-            </datalist>
-          )}
         </div>
-      )}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="goal-target">Target (hours)</Label>
+            <Input
+              id="goal-target"
+              min="0"
+              onChange={(event) => setTargetHours(event.target.value)}
+              step="0.25"
+              type="number"
+              value={targetHours}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="goal-period">Period</Label>
+            <NativeSelect
+              id="goal-period"
+              onChange={(event) => setPeriod(event.target.value)}
+              value={period}
+            >
+              {PERIODS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </NativeSelect>
+          </div>
+        </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor="goal-direction">Goal is to spend</Label>
+          <NativeSelect
+            id="goal-direction"
+            onChange={(event) => setDirection(event.target.value)}
+            value={direction}
+          >
+            {DIRECTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </div>
+      </FieldGroup>
 
-      <div className="md:col-span-2">
-        <Button disabled={!canSubmit} type="submit">
-          {mutation.isPending ? 'Creating…' : 'Create goal'}
-        </Button>
-      </div>
+      <FieldGroup
+        footnote="Project names are suggested from the last 90 days, so a typo cannot quietly measure zero."
+        legend="What counts"
+      >
+        <div className="grid gap-1.5">
+          <Label htmlFor="goal-metric">Measure</Label>
+          <NativeSelect
+            id="goal-metric"
+            onChange={(event) => setMetric(event.target.value)}
+            value={metric}
+          >
+            {METRICS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor="goal-filter">Scope</Label>
+          <NativeSelect
+            id="goal-filter"
+            onChange={(event) => setFilterKind(event.target.value)}
+            value={filterKind}
+          >
+            {FILTERS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </div>
+        {filterKind !== 'all' && (
+          <div className="grid gap-1.5">
+            <Label htmlFor="goal-filter-value">Which one</Label>
+            <Input
+              id="goal-filter-value"
+              list={filterKind === 'project' ? 'goal-project-options' : undefined}
+              onChange={(event) => setFilterValue(event.target.value)}
+              placeholder={filterKind === 'language' ? 'Rust' : 'wakaclock'}
+              value={filterValue}
+            />
+            {filterKind === 'project' && (
+              <datalist id="goal-project-options">
+                {projects?.data.map((project) => (
+                  <option key={project.name} value={project.name} />
+                ))}
+              </datalist>
+            )}
+          </div>
+        )}
+      </FieldGroup>
+
+      <Button className="w-full" disabled={!canSubmit} type="submit">
+        {mutation.isPending ? 'Creating…' : 'Create goal'}
+      </Button>
     </form>
   );
 }
@@ -297,72 +309,70 @@ function GoalsPanel() {
     },
   });
 
-  return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">New goal</CardTitle>
-          <CardDescription>
-            A goal measures activity you already track — it does not change what is recorded.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <GoalForm onCreated={() => void invalidate()} userId={userId} />
-        </CardContent>
-      </Card>
+  const count = data?.length ?? 0;
+  const noun = count === 1 ? 'goal' : 'goals';
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Your goals</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <QueryState
-            emptyDescription="No goals yet. Create one above."
-            error={error}
-            isEmpty={!isLoading && !error && (data?.length ?? 0) === 0}
-            isLoading={isLoading}
-          >
-            <ul className="flex flex-col gap-4">
-              {data?.map((goal) => (
-                <li className="border-border border-b pb-4 last:border-b-0 last:pb-0" key={goal.id}>
-                  <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <p className="font-medium">{goal.name}</p>
-                      <p className="text-muted-foreground text-xs">
-                        {METRICS.find((option) => option.value === goal.metric)?.label ??
-                          goal.metric}{' '}
-                        ·{' '}
-                        {PERIODS.find((option) => option.value === goal.period)?.label ??
-                          goal.period}
-                        {goal.filter_value ? ` · ${goal.filter_value}` : ''}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline">{goal.direction}</Badge>
-                      <Button
-                        disabled={removal.isPending}
-                        onClick={() => removal.mutate(goal.id)}
-                        size="sm"
-                        variant="ghost"
-                      >
-                        Delete
-                      </Button>
-                    </div>
+  return (
+    <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <Widget
+        description={
+          count > 0
+            ? `${count.toLocaleString()} ${noun}, each measured for its current period.`
+            : 'Each goal is measured for its current period.'
+        }
+        title="Your goals"
+      >
+        <QueryState
+          emptyDescription="No goals yet. Create one with the New goal form."
+          error={error}
+          isEmpty={!isLoading && !error && count === 0}
+          isLoading={isLoading}
+        >
+          <ul className="-mx-4 flex flex-col divide-y border-t sm:-mx-5">
+            {data?.map((goal) => (
+              <li className="flex flex-col gap-3 px-4 py-4 sm:px-5" key={goal.id}>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{goal.name}</p>
+                    <p className="text-muted-foreground text-xs">
+                      {METRICS.find((option) => option.value === goal.metric)?.label ?? goal.metric}{' '}
+                      ·{' '}
+                      {PERIODS.find((option) => option.value === goal.period)?.label ?? goal.period}
+                      {goal.filter_value ? ` · ${goal.filter_value}` : ''}
+                    </p>
                   </div>
-                  <GoalProgressBar goal={goal} userId={userId} />
-                </li>
-              ))}
-            </ul>
-          </QueryState>
-        </CardContent>
-      </Card>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">{goal.direction}</Badge>
+                    <Button
+                      disabled={removal.isPending}
+                      onClick={() => removal.mutate(goal.id)}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+                <GoalProgressBar goal={goal} userId={userId} />
+              </li>
+            ))}
+          </ul>
+        </QueryState>
+      </Widget>
+
+      <aside
+        aria-label="Create a goal"
+        className="lg:sticky lg:top-[calc(var(--header-height,56px)+16px)]"
+      >
+        <GoalForm onCreated={() => void invalidate()} userId={userId} />
+      </aside>
     </div>
   );
 }
 
 export default function GoalsPage() {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <WakaclockPageHeader
         description="Targets measured against the coding time you already record."
         title="Goals"

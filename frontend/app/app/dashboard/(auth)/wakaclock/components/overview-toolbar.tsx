@@ -1,12 +1,10 @@
 'use client';
 
-import { CalendarRangeIcon, SlidersHorizontal } from 'lucide-react';
+import { SlidersHorizontal } from 'lucide-react';
 import Link from 'next/link';
 
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
-
-import styles from '../overview.module.css';
 
 /** Default window for every range-driven panel on the overview. */
 export const OVERVIEW_RANGE_DAYS = 30;
@@ -22,17 +20,18 @@ export function OverviewToolbar() {
   const { start, end, setRange } = useWakaclockRange(OVERVIEW_RANGE_DAYS);
 
   return (
-    <section aria-label="Overview range" className={styles.toolbar}>
-      <p className={styles.toolbarHint}>
-        <CalendarRangeIcon aria-hidden className="text-primary size-4 shrink-0" />
-        <span className="truncate">Range for highlights, projects, daily trend and analytics</span>
-      </p>
-      <div className={styles.toolbarActions}>
-        <RangePicker onChange={setRange} value={{ start, end }} />
-        <Link className={styles.customize} href="/dashboard/wakaclock/settings">
-          <SlidersHorizontal aria-hidden size={14} /> Customize
-        </Link>
-      </div>
+    <section
+      aria-label="Overview range"
+      className="flex flex-wrap items-center gap-2"
+      title="Range for highlights, projects, daily trend and analytics"
+    >
+      <RangePicker onChange={setRange} value={{ start, end }} />
+      <Link
+        className="bg-card hover:bg-accent inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors"
+        href="/dashboard/wakaclock/settings"
+      >
+        <SlidersHorizontal aria-hidden size={14} /> Customize
+      </Link>
     </section>
   );
 }

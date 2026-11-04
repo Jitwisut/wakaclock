@@ -56,9 +56,9 @@ export function AttributionMixList({
   const mixByKey = new Map((mix ?? []).map((entry) => [entry.key, entry]));
 
   return (
-    <Card>
+    <Card className="gap-4 py-5">
       <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
+        <CardTitle className="text-sm font-semibold tracking-tight">{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-1">

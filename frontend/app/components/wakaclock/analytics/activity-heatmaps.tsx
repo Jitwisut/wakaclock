@@ -2,9 +2,7 @@
 
 import { useState } from 'react';
 
-import { Activity, CalendarDays, Trophy } from 'lucide-react';
-
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { MetricStrip, Widget } from '@/components/wakaclock/workspace';
 import type { AnalyticsDurationSplit, AnalyticsExplorerResponse } from '@/lib/wakaclock/analytics';
 import { formatDurationShort } from '@/lib/wakaclock/format';
 
@@ -251,7 +249,7 @@ function CalendarActivityGrid({
           inspected.date >= data.range.start &&
           inspected.date <= data.range.end
             ? inspected.date
-            : 'SELECT A PIXEL'}
+            : 'Select a day'}
         </span>
         <strong>
           {inspected && inspected.date >= data.range.start && inspected.date <= data.range.end
@@ -275,42 +273,36 @@ function WeeklyActivityChart({
   const max = Math.max(1, ...points.map((point) => point.totalSeconds));
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle>Weekly Activity</CardTitle>
-        <CardDescription>
-          Latest Monday–Sunday week. Only days in your selected range are included.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className={styles.barPlot}>
-          {points.map((point) => {
-            const height =
-              point.totalSeconds > 0 ? Math.max(8, (point.totalSeconds / max) * 100) : 0;
-            return (
-              <div className="flex h-full min-w-0 flex-1 flex-col justify-end" key={point.date}>
-                <span className={styles.barValue}>{formatDurationShort(point.totalSeconds)}</span>
-                <button
-                  aria-label={`${point.date}: ${formatDurationShort(point.totalSeconds)}`}
-                  className={styles.bar}
-                  data-empty={point.totalSeconds === 0}
-                  disabled={point.date < data.range.start || point.date > data.range.end}
-                  onClick={() => onSelectDate(point.date)}
-                  style={{ height: `${height}%` }}
-                  title={`${point.date}\n${formatDurationShort(point.totalSeconds)}`}
-                  type="button"
-                />
-              </div>
-            );
-          })}
-        </div>
-        <div className="text-muted-foreground grid grid-cols-7 px-2 pt-2 text-center text-xs">
-          {points.map((point) => (
-            <span key={point.date}>{point.label}</span>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
+    <Widget
+      description="Latest Monday–Sunday week. Only days in your selected range are included."
+      title="Weekly Activity"
+    >
+      <div className={styles.barPlot}>
+        {points.map((point) => {
+          const height = point.totalSeconds > 0 ? Math.max(8, (point.totalSeconds / max) * 100) : 0;
+          return (
+            <div className="flex h-full min-w-0 flex-1 flex-col justify-end" key={point.date}>
+              <span className={styles.barValue}>{formatDurationShort(point.totalSeconds)}</span>
+              <button
+                aria-label={`${point.date}: ${formatDurationShort(point.totalSeconds)}`}
+                className={styles.bar}
+                data-empty={point.totalSeconds === 0}
+                disabled={point.date < data.range.start || point.date > data.range.end}
+                onClick={() => onSelectDate(point.date)}
+                style={{ height: `${height}%` }}
+                title={`${point.date}\n${formatDurationShort(point.totalSeconds)}`}
+                type="button"
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div className="text-muted-foreground grid grid-cols-7 px-2 pt-2 text-center text-xs">
+        {points.map((point) => (
+          <span key={point.date}>{point.label}</span>
+        ))}
+      </div>
+    </Widget>
   );
 }
 
@@ -318,39 +310,34 @@ function MonthlyProgressChart({ data }: { data: AnalyticsExplorerResponse }) {
   const points = buildMonthlyActivity(data);
   const max = Math.max(1, ...points.map((point) => point.totalSeconds));
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle>Monthly Progress</CardTitle>
-        <CardDescription>
-          Time recorded in each month of this range. Partial months are included.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className={styles.monthly}>
-          {points.map((point) => (
-            <div className={styles.monthRow} key={point.key}>
-              <div className={styles.monthHeading}>
-                <span>
-                  {point.label} <small>{point.key.slice(0, 4)}</small>
-                </span>
-                <strong>{formatDurationShort(point.totalSeconds)}</strong>
-              </div>
-              <div
-                aria-label={`${point.key}: ${formatDurationShort(point.totalSeconds)}`}
-                className={styles.track}
-                role="img"
-              >
-                <div
-                  className={styles.trackFill}
-                  style={{ width: `${(point.totalSeconds / max) * 100}%` }}
-                />
-              </div>
+    <Widget
+      description="Time recorded in each month of this range. Partial months are included."
+      title="Monthly Progress"
+    >
+      <div className={styles.monthly}>
+        {points.map((point) => (
+          <div className={styles.monthRow} key={point.key}>
+            <div className={styles.monthHeading}>
+              <span>
+                {point.label} <small>{point.key.slice(0, 4)}</small>
+              </span>
+              <strong>{formatDurationShort(point.totalSeconds)}</strong>
             </div>
-          ))}
-        </div>
-        <p className={styles.scaleNote}>Bars scale to the busiest month in this range.</p>
-      </CardContent>
-    </Card>
+            <div
+              aria-label={`${point.key}: ${formatDurationShort(point.totalSeconds)}`}
+              className={styles.track}
+              role="img"
+            >
+              <div
+                className={styles.trackFill}
+                style={{ width: `${(point.totalSeconds / max) * 100}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className={styles.scaleNote}>Bars scale to the busiest month in this range.</p>
+    </Widget>
   );
 }
 
@@ -368,59 +355,27 @@ export function ActivityHeatmapBoard({
     null
   );
   return (
-    <div className={styles.board}>
-      <div className={styles.intro}>
-        <div>
-          <span className={styles.kicker}>ACTIVITY ARCADE / YOUR FOCUS MAP</span>
-          <h2>Every pixel tells a story.</h2>
-          <p>Discover your rhythm, one day at a time.</p>
-        </div>
-        <div aria-hidden="true" className={styles.pixelArt}>
-          <span />
-          <span />
-          <span />
-          <span />
-          <span />
-        </div>
-      </div>
-      <div className={styles.stats}>
-        <div>
-          <Activity aria-hidden size={18} />
-          <span>Tracked time</span>
-          <strong>{formatDurationShort(total)}</strong>
-        </div>
-        <div>
-          <CalendarDays aria-hidden size={18} />
-          <span>Active days</span>
-          <strong>
-            {activeDays.length}
-            <small> days</small>
-          </strong>
-        </div>
-        <div>
-          <Trophy aria-hidden size={18} />
-          <span>Peak day · {best?.date ?? '—'}</span>
-          <strong>{best ? formatDurationShort(best.total_seconds) : '—'}</strong>
-        </div>
-      </div>
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <CardTitle>Activity heatmap</CardTitle>
-              <CardDescription className="mt-1">
-                Each pixel is one day. Color intensity is relative to the busiest day in this range.
-              </CardDescription>
-            </div>
-            <HeatLegend />
-          </div>
-        </CardHeader>
-        <CardContent>
-          <CalendarActivityGrid data={data} onSelectDate={onSelectDate} />
-        </CardContent>
-      </Card>
+    <div className="flex flex-col gap-5">
+      <MetricStrip
+        aria-label="Heatmap summary"
+        metrics={[
+          { label: 'Tracked time', value: formatDurationShort(total) },
+          { label: 'Active days', value: activeDays.length, hint: 'Days with any activity' },
+          {
+            label: `Peak day · ${best?.date ?? '—'}`,
+            value: best ? formatDurationShort(best.total_seconds) : '—',
+          },
+        ]}
+      />
+      <Widget
+        action={<HeatLegend />}
+        description="Each cell is one day. Intensity is relative to the busiest day in this range."
+        title="Activity heatmap"
+      >
+        <CalendarActivityGrid data={data} onSelectDate={onSelectDate} />
+      </Widget>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <WeeklyActivityChart data={data} onSelectDate={onSelectDate} />
         <MonthlyProgressChart data={data} />
       </div>
@@ -436,14 +391,8 @@ export function CalendarHeatmap({
   onSelectDate: (date: string) => void;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Calendar heatmap</CardTitle>
-        <CardDescription>Daily tracked time across the selected range.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <CalendarActivityGrid data={data} onSelectDate={onSelectDate} />
-      </CardContent>
-    </Card>
+    <Widget description="Daily tracked time across the selected range." title="Calendar heatmap">
+      <CalendarActivityGrid data={data} onSelectDate={onSelectDate} />
+    </Widget>
   );
 }

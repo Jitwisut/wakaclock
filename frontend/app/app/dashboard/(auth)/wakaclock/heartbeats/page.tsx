@@ -139,7 +139,7 @@ function HeartbeatsWorkspace() {
       >
         <div className="flex flex-col gap-4 sm:gap-5">
           <StatTiles summary={summary} />
-          <div className="grid gap-4 sm:gap-5 lg:grid-cols-5">
+          <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-5">
             <div className="min-w-0 lg:col-span-3">
               <HourlyRhythm
                 hourly={hourly}

@@ -8,13 +8,13 @@ import { useParams } from 'next/navigation';
 import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts';
 
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer } from '@/components/ui/chart';
 import type { ChartConfig } from '@/components/ui/chart';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
+import { InspectorLayout, MetricStrip, Widget } from '@/components/wakaclock/workspace';
 import { useWakaclockRange } from '@/hooks/use-wakaclock-range';
 import {
   getProjectAnalyticsBranches,
@@ -53,7 +53,7 @@ function spend(value: null | number) {
 function DetailPanel() {
   const { projectId } = useParams<{ projectId: string }>();
   const userId = useWakaclockUserStore((state) => state.userId) ?? '';
-  const { start, end, setRange } = useWakaclockRange(30);
+  const { start, end } = useWakaclockRange(30);
   const [branch, setBranch] = React.useState('all');
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const detailQuery = useQuery({
@@ -128,24 +128,26 @@ function DetailPanel() {
       skeletonClassName="h-96 w-full"
     >
       {detail && files && (
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <CardTitle>{detail.project.name}</CardTitle>
-                  <CardDescription>
-                    {detail.project.repository ?? 'Repository not available'}
-                  </CardDescription>
-                </div>
-                <RangePicker onChange={setRange} value={{ start, end }} />
+        <InspectorLayout
+          inspector={
+            <div className="flex flex-col gap-4">
+              <div>
+                <p className="font-display truncate text-lg font-semibold tracking-tight">
+                  {detail.project.name}
+                </p>
+                <p className="text-muted-foreground truncate text-xs">
+                  {detail.project.repository ?? 'Repository not available'}
+                </p>
               </div>
-              <div className="flex flex-wrap items-center gap-2 pt-2">
-                <label className="text-muted-foreground text-sm" htmlFor="branch-filter">
+              <div className="flex flex-col gap-1.5">
+                <label
+                  className="text-muted-foreground text-xs font-medium"
+                  htmlFor="branch-filter"
+                >
                   Branch
                 </label>
                 <select
-                  className="bg-background h-8 rounded-md border px-2 text-sm"
+                  className="bg-background h-9 w-full rounded-md border px-2 text-sm"
                   id="branch-filter"
                   onChange={(event) => setBranch(event.target.value)}
                   value={branch}
@@ -158,114 +160,116 @@ function DetailPanel() {
                   ))}
                 </select>
               </div>
-            </CardHeader>
-            <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Metric
-                label="Project time"
-                value={formatDurationShort(detail.summary.project_seconds)}
-              />
-              {detail.summary.comparable_seconds !== undefined && (
-                <>
-                  <Metric
-                    label="Editor-only activity"
-                    value={formatDurationShort(detail.summary.comparable_seconds)}
+              <dl className="divide-y border-t">
+                {detail.summary.comparable_seconds !== undefined && (
+                  <>
+                    <Metric
+                      label="Editor-only activity"
+                      value={formatDurationShort(detail.summary.comparable_seconds)}
+                    />
+                    <Metric
+                      label="Additional measured AI time"
+                      value={formatDurationShort(detail.summary.ai_additional_seconds ?? 0)}
+                    />
+                  </>
+                )}
+                <Metric
+                  label="AI verified lines"
+                  value={detail.ai.ai_verified_lines.toLocaleString()}
+                />
+                <Metric
+                  label="AI inferred lines"
+                  value={detail.ai.ai_inferred_lines.toLocaleString()}
+                />
+                <Metric
+                  label="Unknown lines"
+                  value={(detail.ai.unknown_lines ?? 0).toLocaleString()}
+                />
+                <Metric label="Prompts" value={count(detail.ai.prompts)} />
+                <Metric label="AI sessions" value={count(detail.ai.sessions)} />
+                <Metric label="Reported tokens" value={count(detail.ai.tokens.total)} />
+                <Metric
+                  label="Estimated spend"
+                  value={spend(detail.ai.estimated_spend.amount_microusd)}
+                />
+              </dl>
+            </div>
+          }
+          inspectorTitle="Properties"
+        >
+          <MetricStrip
+            aria-label="Project summary"
+            metrics={[
+              {
+                label: 'Project time',
+                value: formatDurationShort(detail.summary.project_seconds),
+              },
+              { label: 'Active days', value: detail.summary.active_days.toLocaleString() },
+              { label: 'AI attribution', value: percentage(detail.ai.ai_percentage) },
+              {
+                label: 'Attribution coverage',
+                value: percentage(detail.ai.attribution_coverage_percent),
+              },
+            ]}
+          />
+          <div className="grid grid-cols-1 gap-5 2xl:grid-cols-[2fr_1fr]">
+            <Widget
+              description="Lines added and deleted per day, by attribution."
+              title="Daily activity"
+            >
+              <ChartContainer className="h-72 w-full" config={chartConfig}>
+                <BarChart data={detail.daily_activity} margin={{ left: 0, right: 12 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="date" tickLine={false} tickMargin={8} />
+                  <YAxis tickFormatter={formatDurationShort} tickLine={false} tickMargin={8} />
+                  <Tooltip formatter={(value) => formatDurationShort(Number(value))} />
+                  <Bar
+                    dataKey="ai_verified_added"
+                    fill="var(--color-ai_verified_added)"
+                    stackId="changes"
                   />
-                  <Metric
-                    label="Additional measured AI time"
-                    value={formatDurationShort(detail.summary.ai_additional_seconds ?? 0)}
+                  <Bar
+                    dataKey="ai_inferred_added"
+                    fill="var(--color-ai_inferred_added)"
+                    stackId="changes"
                   />
-                </>
-              )}
-              <Metric label="AI attribution" value={percentage(detail.ai.ai_percentage)} />
-              <Metric
-                label="AI verified lines"
-                value={detail.ai.ai_verified_lines.toLocaleString()}
-              />
-              <Metric
-                label="AI inferred lines"
-                value={detail.ai.ai_inferred_lines.toLocaleString()}
-              />
-              <Metric
-                label="Unknown lines"
-                value={(detail.ai.unknown_lines ?? 0).toLocaleString()}
-              />
-              <Metric
-                label="Attribution coverage"
-                value={percentage(detail.ai.attribution_coverage_percent)}
-              />
-              <Metric label="Active days" value={detail.summary.active_days.toLocaleString()} />
-              <Metric label="Prompts" value={count(detail.ai.prompts)} />
-              <Metric label="AI sessions" value={count(detail.ai.sessions)} />
-              <Metric label="Reported tokens" value={count(detail.ai.tokens.total)} />
-              <Metric
-                label="Estimated spend"
-                value={spend(detail.ai.estimated_spend.amount_microusd)}
-              />
-            </CardContent>
-          </Card>
-
-          <div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Daily activity</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ChartContainer className="h-72 w-full" config={chartConfig}>
-                  <BarChart data={detail.daily_activity} margin={{ left: 0, right: 12 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="date" tickLine={false} tickMargin={8} />
-                    <YAxis tickFormatter={formatDurationShort} tickLine={false} tickMargin={8} />
-                    <Tooltip formatter={(value) => formatDurationShort(Number(value))} />
-                    <Bar
-                      dataKey="ai_verified_added"
-                      fill="var(--color-ai_verified_added)"
-                      stackId="changes"
-                    />
-                    <Bar
-                      dataKey="ai_inferred_added"
-                      fill="var(--color-ai_inferred_added)"
-                      stackId="changes"
-                    />
-                    <Bar dataKey="human_added" fill="var(--color-human_added)" stackId="changes" />
-                    <Bar
-                      dataKey="unknown_added"
-                      fill="var(--color-unknown_added)"
-                      stackId="changes"
-                    />
-                    <Bar
-                      dataKey="ai_verified_deleted"
-                      fill="var(--color-ai_verified_deleted)"
-                      stackId="deletions"
-                    />
-                    <Bar
-                      dataKey="ai_inferred_deleted"
-                      fill="var(--color-ai_inferred_deleted)"
-                      stackId="deletions"
-                    />
-                    <Bar
-                      dataKey="human_deleted"
-                      fill="var(--color-human_deleted)"
-                      stackId="deletions"
-                    />
-                    <Bar
-                      dataKey="unknown_deleted"
-                      fill="var(--color-unknown_deleted)"
-                      stackId="deletions"
-                    />
-                  </BarChart>
-                </ChartContainer>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Branches</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
+                  <Bar dataKey="human_added" fill="var(--color-human_added)" stackId="changes" />
+                  <Bar
+                    dataKey="unknown_added"
+                    fill="var(--color-unknown_added)"
+                    stackId="changes"
+                  />
+                  <Bar
+                    dataKey="ai_verified_deleted"
+                    fill="var(--color-ai_verified_deleted)"
+                    stackId="deletions"
+                  />
+                  <Bar
+                    dataKey="ai_inferred_deleted"
+                    fill="var(--color-ai_inferred_deleted)"
+                    stackId="deletions"
+                  />
+                  <Bar
+                    dataKey="human_deleted"
+                    fill="var(--color-human_deleted)"
+                    stackId="deletions"
+                  />
+                  <Bar
+                    dataKey="unknown_deleted"
+                    fill="var(--color-unknown_deleted)"
+                    stackId="deletions"
+                  />
+                </BarChart>
+              </ChartContainer>
+            </Widget>
+            <Widget description="Select a branch to filter the page." title="Branches">
+              <div className="flex flex-col">
                 {(branchItems.length > 0 ? branchItems : detail.branches)
                   .slice(0, 8)
                   .map((item) => (
                     <button
-                      className="hover:text-primary flex w-full items-center justify-between gap-3 text-left text-sm"
+                      aria-pressed={branch === item.branch}
+                      className="hover:bg-accent aria-pressed:bg-accent aria-pressed:text-foreground -mx-2 flex items-center justify-between gap-3 rounded-md px-2 py-2 text-left text-sm transition-colors"
                       key={item.branch}
                       onClick={() => setBranch(item.branch)}
                       type="button"
@@ -287,25 +291,26 @@ function DetailPanel() {
                     {branchesQuery.isFetchingNextPage ? 'Loading…' : 'Load more branches'}
                   </Button>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </Widget>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             <Breakdown items={detail.languages} title="Languages" />
             <Breakdown items={detail.editors} title="Editors" />
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Files</CardTitle>
-              <CardDescription>
+          <Widget
+            description={
+              <>
                 Bubble size and list time use the same sanitized, paginated source.{' '}
                 {files.other_seconds > 0 &&
                   `${formatDurationShort(files.other_seconds)} is outside this page.`}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
+              </>
+            }
+            title="Files"
+          >
+            <div className="flex flex-col gap-5">
               <div aria-label="File activity bubbles" className="flex flex-wrap items-end gap-2">
                 {fileItems.slice(0, 24).map((file) => {
                   const size = Math.max(40, Math.min(116, Math.sqrt(file.total_seconds) * 1.5));
@@ -357,9 +362,9 @@ function DetailPanel() {
                   {filesQuery.isFetchingNextPage ? 'Loading…' : 'Load more files'}
                 </Button>
               )}
-            </CardContent>
-          </Card>
-        </div>
+            </div>
+          </Widget>
+        </InspectorLayout>
       )}
     </QueryState>
   );
@@ -367,9 +372,9 @@ function DetailPanel() {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-muted/30 rounded-lg border p-3">
-      <p className="text-muted-foreground text-sm">{label}</p>
-      <p className="mt-1 text-xl font-semibold">{value}</p>
+    <div className="flex items-baseline justify-between gap-3 py-2">
+      <dt className="text-muted-foreground text-xs">{label}</dt>
+      <dd className="text-sm font-semibold tabular-nums">{value}</dd>
     </div>
   );
 }
@@ -382,11 +387,8 @@ function Breakdown({
   title: string;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
+    <Widget title={title}>
+      <div className="flex flex-col gap-3">
         {items.map((item) => (
           <div key={item.name}>
             <div className="mb-1 flex justify-between gap-3 text-sm">
@@ -400,18 +402,29 @@ function Breakdown({
             </div>
           </div>
         ))}
-      </CardContent>
-    </Card>
+      </div>
+    </Widget>
   );
+}
+
+/** The page's range, in the toolbar; the detail panel reads the same URL range. */
+function ProjectRange() {
+  const { start, end, setRange } = useWakaclockRange(30);
+  return <RangePicker onChange={setRange} value={{ start, end }} />;
 }
 
 export default function ProjectAnalyticsPage() {
   return (
-    <div className="flex flex-col gap-4">
-      <Button asChild className="w-fit" size="sm" variant="ghost">
-        <Link href="/dashboard/wakaclock/projects">← Projects</Link>
-      </Button>
+    <div className="flex flex-col gap-5">
       <WakaclockPageHeader
+        actions={
+          <>
+            <Button asChild size="sm" variant="ghost">
+              <Link href="/dashboard/wakaclock/projects">← Projects</Link>
+            </Button>
+            <ProjectRange />
+          </>
+        }
         description="Project activity with explicit attribution coverage and privacy-safe file paths."
         title="Project analytics"
       />

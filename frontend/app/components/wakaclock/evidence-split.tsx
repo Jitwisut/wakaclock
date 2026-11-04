@@ -167,7 +167,7 @@ export function EvidenceSplitPanel({ evidence }: { evidence: EvidenceSplitData }
       <CardContent className="space-y-6">
         {evidence.comparable_seconds !== undefined &&
           evidence.ai_additional_seconds !== undefined && (
-            <dl className="grid gap-3 text-sm sm:grid-cols-2">
+            <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
               <div>
                 <dt>Editor-only activity</dt>
                 <dd>{Math.round(evidence.comparable_seconds / 60)} min</dd>

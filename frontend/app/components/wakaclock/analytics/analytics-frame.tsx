@@ -8,7 +8,9 @@ import { AnalyticsFilterBar } from '@/components/wakaclock/analytics/analytics-f
 import { AnalyticsNav } from '@/components/wakaclock/analytics/analytics-nav';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
+import { RangePicker } from '@/components/wakaclock/range-picker';
 import { RequireUser } from '@/components/wakaclock/require-user';
+import { InspectorLayout } from '@/components/wakaclock/workspace';
 import { useAnalyticsFilters } from '@/hooks/use-analytics-filters';
 import type { AnalyticsExplorerParams, AnalyticsExplorerResponse } from '@/lib/wakaclock/analytics';
 import { getAnalyticsExplorer } from '@/lib/wakaclock/endpoints';
@@ -81,41 +83,61 @@ export function AnalyticsFrame({
     [buildHref, lockedProjectId]
   );
 
+  const activeFilters = [
+    lockedProjectId ? undefined : filters.projectId,
+    filters.language,
+    filters.editor,
+    filters.category,
+    filters.source,
+    filters.actorType,
+    filters.operatingSystem,
+  ].filter(Boolean).length;
+
   return (
-    <div className="flex flex-col gap-4">
-      <WakaclockPageHeader description={description} title={title} />
+    <div className="flex flex-col gap-5">
+      <WakaclockPageHeader
+        actions={
+          <RangePicker onChange={setRange} value={{ start: filters.start, end: filters.end }} />
+        }
+        description={description}
+        title={title}
+      >
+        <AnalyticsNav href={href} />
+      </WakaclockPageHeader>
       <RequireUser>
-        <div className="space-y-4">
-          <AnalyticsNav href={href} />
-          <QueryState
-            error={query.error}
-            isEmpty={false}
-            isLoading={query.isLoading}
-            skeletonClassName="h-40 w-full"
-          >
-            {query.data && (
-              <>
+        <QueryState
+          error={query.error}
+          isEmpty={false}
+          isLoading={query.isLoading}
+          skeletonClassName="h-40 w-full"
+        >
+          {query.data && (
+            <InspectorLayout
+              activeCount={activeFilters}
+              inspector={
                 <AnalyticsFilterBar
                   filters={filters}
                   lockedProjectId={lockedProjectId}
                   onReset={reset}
                   onSetFilter={setFilter}
-                  onSetRange={setRange}
                   options={query.data.filter_options}
                 />
-                {children({
-                  data: query.data,
-                  filters,
-                  href,
-                  request,
-                  setFilter,
-                  setRange,
-                  userId,
-                })}
-              </>
-            )}
-          </QueryState>
-        </div>
+              }
+              inspectorDescription="Every view on this page follows these filters."
+              inspectorTitle="Filters"
+            >
+              {children({
+                data: query.data,
+                filters,
+                href,
+                request,
+                setFilter,
+                setRange,
+                userId,
+              })}
+            </InspectorLayout>
+          )}
+        </QueryState>
       </RequireUser>
     </div>
   );

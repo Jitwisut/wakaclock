@@ -5,7 +5,7 @@ import * as React from 'react';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { RequiresPostgres } from '@/components/wakaclock/requires-postgres';
@@ -166,172 +166,232 @@ export default function WakaTimeImportPage() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-5">
       <WakaclockPageHeader
         description="Bring your raw WakaTime heartbeat history into AtoAxis. Re-select the same file after an interruption to resume."
         title="Import WakaTime history"
       />
       <RequireUser>
-        <Card>
-          <CardHeader>
-            <CardTitle>Connect an existing WakaTime editor plugin</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <p>
-              Keep the plugin installed. Open its <code>.wakatime.cfg</code> settings, set the API
-              URL below, and use an AtoAxis key from{' '}
-              <Link className="underline" href="/dashboard/wakaclock/settings?tab=api-key">
-                API key settings
-              </Link>
-              . Existing WakaTime credentials should stay private.
-            </p>
-            <pre className="overflow-x-auto rounded-md border p-3">{`[settings]\napi_url = ${env.NEXT_PUBLIC_WAKACLOCK_API_URL}/api/v1\napi_key = <your AtoAxis API key>`}</pre>
-            <p>
-              Save the config, edit a file in your project, then check delivery. Some plugins cache
-              settings until the editor restarts. This confirms time data only; AI/model identity
-              depends on a separately certified integration.
-            </p>
-            <Button disabled={checking} onClick={checkConnection} variant="outline">
-              {checking ? 'Checking…' : 'Check heartbeat and project'}
-            </Button>
-            {connectionError && <p role="alert">{connectionError}</p>}
-            {connection && (
-              <div aria-live="polite" className="rounded-md border p-3">
-                <p>Today’s heartbeats: {connection.status.heartbeat_count}</p>
-                <p>
-                  Latest heartbeat:{' '}
-                  {connection.status.last_heartbeat_at
-                    ? new Date(connection.status.last_heartbeat_at * 1000).toLocaleString()
-                    : 'unavailable'}
-                </p>
-                <p>
-                  Projects today:{' '}
-                  {connection.projects.data.length > 0
-                    ? connection.projects.data.map((project) => project.name).join(', ')
-                    : 'none yet'}
-                </p>
-                <p className="text-muted-foreground">
-                  Checked at {new Date(connection.checkedAt).toLocaleTimeString()}. If the latest
-                  heartbeat predates your test edit, inspect the plugin log and try again.
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-        <RequiresPostgres feature="Resumable import">
-          <Card>
-            <CardHeader>
-              <CardTitle>Choose your export</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4 text-sm">
-              <p>
-                Choose a JSON data dump containing raw heartbeats. Summary-only exports cannot
-                reconstruct your history. The browser removes unrelated fields before upload and
-                stores only a file fingerprint and job ID for resume.
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-8">
+          <section aria-labelledby="import-connect-title" className="flex flex-col gap-3">
+            <div className="px-1">
+              <h2 className="text-sm font-semibold tracking-tight" id="import-connect-title">
+                Connect an existing WakaTime editor plugin
+              </h2>
+              <p className="text-muted-foreground mt-0.5 text-xs">
+                Keep the plugin installed and point it at AtoAxis. Existing WakaTime credentials
+                should stay private.
               </p>
-              <input
-                accept=".json,application/json"
-                aria-label="WakaTime JSON export"
-                onChange={(event) => {
-                  setFile(event.target.files?.[0] ?? null);
-                  setLegacyPreviewWarning(null);
-                }}
-                type="file"
-              />
-              <div>
-                <Button disabled={!file || busy || legacyPreviewWarning != null} onClick={() => importFile()}>
-                  {busy ? 'Checking and importing…' : 'Review and import history'}
-                </Button>
+            </div>
+            <Card className="gap-0 overflow-hidden py-0 text-sm">
+              <div className="flex flex-col gap-3 px-5 py-4">
+                <p>
+                  Open the plugin&apos;s <code>.wakatime.cfg</code>, set the API URL below, and use
+                  an AtoAxis key from{' '}
+                  <Link className="underline" href="/dashboard/wakaclock/settings?tab=api-key">
+                    API key settings
+                  </Link>
+                  .
+                </p>
+                <pre className="bg-muted/50 overflow-x-auto rounded-md border p-3 font-mono text-xs">{`[settings]\napi_url = ${env.NEXT_PUBLIC_WAKACLOCK_API_URL}/api/v1\napi_key = <your AtoAxis API key>`}</pre>
               </div>
-              {legacyPreviewWarning && (
-                <div aria-live="polite" className="rounded-md border border-amber-500/50 p-3" role="alert">
-                  <p>
-                    {legacyPreviewWarning.possibleDuplicates} records may overlap with history
-                    imported through the older v1 endpoint. Those records cannot be matched with
-                    certainty, so continuing may count activity twice.
+              <div className="flex flex-col gap-3 border-t px-5 py-4">
+                <p className="text-muted-foreground text-xs">
+                  Save the config, edit a file in your project, then check delivery. Some plugins
+                  cache settings until the editor restarts. This confirms time data only; AI/model
+                  identity depends on a separately certified integration.
+                </p>
+                <div>
+                  <Button disabled={checking} onClick={checkConnection} variant="outline">
+                    {checking ? 'Checking…' : 'Check heartbeat and project'}
+                  </Button>
+                </div>
+                {connectionError && (
+                  <p className="text-destructive" role="alert">
+                    {connectionError}
                   </p>
-                  {legacyPreviewWarning.scanLimited && (
-                    <p>
-                      The legacy history lookup reached its safety limit; additional overlap may
-                      exist.
+                )}
+                {connection && (
+                  <div aria-live="polite" className="flex flex-col gap-2">
+                    <dl className="divide-y rounded-md border">
+                      <ImportRow label="Today’s heartbeats">
+                        {connection.status.heartbeat_count}
+                      </ImportRow>
+                      <ImportRow label="Latest heartbeat">
+                        {connection.status.last_heartbeat_at
+                          ? new Date(connection.status.last_heartbeat_at * 1000).toLocaleString()
+                          : 'unavailable'}
+                      </ImportRow>
+                      <ImportRow label="Projects today">
+                        {connection.projects.data.length > 0
+                          ? connection.projects.data.map((project) => project.name).join(', ')
+                          : 'none yet'}
+                      </ImportRow>
+                    </dl>
+                    <p className="text-muted-foreground text-xs">
+                      Checked at {new Date(connection.checkedAt).toLocaleTimeString()}. If the
+                      latest heartbeat predates your test edit, inspect the plugin log and try
+                      again.
                     </p>
-                  )}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button disabled={busy} onClick={() => importFile(true)}>
-                      {busy ? 'Importing…' : 'Continue with possible duplicates'}
-                    </Button>
+                  </div>
+                )}
+              </div>
+            </Card>
+          </section>
+
+          <section aria-labelledby="import-export-title" className="flex flex-col gap-3">
+            <div className="px-1">
+              <h2 className="text-sm font-semibold tracking-tight" id="import-export-title">
+                Choose your export
+              </h2>
+              <p className="text-muted-foreground mt-0.5 text-xs">
+                A JSON data dump containing raw heartbeats. Summary-only exports cannot reconstruct
+                your history.
+              </p>
+            </div>
+            <RequiresPostgres feature="Resumable import">
+              <Card className="gap-0 overflow-hidden py-0 text-sm">
+                <div className="flex flex-col gap-3 px-5 py-4">
+                  <input
+                    accept=".json,application/json"
+                    aria-label="WakaTime JSON export"
+                    className="file:bg-secondary file:text-secondary-foreground hover:file:bg-secondary/80 text-muted-foreground w-full text-sm file:mr-3 file:h-9 file:cursor-pointer file:rounded-md file:border-0 file:px-3 file:text-sm file:font-medium"
+                    onChange={(event) => {
+                      setFile(event.target.files?.[0] ?? null);
+                      setLegacyPreviewWarning(null);
+                    }}
+                    type="file"
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    The browser removes unrelated fields before upload and stores only a file
+                    fingerprint and job ID for resume.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-3 border-t px-5 py-4">
+                  <div>
                     <Button
-                      disabled={busy}
-                      onClick={() => setLegacyPreviewWarning(null)}
-                      variant="outline"
+                      disabled={!file || busy || legacyPreviewWarning != null}
+                      onClick={() => importFile()}
                     >
-                      Cancel
+                      {busy ? 'Checking and importing…' : 'Review and import history'}
                     </Button>
                   </div>
-                </div>
-              )}
-              {error && <p role="alert">{error} You can retry with the same file.</p>}
-              {job && (
-                <div aria-live="polite" className="rounded-md border p-3">
-                  <p>
-                    {job.completed ? 'Import complete' : 'Import in progress'}:{' '}
-                    {job.received_chunks.length} / {job.total_chunks} chunks
-                  </p>
-                  <p>Imported heartbeats: {job.imported_heartbeats}</p>
-                  <p>Skipped or invalid heartbeats: {job.skipped_heartbeats}</p>
-                  {job.possible_legacy_duplicates > 0 && (
-                    <p role="alert">
-                      {job.possible_legacy_duplicates} records may overlap with legacy v1 imports.
-                      {job.confirmed_legacy_ambiguity_chunks > 0
-                        ? ' You confirmed the possible duplicate risk.'
-                        : ' Review this import before relying on the total.'}
-                    </p>
-                  )}
-                  {job.legacy_scan_limited_chunks > 0 && (
-                    <p role="alert">
-                      The legacy lookup reached its safety limit for {job.legacy_scan_limited_chunks}{' '}
-                      chunk(s), so additional overlap may exist.
-                    </p>
-                  )}
-                  <p>All-time reported total before: {formatDurationShort(job.before_total_seconds)}</p>
-                  <p>
-                    All-time reported total after:{' '}
-                    {job.after_total_seconds == null
-                      ? 'available when all chunks complete'
-                      : formatDurationShort(job.after_total_seconds)}
-                  </p>
-                  {job.net_change_seconds != null && (
-                    <p>
-                      Observed net change: {job.net_change_seconds < 0 ? '-' : '+'}
-                      {formatDurationShort(Math.abs(job.net_change_seconds))}
-                    </p>
-                  )}
-                  {job.after_calculation_version &&
-                    job.before_calculation_version !== job.after_calculation_version && (
-                      <p role="alert">
-                        Calculation version changed during import; compare totals using one
-                        version before attributing the difference to this job.
+                  {legacyPreviewWarning && (
+                    <div
+                      aria-live="polite"
+                      className="rounded-md border border-amber-500/50 bg-amber-500/5 p-3"
+                      role="alert"
+                    >
+                      <p>
+                        {legacyPreviewWarning.possibleDuplicates} records may overlap with history
+                        imported through the older v1 endpoint. Those records cannot be matched
+                        with certainty, so continuing may count activity twice.
                       </p>
-                    )}
-                  <p className="text-muted-foreground">
-                    Totals cover all account activity in UTC. Other activity during the import may
-                    also affect the net change.
-                  </p>
-                  {Object.entries(job.issue_counts).length > 0 && (
-                    <ul className="mt-2 list-inside list-disc">
-                      {Object.entries(job.issue_counts).map(([reason, count]) => (
-                        <li key={reason}>
-                          {reason.replaceAll('_', ' ')}: {count}
-                        </li>
-                      ))}
-                    </ul>
+                      {legacyPreviewWarning.scanLimited && (
+                        <p className="mt-2">
+                          The legacy history lookup reached its safety limit; additional overlap
+                          may exist.
+                        </p>
+                      )}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button disabled={busy} onClick={() => importFile(true)}>
+                          {busy ? 'Importing…' : 'Continue with possible duplicates'}
+                        </Button>
+                        <Button
+                          disabled={busy}
+                          onClick={() => setLegacyPreviewWarning(null)}
+                          variant="outline"
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {error && (
+                    <p className="text-destructive" role="alert">
+                      {error} You can retry with the same file.
+                    </p>
                   )}
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </RequiresPostgres>
+                {job && <ImportJobSummary job={job} />}
+              </Card>
+            </RequiresPostgres>
+          </section>
+        </div>
       </RequireUser>
+    </div>
+  );
+}
+
+function ImportRow({ children, label }: { children: React.ReactNode; label: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 px-3 py-2">
+      <dt className="text-muted-foreground shrink-0 text-xs">{label}</dt>
+      <dd className="min-w-0 text-right font-medium tabular-nums">{children}</dd>
+    </div>
+  );
+}
+
+/** The running or finished job, as figures first and caveats after. */
+function ImportJobSummary({ job }: { job: WakaTimeImportJob }) {
+  return (
+    <div aria-live="polite" className="flex flex-col gap-3 border-t px-5 py-4">
+      <p className="font-medium">
+        {job.completed ? 'Import complete' : 'Import in progress'}: {job.received_chunks.length} /{' '}
+        {job.total_chunks} chunks
+      </p>
+      <dl className="divide-y rounded-md border">
+        <ImportRow label="Imported heartbeats">{job.imported_heartbeats}</ImportRow>
+        <ImportRow label="Skipped or invalid heartbeats">{job.skipped_heartbeats}</ImportRow>
+        <ImportRow label="All-time reported total before">
+          {formatDurationShort(job.before_total_seconds)}
+        </ImportRow>
+        <ImportRow label="All-time reported total after">
+          {job.after_total_seconds == null
+            ? 'available when all chunks complete'
+            : formatDurationShort(job.after_total_seconds)}
+        </ImportRow>
+        {job.net_change_seconds != null && (
+          <ImportRow label="Observed net change">
+            {job.net_change_seconds < 0 ? '-' : '+'}
+            {formatDurationShort(Math.abs(job.net_change_seconds))}
+          </ImportRow>
+        )}
+      </dl>
+      {job.possible_legacy_duplicates > 0 && (
+        <p role="alert">
+          {job.possible_legacy_duplicates} records may overlap with legacy v1 imports.
+          {job.confirmed_legacy_ambiguity_chunks > 0
+            ? ' You confirmed the possible duplicate risk.'
+            : ' Review this import before relying on the total.'}
+        </p>
+      )}
+      {job.legacy_scan_limited_chunks > 0 && (
+        <p role="alert">
+          The legacy lookup reached its safety limit for {job.legacy_scan_limited_chunks}{' '}
+          chunk(s), so additional overlap may exist.
+        </p>
+      )}
+      {job.after_calculation_version &&
+        job.before_calculation_version !== job.after_calculation_version && (
+          <p role="alert">
+            Calculation version changed during import; compare totals using one version before
+            attributing the difference to this job.
+          </p>
+        )}
+      {Object.entries(job.issue_counts).length > 0 && (
+        <ul className="text-muted-foreground list-inside list-disc text-xs">
+          {Object.entries(job.issue_counts).map(([reason, count]) => (
+            <li key={reason}>
+              {reason.replaceAll('_', ' ')}: {count}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-muted-foreground text-xs">
+        Totals cover all account activity in UTC. Other activity during the import may also
+        affect the net change.
+      </p>
     </div>
   );
 }

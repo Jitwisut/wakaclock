@@ -34,7 +34,6 @@ export function ProjectAiPanel({ ai }: { ai: ProjectAiSummary }) {
     <section className={styles.panel}>
       <div className={styles.chartHeader}>
         <div>
-          <span className={styles.kicker}>05 / THE AI COLLABORATION</span>
           <h3>A closer look at your co-pilots</h3>
           <p>Reported usage and code attribution for the selected branch and dates.</p>
         </div>
@@ -150,7 +149,6 @@ export function ProjectFilesPanel({
     <section aria-label="Project files" className={styles.panel} id="project-files">
       <div className={styles.chartHeader}>
         <div>
-          <span className={styles.kicker}>06 / WHERE THE WORK LIVES</span>
           <h3>Your file landscape</h3>
           <p>
             Tile area represents time in the top 12 matching files. Select a tile to inspect it.
@@ -399,7 +397,6 @@ export function ProjectDeepDive({
     <div className={styles.studio}>
       <div className={styles.sectionHeading}>
         <div>
-          <span className={styles.kicker}>PROJECT DEEP DIVE</span>
           <h3>Beyond the overview</h3>
           <p>
             Files, branches and AI usage · {start} — {end} · {timezone}
@@ -473,7 +470,6 @@ export function ProjectDeepDive({
       <section aria-label="Project branches" className={styles.panel}>
         <div className={styles.chartHeader}>
           <div>
-            <span className={styles.kicker}>BRANCH EXPLORER</span>
             <h3>Parallel paths</h3>
             <p>Select a branch to explore its files and AI usage.</p>
           </div>

@@ -142,7 +142,7 @@ it('uses UTC for new goals when the browser cannot resolve a timezone', async ()
   await waitFor(() =>
     expect(createGoal).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'UTC' }))
   );
-  expect(await screen.findByText('No goals yet. Create one above.')).toBeVisible();
+  expect(await screen.findByText('No goals yet. Create one with the New goal form.')).toBeVisible();
 });
 
 describe('Goals page', () => {
@@ -341,7 +341,7 @@ it('creates an unfiltered goal with no scope value', async () => {
   v2.listGoals.mockResolvedValue([]);
   vi.mocked(createGoal).mockResolvedValue(goal);
   renderPage(<GoalsPage />);
-  await screen.findByText('No goals yet. Create one above.');
+  await screen.findByText('No goals yet. Create one with the New goal form.');
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'All work' } });
   fireEvent.click(screen.getByRole('button', { name: 'Create goal' }));
   await waitFor(() =>
@@ -360,7 +360,7 @@ it('creates a leaderboard with selected visibility, metric and period, retaining
     })
   );
   renderPage(<LeaderboardsPage />);
-  await screen.findByText('No leaderboards yet. Create one above.');
+  await screen.findByText('No leaderboards yet. Create one with the New leaderboard form.');
   fireEvent.change(screen.getByLabelText('Measure'), { target: { value: 'ai_spend' } });
   fireEvent.change(screen.getByLabelText('Period'), { target: { value: 'monthly' } });
   fireEvent.change(screen.getByLabelText('Visibility'), { target: { value: 'public' } });

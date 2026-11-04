@@ -225,3 +225,39 @@
     display: none;
   }
 }
+
+/* ---------- Presentation rebuild (all presets) ----------
+ * The pulse panel is a theme card, not a dark oscilloscope: its variables map to the
+ * preset's tokens, the graticule, top sheen, glow and the endless sweep are gone, the
+ * live pip pulses a few times, and the count is solid text.
+ */
+.monitor {
+  --signal: var(--primary);
+  --signal-soft: color-mix(in oklch, var(--primary) 18%, transparent);
+  --signal-faint: color-mix(in oklch, var(--primary) 7%, transparent);
+  --ink: var(--foreground);
+  --ink-muted: var(--muted-foreground);
+  --ink-faint: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  --hairline: var(--border);
+  background: var(--card);
+  color: var(--card-foreground);
+}
+.monitor::before,
+.monitor::after,
+.sweep {
+  display: none;
+}
+.traceGlow {
+  filter: none;
+}
+.livePip {
+  box-shadow: none;
+}
+.livePip::after {
+  animation-iteration-count: 3;
+}
+.bigNumber {
+  font-size: clamp(40px, 6vw, 64px);
+  background-image: none;
+  color: var(--foreground);
+}
