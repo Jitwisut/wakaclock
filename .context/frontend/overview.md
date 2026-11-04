@@ -80,6 +80,15 @@ a small interface, imported only after `chooseTimeQuality` allows 3D; otherwise 
 table stands alone.
 Only a project filter can apply to them; any other filter hides them with a note.
 
+`/dashboard/wakaclock/agents` is Agent Universe. `components/wakaclock/agents/universe-scene.ts`
+is plain three.js behind a small interface, imported only after `chooseTimeQuality` allows 3D;
+otherwise the tables stand alone. Unknown cost or prompts render as "Not reported", never 0.
+Live mode polls `/me/agents/live` every 20 seconds (paused in hidden tabs) only on a range that
+reaches today, and overlays the result on the existing sky without changing token totals. A
+live agent or project that is not on the sky is listed but not drawn; a project goes to the
+shared "other" planet only when its id is in that planet's `folded_keys`. While live, the page shows the
+`useDeliveryHealth` warning, since queued data arrives late.
+
 ### Motion Native — default theme preset
 
 `[data-theme-preset='motion-native']` in `app/themes.css` is the dashboard default

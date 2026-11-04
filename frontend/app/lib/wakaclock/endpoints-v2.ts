@@ -2,6 +2,7 @@ import type { PresenceHeatmapData } from '@/lib/presence/presence-heatmap';
 
 import { unwrapV2, wakaclockV2Client } from './client-v2';
 
+import type { AgentLiveResponse, AgentUniverseResponse } from './analytics';
 import type {
   AcceptedOrganizationInvite,
   DeliveryStatusResponse,
@@ -590,4 +591,17 @@ export async function getPresenceSummaryV2(
       `/organizations/${organizationId}/presence/summary${suffix}`
     )
   );
+}
+
+// GET /me/agents/universe?start=&end=&timezone=
+export async function getAgentUniverse(params: { end: string; start: string; timezone?: string }) {
+  return unwrapV2(
+    await wakaclockV2Client.get<V2Envelope<AgentUniverseResponse>>('/me/agents/universe', {
+      params,
+    })
+  );
+}
+
+export async function getAgentLive() {
+  return unwrapV2(await wakaclockV2Client.get<V2Envelope<AgentLiveResponse>>('/me/agents/live'));
 }

@@ -165,6 +165,73 @@ export interface ProjectCityResponse {
   timezone: string;
 }
 
+export interface UniverseAgent {
+  cost_microusd: null | number;
+  cost_status: 'complete' | 'partial' | 'unavailable';
+  events: number;
+  model: null | string;
+  name: string;
+  prompts: null | number;
+  sessions: number;
+  tokens: number;
+}
+
+export interface UniverseProject {
+  /** Only on the shared "other" planet: the projects folded into it. */
+  folded_keys?: string[];
+  key: string;
+  name: string;
+  sessions: number;
+  tokens: number;
+}
+
+export interface UniverseActivity {
+  agent: number;
+  hour: number;
+  project: number;
+  session: number;
+  tokens: number;
+}
+
+export interface AgentUniverseResponse {
+  activity: UniverseActivity[];
+  agents: UniverseAgent[];
+  coverage: {
+    events: number;
+    events_with_inferred_project: number;
+    events_without_project: number;
+    last_event_at: null | number;
+    projects_total: number;
+  };
+  projects: UniverseProject[];
+  range: { days_included: number; end: string; start: string; timezone: string };
+  schema_version: number;
+}
+
+/** One agent seen on one project in the last few minutes. */
+export interface LiveAgentActivity {
+  agent: string;
+  heartbeats: number;
+  last_seen_at: number;
+  model: null | string;
+  project_key: string;
+  project_name: string;
+}
+
+export interface AgentLiveResponse {
+  activity: LiveAgentActivity[];
+  coverage: {
+    future_heartbeats: number;
+    heartbeats: number;
+    heartbeats_without_project: number;
+    truncated: boolean;
+    unverified_heartbeats: number;
+  };
+  schema_version: number;
+  server_time: number;
+  window_seconds: number;
+}
+
 export const analyticsFilterParamNames = [
   'project_id',
   'language',
