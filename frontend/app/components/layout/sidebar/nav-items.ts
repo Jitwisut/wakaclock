@@ -7,6 +7,7 @@ import {
   KeyboardIcon,
   LayoutDashboardIcon,
   type LucideIcon,
+  OrbitIcon,
   RadioIcon,
   SlidersHorizontalIcon,
   SparklesIcon,
@@ -94,6 +95,13 @@ export const navItems: NavGroup[] = [
       },
       { title: 'Insights', href: '/dashboard/wakaclock/insights', icon: TrendingUpIcon },
       { title: 'AI Stats', href: '/dashboard/wakaclock/ai', icon: SparklesIcon },
+      {
+        title: 'Agent Universe',
+        href: '/dashboard/wakaclock/agents',
+        icon: OrbitIcon,
+        isNew: true,
+        requiresFeature: 'agent_universe',
+      },
       {
         title: 'Teams',
         href: '/dashboard/wakaclock/teams',
