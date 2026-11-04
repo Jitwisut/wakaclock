@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button';
 import { AnalyticsFilterBar } from '@/components/wakaclock/analytics/analytics-filter-bar';
 import { TimeMachineCity } from '@/components/wakaclock/analytics/time-machine-city';
 import { QueryState } from '@/components/wakaclock/query-state';
+import { RangePicker } from '@/components/wakaclock/range-picker';
+import { InspectorLayout } from '@/components/wakaclock/workspace';
 import { useAnalyticsFilters } from '@/hooks/use-analytics-filters';
 import { useCapabilities } from '@/hooks/use-capabilities';
 import type {
@@ -396,49 +398,71 @@ export function TimeMachinePanel() {
     );
   }
 
+  const activeFilters = [
+    filters.projectId,
+    filters.language,
+    filters.editor,
+    filters.category,
+    filters.source,
+    filters.actorType,
+    filters.operatingSystem,
+  ].filter(Boolean).length;
+
   return (
     <div className="space-y-4">
-      {viewPicker}
-      {/* Stays outside QueryState: a refused range must remain fixable from here. */}
-      <AnalyticsFilterBar
-        filters={filters}
-        onReset={reset}
-        onSetFilter={setFilter}
-        onSetRange={setRange}
-        options={query.data?.filter_options ?? NO_FILTER_OPTIONS}
-      />
-      {organizationList.length > 1 && (
-        <label className={styles.organization}>
-          GitHub organization
-          <select
-            onChange={(event) => setChosenOrganization(event.target.value)}
-            value={organizationId}
-          >
-            {organizationList.map((organization) => (
-              <option key={organization.id} value={organization.id}>
-                {organization.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <QueryState
-        emptyDescription="No activity matches this range and these filters."
-        emptyTitle="Nothing to replay"
-        error={query.error}
-        isEmpty={!query.data?.segments.length}
-        isLoading={query.isLoading}
-        skeletonClassName="h-96 w-full"
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {viewPicker}
+        {/* Stays outside QueryState: a refused range must remain fixable from here. */}
+        <RangePicker onChange={setRange} value={{ start: filters.start, end: filters.end }} />
+      </div>
+      <InspectorLayout
+        activeCount={activeFilters}
+        inspector={
+          <div className="flex flex-col gap-3.5">
+            <AnalyticsFilterBar
+              filters={filters}
+              onReset={reset}
+              onSetFilter={setFilter}
+              options={query.data?.filter_options ?? NO_FILTER_OPTIONS}
+            />
+            {organizationList.length > 1 && (
+              <label className={styles.organization}>
+                GitHub organization
+                <select
+                  onChange={(event) => setChosenOrganization(event.target.value)}
+                  value={organizationId}
+                >
+                  {organizationList.map((organization) => (
+                    <option key={organization.id} value={organization.id}>
+                      {organization.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+        }
+        inspectorDescription="The replay follows these filters."
+        inspectorTitle="Filters"
       >
-        {query.data && (
-          <TimeMachinePlayer
-            data={query.data}
-            events={visibleEvents}
-            githubStatus={githubStatus}
-            key={query.data.generated_at}
-          />
-        )}
-      </QueryState>
+        <QueryState
+          emptyDescription="No activity matches this range and these filters."
+          emptyTitle="Nothing to replay"
+          error={query.error}
+          isEmpty={!query.data?.segments.length}
+          isLoading={query.isLoading}
+          skeletonClassName="h-96 w-full"
+        >
+          {query.data && (
+            <TimeMachinePlayer
+              data={query.data}
+              events={visibleEvents}
+              githubStatus={githubStatus}
+              key={query.data.generated_at}
+            />
+          )}
+        </QueryState>
+      </InspectorLayout>
     </div>
   );
 }

@@ -57,11 +57,13 @@ export function AttributionTimeline({ data }: { data: AnalyticsExplorerResponse 
   const format = mode === 'share' ? formatShare : formatTime;
 
   return (
-    <Card>
+    <Card className="gap-4 py-5">
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1.5">
-            <CardTitle>Attribution over time</CardTitle>
+            <CardTitle className="text-sm font-semibold tracking-tight">
+              Attribution over time
+            </CardTitle>
             <CardDescription>
               {granularityLabel(data.timeline.bucket_seconds)} buckets.{' '}
               {mode === 'share'

@@ -1,12 +1,11 @@
 'use client';
 
 import { useQueries } from '@tanstack/react-query';
-import { CalendarDaysIcon, GaugeIcon, SparklesIcon, TimerIcon } from 'lucide-react';
 
 import { AnalyticsEmptyState } from '@/components/wakaclock/analytics/analytics-empty-state';
 import { AnalyticsFrame } from '@/components/wakaclock/analytics/analytics-frame';
 import type { AnalyticsFrameContext } from '@/components/wakaclock/analytics/analytics-frame';
-import { StatTile } from '@/components/wakaclock/stat-tile';
+import { MetricStrip } from '@/components/wakaclock/workspace';
 import type { AnalyticsExplorerResponse } from '@/lib/wakaclock/analytics';
 import { getAnalyticsExplorer } from '@/lib/wakaclock/endpoints';
 import { formatDurationShort } from '@/lib/wakaclock/format';
@@ -72,47 +71,45 @@ function HumanAiView(context: AnalyticsFrameContext) {
   }
 
   return (
-    <div className={`${styles.root} space-y-4`}>
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+    <div className={`${styles.root} flex flex-col gap-5`}>
+      <MetricStrip
+        aria-label="Attribution summary"
+        metrics={[
+          {
+            label: 'AI share',
+            value:
+              summary.ai_share_percent === null ? '—' : `${summary.ai_share_percent.toFixed(1)}%`,
+            hint: 'Verified and inferred AI time',
+          },
+          {
+            label: 'Total time',
+            value: formatDurationShort(summary.total_seconds),
+            hint: `${data.range.start} – ${data.range.end}`,
+          },
+          {
+            label: 'Daily average',
+            value: formatDurationShort(dailyAverage),
+            hint: 'Per active day',
+          },
+          {
+            label: 'Active days',
+            value: String(summary.active_days),
+            hint: `of ${data.range.days_included} in range`,
+          },
+        ]}
+      />
+
+      <div className="grid items-start gap-5 2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <AttributionTimeline data={data} />
         <AttributionOverview
           data={data}
           onSelect={(actorType) => setFilter('actor_type', actorType)}
           selected={filters.actorType}
           trustHref={href('/dashboard/wakaclock/analytics/trust')}
         />
-        <div className="grid auto-rows-fr grid-cols-2 gap-4">
-          <StatTile
-            icon={<SparklesIcon />}
-            label="AI share"
-            subtext="Verified and inferred AI time"
-            value={
-              summary.ai_share_percent === null ? '—' : `${summary.ai_share_percent.toFixed(1)}%`
-            }
-          />
-          <StatTile
-            icon={<TimerIcon />}
-            label="Total time"
-            subtext={`${data.range.start} – ${data.range.end}`}
-            value={formatDurationShort(summary.total_seconds)}
-          />
-          <StatTile
-            icon={<GaugeIcon />}
-            label="Daily average"
-            subtext="Per active day"
-            value={formatDurationShort(dailyAverage)}
-          />
-          <StatTile
-            icon={<CalendarDaysIcon />}
-            label="Active days"
-            subtext={`of ${data.range.days_included} in range`}
-            value={String(summary.active_days)}
-          />
-        </div>
       </div>
 
-      <AttributionTimeline data={data} />
-
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-5 lg:grid-cols-2">
         <AttributionMixList
           description={
             enabled

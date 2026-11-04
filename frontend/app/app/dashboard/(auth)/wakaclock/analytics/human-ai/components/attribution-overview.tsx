@@ -39,11 +39,13 @@ export function AttributionOverview({
   const selectedShare = shares.find((share) => share.actor.key === selected);
 
   return (
-    <Card>
+    <Card className="gap-4 py-5">
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1.5">
-            <CardTitle>Where your time went</CardTitle>
+            <CardTitle className="text-sm font-semibold tracking-tight">
+              Where your time went
+            </CardTitle>
             <CardDescription>
               {formatDurationShort(total)} of canonical activity, attributed by who did the work.
             </CardDescription>
@@ -60,7 +62,7 @@ export function AttributionOverview({
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
-        <p className="text-lg leading-snug sm:text-xl">
+        <p className="text-base leading-snug">
           <span className="font-semibold">{aiPercent.toFixed(1)}%</span>
           <span className="text-muted-foreground"> AI · </span>
           <span className="font-semibold">{human.percent.toFixed(1)}%</span>
@@ -87,11 +89,7 @@ export function AttributionOverview({
             ))}
         </div>
 
-        <div
-          aria-label="Filter by attribution"
-          className="grid grid-cols-2 gap-2 xl:grid-cols-4"
-          role="group"
-        >
+        <div aria-label="Filter by attribution" className="grid grid-cols-2 gap-2" role="group">
           {shares.map((share) => {
             const active = selected === share.actor.key;
             const empty = share.seconds === 0;
@@ -110,7 +108,7 @@ export function AttributionOverview({
                 <span className={cn(styles.swatch, styles[share.actor.tone], 'mt-1')} />
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-medium">{share.actor.label}</span>
-                  <span className="block text-xl font-semibold tabular-nums">
+                  <span className="block text-lg font-semibold tabular-nums">
                     {formatDurationShort(share.seconds)}
                   </span>
                   <span className="text-muted-foreground block text-xs tabular-nums">
