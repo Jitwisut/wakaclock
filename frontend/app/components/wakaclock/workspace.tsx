@@ -129,6 +129,59 @@ export function Widget({
 }
 
 /**
+ * One labelled group of form fields on a single surface, the grouped-form pattern used by
+ * the small tool pages. Several groups stack into a form; the footnote explains the group.
+ */
+export function FieldGroup({
+  children,
+  className,
+  footnote,
+  legend,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  footnote?: React.ReactNode;
+  legend: string;
+}) {
+  return (
+    <fieldset className={cn('min-w-0', className)} data-slot="field-group">
+      <legend className="text-muted-foreground mb-2 px-1 text-xs font-medium">{legend}</legend>
+      <div className="bg-card flex flex-col gap-4 rounded-lg border p-4 shadow-xs [&_[data-slot=native-select-wrapper]]:w-full">
+        {children}
+      </div>
+      {footnote && <p className="text-muted-foreground mt-2 px-1 text-xs">{footnote}</p>}
+    </fieldset>
+  );
+}
+
+/**
+ * A centred notice for a page whose feature this deployment does not run. It replaces the
+ * whole canvas, so it reads as a state of the deployment rather than a failed widget.
+ */
+export function UnavailableNotice({
+  children,
+  title,
+}: {
+  children: React.ReactNode;
+  title: React.ReactNode;
+}) {
+  return (
+    <section
+      aria-labelledby="unavailable-notice-title"
+      className="mx-auto flex w-full max-w-lg flex-col items-center gap-3 rounded-xl border border-dashed px-6 py-12 text-center"
+      data-slot="unavailable-notice"
+    >
+      <h2 className="text-base font-semibold tracking-tight" id="unavailable-notice-title">
+        {title}
+      </h2>
+      <div className="text-muted-foreground flex flex-col gap-2 text-sm text-balance">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+/**
  * Main canvas beside a right-hand inspector. From `xl` the inspector is a sticky column;
  * below it the inspector opens as a sheet from a toolbar button, so the canvas keeps the
  * full width on laptops, tablets and phones.

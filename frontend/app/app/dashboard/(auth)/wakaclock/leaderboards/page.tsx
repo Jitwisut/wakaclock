@@ -7,7 +7,6 @@ import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NativeSelect } from '@/components/ui/native-select';
@@ -15,6 +14,7 @@ import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { RequireUser } from '@/components/wakaclock/require-user';
 import { RequiresFeature } from '@/components/wakaclock/requires-feature';
+import { FieldGroup, Widget } from '@/components/wakaclock/workspace';
 import {
   addLeaderboardMember,
   createLeaderboard,
@@ -81,7 +81,7 @@ function MemberList({ board, userId }: { board: Leaderboard; userId: string }) {
   });
 
   return (
-    <div className="mt-3">
+    <div className="flex flex-col gap-4">
       <QueryState
         emptyDescription="No members yet."
         error={error}
@@ -89,9 +89,12 @@ function MemberList({ board, userId }: { board: Leaderboard; userId: string }) {
         isLoading={isLoading}
         skeletonClassName="h-16 w-full"
       >
-        <ul className="mb-3 flex flex-col gap-1.5">
+        <ul aria-label="Members" className="flex flex-col divide-y rounded-lg border">
           {data?.map((member) => (
-            <li className="flex items-center justify-between gap-2 text-sm" key={member.user_id}>
+            <li
+              className="flex items-center justify-between gap-2 py-1 pr-1 pl-3 text-sm"
+              key={member.user_id}
+            >
               <span className="truncate">{member.username}</span>
               <Button
                 disabled={remove.isPending}
@@ -124,7 +127,7 @@ function MemberList({ board, userId }: { board: Leaderboard; userId: string }) {
             value={memberId}
           />
         </div>
-        <Button disabled={!memberId.trim() || add.isPending} size="sm" type="submit">
+        <Button disabled={!memberId.trim() || add.isPending} type="submit" variant="outline">
           Add
         </Button>
       </form>
@@ -148,59 +151,70 @@ function LeaderboardForm({ onCreated }: { onCreated: () => void }) {
 
   return (
     <form
-      className="grid gap-4 md:grid-cols-3"
+      aria-labelledby="new-leaderboard-title"
+      className="flex flex-col gap-5"
       onSubmit={(event) => {
         event.preventDefault();
         mutation.mutate();
       }}
     >
-      <div className="grid gap-1.5">
-        <Label htmlFor="board-metric">Measure</Label>
-        <NativeSelect
-          id="board-metric"
-          onChange={(event) => setMetric(event.target.value)}
-          value={metric}
-        >
-          {METRICS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </NativeSelect>
+      <div>
+        <h2 className="text-sm font-semibold tracking-tight" id="new-leaderboard-title">
+          New leaderboard
+        </h2>
+        <p className="text-muted-foreground mt-0.5 text-xs">
+          Members opt in by being added; nobody appears on a board without being a member of it.
+        </p>
       </div>
 
-      <div className="grid gap-1.5">
-        <Label htmlFor="board-period">Period</Label>
-        <NativeSelect
-          id="board-period"
-          onChange={(event) => setPeriod(event.target.value)}
-          value={period}
-        >
-          {PERIODS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </NativeSelect>
-      </div>
+      <FieldGroup legend="Ranking">
+        <div className="grid gap-1.5">
+          <Label htmlFor="board-metric">Measure</Label>
+          <NativeSelect
+            id="board-metric"
+            onChange={(event) => setMetric(event.target.value)}
+            value={metric}
+          >
+            {METRICS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor="board-period">Period</Label>
+          <NativeSelect
+            id="board-period"
+            onChange={(event) => setPeriod(event.target.value)}
+            value={period}
+          >
+            {PERIODS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </div>
+      </FieldGroup>
 
-      <div className="grid gap-1.5">
-        <Label htmlFor="board-visibility">Visibility</Label>
-        <NativeSelect
-          id="board-visibility"
-          onChange={(event) => setVisibility(event.target.value)}
-          value={visibility}
-        >
-          <option value="private">Private</option>
-          <option value="public">Public</option>
-        </NativeSelect>
-      </div>
+      <FieldGroup footnote="Membership stays opt-in whatever the visibility." legend="Sharing">
+        <div className="grid gap-1.5">
+          <Label htmlFor="board-visibility">Visibility</Label>
+          <NativeSelect
+            id="board-visibility"
+            onChange={(event) => setVisibility(event.target.value)}
+            value={visibility}
+          >
+            <option value="private">Private</option>
+            <option value="public">Public</option>
+          </NativeSelect>
+        </div>
+      </FieldGroup>
 
-      <div className="md:col-span-3">
-        <Button disabled={mutation.isPending} type="submit">
-          {mutation.isPending ? 'Creating…' : 'Create leaderboard'}
-        </Button>
-      </div>
+      <Button className="w-full" disabled={mutation.isPending} type="submit">
+        {mutation.isPending ? 'Creating…' : 'Create leaderboard'}
+      </Button>
     </form>
   );
 }
@@ -215,60 +229,64 @@ function LeaderboardsPanel() {
     queryKey: wakaclockKeys.leaderboards(userId),
   });
 
-  return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">New leaderboard</CardTitle>
-          <CardDescription>
-            Members opt in by being added; nobody appears on a board without being a member of it.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <LeaderboardForm
-            onCreated={() =>
-              void queryClient.invalidateQueries({ queryKey: wakaclockKeys.leaderboards(userId) })
-            }
-          />
-        </CardContent>
-      </Card>
+  const count = data?.length ?? 0;
+  const noun = count === 1 ? 'board' : 'boards';
 
-      <QueryState
-        emptyDescription="No leaderboards yet. Create one above."
-        error={error}
-        isEmpty={!isLoading && !error && (data?.length ?? 0) === 0}
-        isLoading={isLoading}
-      >
-        <div className="grid gap-4 lg:grid-cols-2">
-          {data?.map((board) => (
-            <Card key={board.id}>
-              <CardHeader>
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <CardTitle className="text-base">{describe(board)}</CardTitle>
-                    <CardDescription>
-                      Created {formatUnixSeconds(Date.parse(board.created_at) / 1000)}
-                    </CardDescription>
-                  </div>
+  return (
+    <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <section aria-labelledby="leaderboards-list-title" className="flex min-w-0 flex-col gap-3">
+        <div className="px-1">
+          <h2 className="text-sm font-semibold tracking-tight" id="leaderboards-list-title">
+            Your boards
+          </h2>
+          <p className="text-muted-foreground mt-0.5 text-xs">
+            {count > 0
+              ? `${count.toLocaleString()} ${noun} you own or belong to.`
+              : 'Boards you own or belong to.'}
+          </p>
+        </div>
+        <QueryState
+          emptyDescription="No leaderboards yet. Create one with the New leaderboard form."
+          error={error}
+          isEmpty={!isLoading && !error && count === 0}
+          isLoading={isLoading}
+        >
+          <div className="grid gap-5 2xl:grid-cols-2">
+            {data?.map((board) => (
+              <Widget
+                action={
                   <Badge variant={board.visibility === 'public' ? 'default' : 'outline'}>
                     {board.visibility}
                   </Badge>
-                </div>
-              </CardHeader>
-              <CardContent>
+                }
+                description={`Created ${formatUnixSeconds(Date.parse(board.created_at) / 1000)}`}
+                key={board.id}
+                title={describe(board)}
+              >
                 <MemberList board={board} userId={userId} />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </QueryState>
+              </Widget>
+            ))}
+          </div>
+        </QueryState>
+      </section>
+
+      <aside
+        aria-label="Create a leaderboard"
+        className="lg:sticky lg:top-[calc(var(--header-height,56px)+16px)]"
+      >
+        <LeaderboardForm
+          onCreated={() =>
+            void queryClient.invalidateQueries({ queryKey: wakaclockKeys.leaderboards(userId) })
+          }
+        />
+      </aside>
     </div>
   );
 }
 
 export default function LeaderboardsPage() {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <WakaclockPageHeader
         description="Private boards among people who have opted in by joining them."
         title="Leaderboards"

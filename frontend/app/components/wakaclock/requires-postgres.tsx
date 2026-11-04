@@ -2,8 +2,8 @@
 
 import type * as React from 'react';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { UnavailableNotice } from '@/components/wakaclock/workspace';
 import { useCapabilities } from '@/hooks/use-capabilities';
 
 /**
@@ -31,20 +31,16 @@ export function RequiresPostgres({
 
   if (!postgresEnabled) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{feature} needs a transactional store</CardTitle>
-          <CardDescription>
-            This server is running in ClickHouse-only mode. Coding time, projects and analytics
-            all work; {feature.toLowerCase()} is stored in PostgreSQL, which is not configured
-            here.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="text-muted-foreground text-sm">
-          Set <code className="font-mono">POSTGRES_URL</code> on the server and restart it to
-          enable this page.
-        </CardContent>
-      </Card>
+      <UnavailableNotice title={`${feature} needs a transactional store`}>
+        <p>
+          This server is running in ClickHouse-only mode. Coding time, projects and analytics all
+          work; {feature.toLowerCase()} is stored in PostgreSQL, which is not configured here.
+        </p>
+        <p className="text-xs">
+          Set <code className="font-mono">POSTGRES_URL</code> on the server and restart it to enable
+          this page.
+        </p>
+      </UnavailableNotice>
     );
   }
 

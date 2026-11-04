@@ -2,8 +2,8 @@
 
 import type * as React from 'react';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { UnavailableNotice } from '@/components/wakaclock/workspace';
 import { useCapabilities } from '@/hooks/use-capabilities';
 
 /**
@@ -31,19 +31,16 @@ export function RequiresFeature({
 
   if (featureAvailability[featureKey] !== true) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{feature} is unavailable in this deployment</CardTitle>
-          <CardDescription>
-            The server has this capability disabled, so no request was sent. This page will become
-            available when the deployment enables the complete {feature.toLowerCase()} runtime.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="text-muted-foreground text-sm">
+      <UnavailableNotice title={`${feature} is unavailable in this deployment`}>
+        <p>
+          The server has this capability disabled, so no request was sent. This page will become
+          available when the deployment enables the complete {feature.toLowerCase()} runtime.
+        </p>
+        <p className="text-xs">
           Check the server capability manifest or contact the deployment administrator for the
           rollout status.
-        </CardContent>
-      </Card>
+        </p>
+      </UnavailableNotice>
     );
   }
 
