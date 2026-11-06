@@ -8,7 +8,7 @@ import { DEFAULT_THEME } from '@/lib/themes';
 const both = <LayoutSwitch classic={<p>classic layout</p>} native={<p>native layout</p>} />;
 
 describe('LayoutSwitch', () => {
-  it('uses the rebuilt layout for Motion Native, the default preset', () => {
+  it('uses the rebuilt layout for Cinema, the default preset', () => {
     render(both);
     expect(screen.getByText('native layout')).toBeInTheDocument();
     expect(screen.queryByText('classic layout')).not.toBeInTheDocument();

@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `activity-heatmaps.native` layout, every other preset the
- * `activity-heatmaps.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `activity-heatmaps.native` layout, every other preset the
+ * `activity-heatmaps.classic` one (the layout before the theme redesigns).
  */
 
 import type * as React from 'react';

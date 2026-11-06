@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `attribution-timeline.native` layout, every other preset the
- * `attribution-timeline.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `attribution-timeline.native` layout, every other preset the
+ * `attribution-timeline.classic` one (the layout before the theme redesigns).
  */
 
 import type * as React from 'react';

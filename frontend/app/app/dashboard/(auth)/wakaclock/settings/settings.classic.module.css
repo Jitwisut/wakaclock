@@ -317,32 +317,32 @@ li:hover .mergeFlow::before {
   }
 }
 
-/* ---------- Motion Native ----------
+/* ---------- Cinema ----------
  * A flat graphite stage instead of aurora gradients and dot texture, a solid title, no
  * backdrop blur on the module tiles, and no infinite loops: the monogram ring stays
  * still, the live ring pulses three times, and the key shimmer runs once.
  */
-:global([data-theme-preset='motion-native']) .hero {
+:global([data-theme-preset='cinema']) .hero {
   background: oklch(0.205 0.006 265);
 }
-:global([data-theme-preset='motion-native']) .hero::before,
-:global([data-theme-preset='motion-native']) .hero::after {
+:global([data-theme-preset='cinema']) .hero::before,
+:global([data-theme-preset='cinema']) .hero::after {
   display: none;
 }
-:global([data-theme-preset='motion-native']) .title {
+:global([data-theme-preset='cinema']) .title {
   background-image: none;
   color: var(--ink);
 }
-:global([data-theme-preset='motion-native']) .monogram::before {
+:global([data-theme-preset='cinema']) .monogram::before {
   animation: none;
 }
-:global([data-theme-preset='motion-native']) .module {
+:global([data-theme-preset='cinema']) .module {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-:global([data-theme-preset='motion-native']) .statusDotLive::after {
+:global([data-theme-preset='cinema']) .statusDotLive::after {
   animation-iteration-count: 3;
 }
-:global([data-theme-preset='motion-native']) .keySlot::after {
+:global([data-theme-preset='cinema']) .keySlot::after {
   animation-iteration-count: 1;
 }

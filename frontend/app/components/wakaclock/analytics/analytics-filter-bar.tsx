@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `analytics-filter-bar.native` layout, every other preset the
- * `analytics-filter-bar.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `analytics-filter-bar.native` layout, every other preset the
+ * `analytics-filter-bar.classic` one (the layout before the theme redesigns).
  */
 
 import type * as React from 'react';

@@ -56,6 +56,10 @@ AtoAxis 3h 6m เทียบกับ WakaTime 3h 4m จากการใช�
 
 ## Approval gate — ต้องถามก่อนแก้
 
+การอนุมัติ 2026-11-07 (Cinema — Time Core): ผู้ใช้ตอบ “Approve” ต่อ Time Core บน Overview: อ่าน `GET /durations` แบบอ่านอย่างเดียว (query key เดียวกับแผง Sessions) ตัวเลขใหญ่ “activity with timeout” ใช้ `wakatime_compatible_seconds` → `total_seconds` → ผลรวม `duration_seconds` ตามลำดับ, “Measured active” = `active_seconds` แสดงแยกไม่บวกรวม, แท่ง human/both/AI แสดงเฉพาะ `active_coverage === 'measured'`. ไม่อ่าน heartbeat ดิบ, ไม่แตะ backend/ingest/migration, ไม่เปลี่ยน baseline แถวใด.
+
+การอนุมัติ 2026-11-07 (Cinema — layout ของหน้าที่แสดงเวลา): ผู้ใช้ตอบ “อนุญาตทั้งหมด” ให้แก้เฉพาะไฟล์ `.native` (ฝั่ง Cinema) และ CSS ใน `app/dashboard/(auth)/wakaclock/analytics/**`, `components/wakaclock/analytics/**`, `heartbeats/**` และแผง Sessions บน Overview เพื่อจัด layout/ตัวอักษร/ระยะ/สี เท่านั้น — ห้ามแตะ query, การคำนวณ, label, หน่วย, การปัดเศษ, ขอบช่วงเวลา และข้อความ empty state; `.classic` ไม่เปลี่ยน. test เดิมต้องผ่านโดยไม่แก้ข้อความที่ assert. ครอบคลุม commit ลง `claude/cinema-dashboard` (รวมการเปลี่ยนตัวเลขใหญ่ของ Time Core); ไม่ครอบคลุม push หรือ merge main.
+
 การอนุมัติ 2026-11-02 (Agent Universe Phase 2, ทาง A): ผู้ใช้ตอบ “อนุญาต” ต่อแผนโหมด Live: `GET /api/v2/me/agents/live` อ่าน heartbeat ที่มี `ai_agent` ใน 15 นาทีล่าสุดแบบอ่านอย่างเดียวผ่าน `canonical_winner_relation` แสดงชื่อ Agent เฉพาะแถวที่ effective actor เป็น `ai_verified` และหน้าเว็บ poll ทุก 20 วินาที ไม่คำนวณ duration ไม่เปลี่ยน baseline แถวใด, ไม่มี migration และไม่แตะ ingest/queue/client. ไม่อ้างความเร็วการส่งข้อมูล เพราะ `created_at` มาจาก client. ไม่ครอบคลุม commit/push, merge main หรือทาง B (สัญญาณในหน่วยความจำตอนรับ heartbeat + SSE).
 
 การอนุมัติ 2026-11-02 (Agent Universe ขั้น 1): ผู้ใช้ตอบ “อนุญาต” ต่อแผน `GET /api/v2/me/agents/universe` อ่านเฉพาะ `ai_usage_events` และ `project_identities` เป็นข้อมูลรายชั่วโมง ไม่อ่าน heartbeat ไม่คำนวณ duration และไม่ใช้ช่วง session เป็นเวลา ไม่เปลี่ยน baseline แถวใด, ไม่มี migration และไม่แตะ ingest/client. ไม่ครอบคลุม commit/push, merge main, เรียลไทม์ หรือเวลาต่อ Agent.

@@ -117,7 +117,7 @@ export function preserveAnalyticsQuery(pathname: string, queryString: string, hr
  */
 /**
  * The current-page highlight. One shared `layoutId` lets it glide from the previous item
- * to the new one on navigation; only themes that opt in (Motion Native) make it visible,
+ * to the new one on navigation; only themes that opt in (Cinema) make it visible,
  * the others keep their own active treatment.
  */
 function NavActiveIndicator() {

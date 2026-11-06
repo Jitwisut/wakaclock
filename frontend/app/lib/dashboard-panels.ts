@@ -39,6 +39,13 @@ export const DASHBOARD_PANEL_PAGES: readonly DashboardPanelPage[] = [
 
 export const DASHBOARD_PANELS: readonly DashboardPanel[] = [
   {
+    id: 'overview.time-core',
+    page: OVERVIEW,
+    label: 'Time Core',
+    description:
+      'The day as a 3D dial (Cinema theme): every session on its project ring, with the measured human and AI split.',
+  },
+  {
     id: 'overview.character-sheet',
     page: OVERVIEW,
     label: 'Today hero',

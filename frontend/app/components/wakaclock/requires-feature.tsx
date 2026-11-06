@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `requires-feature.native` layout, every other preset the
- * `requires-feature.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `requires-feature.native` layout, every other preset the
+ * `requires-feature.classic` one (the layout before the theme redesigns).
  */
 
 import type * as React from 'react';

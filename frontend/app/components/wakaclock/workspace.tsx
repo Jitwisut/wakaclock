@@ -5,7 +5,6 @@ import * as React from 'react';
 import { SlidersHorizontalIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import {
   Sheet,
   SheetContent,
@@ -30,10 +29,9 @@ const COLUMN_CLASS: Record<number, string> = {
 };
 
 /** A segmented control: a recessed track whose pressed button (`aria-pressed`) is raised. */
-export const SEGMENTED_GROUP =
-  'bg-muted inline-flex gap-0.5 rounded-lg p-0.5 shadow-[inset_0_0_0_1px_var(--border)]';
+export const SEGMENTED_GROUP = 'inline-flex gap-1 shadow-[inset_0_-1px_0_var(--border)]';
 export const SEGMENTED_ITEM =
-  'text-muted-foreground hover:text-foreground aria-pressed:bg-card aria-pressed:text-foreground min-h-8 rounded-md px-3 text-sm font-medium tabular-nums transition-colors aria-pressed:shadow-sm motion-reduce:transition-none';
+  'text-muted-foreground hover:text-foreground aria-pressed:text-foreground min-h-9 px-2.5 font-mono text-[0.6875rem] font-medium tracking-[0.1em] uppercase tabular-nums transition-[color,box-shadow] aria-pressed:shadow-[inset_0_-2px_0_var(--primary)] motion-reduce:transition-none';
 
 export interface Metric {
   /** Optional context under the value (unit, comparison, coverage). */
@@ -57,7 +55,7 @@ export function MetricStrip({
 }) {
   const columns = COLUMN_CLASS[Math.min(Math.max(metrics.length, 3), 6)];
   return (
-    <Card className={cn('gap-0 overflow-hidden py-0', className)} data-slot="metric-strip">
+    <div className={cn('overflow-hidden border-y', className)} data-slot="metric-strip">
       {/* Each cell draws its own right and bottom hairline; the list sits one pixel past
           the card on those sides so the outer lines are clipped. An unfilled last row
           then shows the card surface rather than a block of divider colour. */}
@@ -67,11 +65,11 @@ export function MetricStrip({
       >
         {metrics.map((metric) => (
           <div
-            className="flex min-w-0 flex-col gap-1 border-r border-b px-4 py-3.5"
+            className="flex min-w-0 flex-col gap-2 border-r border-b px-4 py-4"
             key={metric.label}
           >
-            <dt className="text-muted-foreground truncate text-xs">{metric.label}</dt>
-            <dd className="text-lg leading-tight font-semibold tracking-tight tabular-nums">
+            <dt className="cinema-label truncate">{metric.label}</dt>
+            <dd className="font-display text-[1.625rem] leading-none font-medium tracking-[-0.03em] tabular-nums">
               {metric.value}
             </dd>
             {metric.hint && (
@@ -80,7 +78,7 @@ export function MetricStrip({
           </div>
         ))}
       </dl>
-    </Card>
+    </div>
   );
 }
 
@@ -97,12 +95,12 @@ export function MetricGroup({
   className?: string;
 }) {
   return (
-    <div className="bg-card overflow-hidden rounded-xl border" data-slot="metric-group">
+    <div className="overflow-hidden border-y" data-slot="metric-group">
       {/* Same hairline scheme as MetricStrip. The tiles are cards, so the inset line has to
           outrank the theme's card elevation. */}
       <div
         className={cn(
-          '-mr-px -mb-px grid grid-cols-1 [&>*]:rounded-none [&>*]:border-0 [&>*]:!shadow-[inset_-1px_-1px_0_0_var(--border)]',
+          '-mr-px -mb-px grid grid-cols-1 [&>*]:rounded-none [&>*]:border-0 [&>*]:!bg-transparent [&>*]:!shadow-[inset_-1px_-1px_0_0_var(--border)]',
           className
         )}
       >
@@ -130,16 +128,21 @@ export function Widget({
   title: React.ReactNode;
 }) {
   return (
-    <Card className={cn('min-w-0 gap-3 px-4 py-4 sm:px-5', className)} data-slot="widget">
+    <section
+      className={cn('flex min-w-0 flex-col gap-4 border-t pt-4', className)}
+      data-slot="widget"
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
-          {description && <p className="text-muted-foreground mt-0.5 text-xs">{description}</p>}
+          <h2 className="font-display text-[1.0625rem] leading-tight font-medium tracking-[-0.02em]">
+            {title}
+          </h2>
+          {description && <p className="text-muted-foreground mt-1 text-xs">{description}</p>}
         </div>
         {action}
       </div>
       <div className="min-w-0 flex-1">{children}</div>
-    </Card>
+    </section>
   );
 }
 
@@ -160,11 +163,11 @@ export function FieldGroup({
 }) {
   return (
     <fieldset className={cn('min-w-0', className)} data-slot="field-group">
-      <legend className="text-muted-foreground mb-2 px-1 text-xs font-medium">{legend}</legend>
-      <div className="bg-card flex flex-col gap-4 rounded-lg border p-4 shadow-xs [&_[data-slot=native-select-wrapper]]:w-full">
+      <legend className="cinema-label mb-2.5">{legend}</legend>
+      <div className="flex flex-col gap-4 rounded-(--radius) border p-4 [&_[data-slot=native-select-wrapper]]:w-full">
         {children}
       </div>
-      {footnote && <p className="text-muted-foreground mt-2 px-1 text-xs">{footnote}</p>}
+      {footnote && <p className="text-muted-foreground mt-2 text-xs">{footnote}</p>}
     </fieldset>
   );
 }
@@ -183,10 +186,13 @@ export function UnavailableNotice({
   return (
     <section
       aria-labelledby="unavailable-notice-title"
-      className="mx-auto flex w-full max-w-lg flex-col items-center gap-3 rounded-xl border border-dashed px-6 py-12 text-center"
+      className="mx-auto flex w-full max-w-lg flex-col items-center gap-3 border-y px-6 py-14 text-center"
       data-slot="unavailable-notice"
     >
-      <h2 className="text-base font-semibold tracking-tight" id="unavailable-notice-title">
+      <h2
+        className="font-display text-2xl font-medium tracking-[-0.03em]"
+        id="unavailable-notice-title"
+      >
         {title}
       </h2>
       <div className="text-muted-foreground flex flex-col gap-2 text-sm text-balance">
@@ -218,7 +224,7 @@ export function InspectorLayout({
   const [open, setOpen] = React.useState(false);
   return (
     <div
-      className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_288px]"
+      className="grid grid-cols-1 items-start gap-8 xl:grid-cols-[minmax(0,1fr)_288px]"
       data-slot="inspector-layout"
     >
       <div className="flex min-w-0 flex-col gap-5">
@@ -249,15 +255,15 @@ export function InspectorLayout({
         {children}
       </div>
       <aside aria-label={inspectorTitle} className="hidden xl:block">
-        <Card className="sticky top-[calc(var(--header-height,56px)+16px)] gap-4 px-4 py-4">
+        <div className="sticky top-[calc(var(--bar-height,56px)+24px)] flex flex-col gap-4 border-l pl-6">
           <div>
-            <h2 className="text-sm font-semibold tracking-tight">{inspectorTitle}</h2>
+            <h2 className="cinema-label">{inspectorTitle}</h2>
             {inspectorDescription && (
-              <p className="text-muted-foreground mt-0.5 text-xs">{inspectorDescription}</p>
+              <p className="text-muted-foreground mt-1.5 text-xs">{inspectorDescription}</p>
             )}
           </div>
           {inspector}
-        </Card>
+        </div>
       </aside>
     </div>
   );

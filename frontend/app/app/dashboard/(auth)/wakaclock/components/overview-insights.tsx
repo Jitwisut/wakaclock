@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `overview-insights.native` layout, every other preset the
- * `overview-insights.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `overview-insights.native` layout, every other preset the
+ * `overview-insights.classic` one (the layout before the theme redesigns).
  */
 
 import { LayoutSwitch } from '@/components/wakaclock/layout-switch';

@@ -1,3 +1,8 @@
+import Link from 'next/link';
+
+import { Button } from '@/components/ui/button';
+import { CinemaGuestFrame } from '@/components/wakaclock/cinema-guest-frame';
+import { LayoutSwitch } from '@/components/wakaclock/layout-switch';
 import { generateMeta } from '@/lib/utils';
 
 export async function generateMetadata() {
@@ -9,7 +14,7 @@ export async function generateMetadata() {
   });
 }
 
-export default function Page() {
+function Classic500() {
   return (
     <div className="from-background to-secondary/10 flex min-h-screen flex-col items-center justify-center bg-gradient-to-b p-4">
       <div className="w-full max-w-3xl space-y-4 lg:space-y-8">
@@ -37,5 +42,33 @@ export default function Page() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function Page() {
+  return (
+    <LayoutSwitch
+      classic={<Classic500 />}
+      native={
+        <CinemaGuestFrame
+          aside="Something failed on our side, not yours."
+          headline="500"
+          kicker="Error 500"
+          title="Server Error"
+        >
+          <div className="flex w-full max-w-sm flex-col gap-4">
+            <p className="text-muted-foreground text-sm">
+              Nothing you recorded is affected. Head back and carry on where you were.
+            </p>
+            <Button asChild size="lg">
+              <Link href="/dashboard/wakaclock">Back to the dashboard</Link>
+            </Button>
+            <Button asChild size="lg" variant="outline">
+              <Link href="/">Back to Home</Link>
+            </Button>
+          </div>
+        </CinemaGuestFrame>
+      }
+    />
   );
 }

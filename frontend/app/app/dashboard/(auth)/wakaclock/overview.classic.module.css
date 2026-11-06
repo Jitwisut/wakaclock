@@ -725,12 +725,12 @@
   }
 }
 
-/* ---------- Motion Native ----------
+/* ---------- Cinema ----------
  * Same composition, calmer surface: elevation and timing come from the preset's tokens,
  * the hero becomes a graphite stage without aurora, dot texture or blurred glow, and the
  * live indicator pulses a few times instead of forever, so an idle page does no work.
  */
-:global([data-theme-preset='motion-native']) .overview {
+:global([data-theme-preset='cinema']) .overview {
   --ov-radius: calc(var(--radius) * 1.4);
   --ov-surface: var(--card);
   --ov-surface-strong: var(--card);
@@ -738,34 +738,34 @@
   --ov-depth-hover: var(--elevation-hover);
   --ov-ease: var(--ease-emphasized);
 }
-:global([data-theme-preset='motion-native']) .overview::before,
-:global([data-theme-preset='motion-native']) .hero::after,
-:global([data-theme-preset='motion-native']) .orbGlow {
+:global([data-theme-preset='cinema']) .overview::before,
+:global([data-theme-preset='cinema']) .hero::after,
+:global([data-theme-preset='cinema']) .orbGlow {
   display: none;
 }
-:global([data-theme-preset='motion-native']) .overview.overview [data-slot='card'] {
+:global([data-theme-preset='cinema']) .overview.overview [data-slot='card'] {
   background: var(--card);
   border-color: var(--border);
 }
-:global([data-theme-preset='motion-native']) .hero {
+:global([data-theme-preset='cinema']) .hero {
   --hero-bg: oklch(0.205 0.006 265);
   --hero-accent: var(--primary-400);
   border-color: oklch(1 0 0 / 0.06);
 }
-:global([data-theme-preset='motion-native']) .hero::before {
+:global([data-theme-preset='cinema']) .hero::before {
   background: radial-gradient(
     480px circle at var(--mx) var(--my),
     color-mix(in oklab, var(--primary-500) 12%, transparent),
     transparent 70%
   );
 }
-:global([data-theme-preset='motion-native']) .todayValue {
+:global([data-theme-preset='cinema']) .todayValue {
   background: none;
   color: var(--hero-fg);
 }
-:global([data-theme-preset='motion-native']) .liveDot::after {
+:global([data-theme-preset='cinema']) .liveDot::after {
   animation-iteration-count: 3;
 }
-:global([data-theme-preset='motion-native']) .heroLink:hover {
+:global([data-theme-preset='cinema']) .heroLink:hover {
   box-shadow: var(--elevation-hover);
 }

@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `project-deep-dive.native` layout, every other preset the
- * `project-deep-dive.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `project-deep-dive.native` layout, every other preset the
+ * `project-deep-dive.classic` one (the layout before the theme redesigns).
  */
 
 import type * as React from 'react';
