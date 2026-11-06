@@ -9,6 +9,9 @@ vi.mock('@/components/layout/header', () => ({
 vi.mock('@/components/layout/sidebar/app-sidebar', () => ({
   AppSidebar: () => <nav data-testid="app-sidebar" />,
 }));
+vi.mock('@/components/layout/cinema/cinema-shell', () => ({
+  CinemaShell: () => <div data-testid="cinema-rail" />,
+}));
 
 describe('DashboardShell (classic presets)', () => {
   it('keeps the inset sidebar and site header', () => {
