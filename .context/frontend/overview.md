@@ -127,9 +127,19 @@ presets, Retro Pixel 3D included, stay selectable in the theme customizer.
 - Appearance is Light / Dark / System; the dashboard and account layouts default to System.
 - Marketing pages (`app/(marketing)`, `marketing.css`) are a separate art-directed system
   and are explicitly out of scope for the Cinema redesign (owner, 2026-11-07).
-- Delivery is phased (owner): PR1 design system + shell + Overview + Time Core; PR2
-  Analytics / Insights / AI; PR3 the remaining dashboard pages, auth and guest pages. Until
-  PR2/PR3 land, those pages keep their Motion Native-era compositions under Cinema tokens.
+- Every dashboard page shares the Cinema language through a few levers, not per-page
+  forks: the page opener (`page-header.native.tsx`, scene number from
+  `cinema-scene-context.tsx`), the workspace primitives (`workspace.tsx` is Cinema-only:
+  ruled metric rows, widgets as ruled sections, inspector with a left rule), the native
+  stat tile, and one skin rule that turns a **top-level card inside the Cinema shell's
+  main** into an editorial section (top rule, no side frame); nested cards keep a box.
+- Auth (`components/auth/cinema-auth-stage.tsx`) shows the Time Core over an
+  **illustrative, labelled sample day** — never real data. Guest pages (reset, 404, 500)
+  use `components/wakaclock/cinema-guest-frame.tsx`. Both go through `LayoutSwitch`.
+- Presence keeps its own pixel-art surface by design (see below).
+- WebGL tests: `@react-three/test-renderer` renders `TimeCoreWorld` without a GPU;
+  intro animations advance from frame `delta`, not `clock.elapsedTime`, so they are
+  testable and an on-demand canvas never skips them.
 
 ### Layouts are per theme — Cinema only
 

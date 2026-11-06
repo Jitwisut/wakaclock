@@ -1,6 +1,5 @@
 import { InfoIcon } from 'lucide-react';
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -30,38 +29,40 @@ export function StatTile({
   className,
 }: StatTileProps) {
   return (
-    <Card className={cn('gap-1.5 py-3.5', className)}>
-      <CardHeader className="flex flex-row items-center gap-3 px-4">
-        <CardTitle className="text-muted-foreground flex items-center gap-1.5 text-xs font-normal">
-          {label}
-          {tooltip && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    aria-label={tooltip}
-                    className="text-muted-foreground/60 hover:text-foreground cursor-help transition-colors"
-                    type="button"
-                  >
-                    <InfoIcon aria-hidden className="size-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent className="max-w-64">{tooltip}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="px-4">
-        {isLoading ? (
-          <Skeleton className="h-8 w-24" />
-        ) : (
-          <div className="text-xl font-semibold tracking-tight tabular-nums" data-slot="stat-value">
-            {value}
-          </div>
+    <div
+      className={cn('flex min-w-0 flex-col gap-2 border-t px-4 py-4', className)}
+      data-slot="stat-tile"
+    >
+      <div className="flex items-center gap-1.5">
+        <span className="cinema-label">{label}</span>
+        {tooltip && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  aria-label={tooltip}
+                  className="text-muted-foreground/60 hover:text-foreground cursor-help transition-colors"
+                  type="button"
+                >
+                  <InfoIcon aria-hidden className="size-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-64">{tooltip}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
-        {subtext && !isLoading && <p className="text-muted-foreground mt-0.5 text-xs">{subtext}</p>}
-      </CardContent>
-    </Card>
+      </div>
+      {isLoading ? (
+        <Skeleton className="h-8 w-24" />
+      ) : (
+        <div
+          className="font-display text-[1.5rem] leading-none font-medium tracking-[-0.035em] tabular-nums"
+          data-slot="stat-value"
+        >
+          {value}
+        </div>
+      )}
+      {subtext && !isLoading && <p className="text-muted-foreground text-xs">{subtext}</p>}
+    </div>
   );
 }

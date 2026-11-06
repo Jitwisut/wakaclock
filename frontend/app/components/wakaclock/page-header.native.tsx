@@ -1,10 +1,13 @@
+'use client';
+
 import type * as React from 'react';
 
+import { useCinemaScene } from '@/components/layout/cinema/cinema-scene-context';
+
 /**
- * The page toolbar every dashboard page opens with: a compact title and one-line
- * description on the left, the page's own controls (range, actions) on the right, and an
- * optional second row for section navigation. It replaces the old oversized heading so
- * content starts near the top of the window, the way a desktop app's toolbar does.
+ * The Cinema page opener: the scene number and section from the navigation rail in mono,
+ * an oversized display headline, a measured description and the page's own controls on
+ * the right, ruled off from the content. An optional second row carries sibling views.
  */
 export function WakaclockPageHeader({
   actions,
@@ -18,15 +21,24 @@ export function WakaclockPageHeader({
   description?: string;
   title: string;
 }) {
+  const scene = useCinemaScene();
+  const section = scene && scene.item.title !== title ? scene.item.title : null;
+
   return (
-    <header className="flex flex-col gap-3" data-slot="page-toolbar">
-      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+    <header className="flex flex-col gap-5 border-b pb-6" data-slot="page-toolbar">
+      <div className="grid grid-cols-1 items-end gap-x-8 gap-y-4 md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="min-w-0">
-          <h1 className="font-display text-xl leading-tight font-semibold tracking-tight">
+          {scene && (
+            <p className="cinema-label flex items-center gap-2">
+              <span className="text-primary">{scene.number}</span>
+              {section && <span>· {section}</span>}
+            </p>
+          )}
+          <h1 className="font-display mt-3 text-[length:clamp(2.25rem,4.2vw,4rem)] leading-[0.95] font-medium tracking-[-0.04em] text-balance">
             {title}
           </h1>
           {description && (
-            <p className="text-muted-foreground mt-0.5 max-w-3xl text-sm text-pretty">
+            <p className="text-muted-foreground mt-3 max-w-2xl text-[0.9375rem] leading-relaxed text-pretty">
               {description}
             </p>
           )}

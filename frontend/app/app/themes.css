@@ -251,11 +251,35 @@ body {
     font-variant-numeric: tabular-nums;
   }
 
-  /* Surfaces: a hairline frame, square-ish corners, no resting shadow. */
+  /* Surfaces: a hairline frame drawn on the page itself — no fill, no resting shadow —
+     so panels read as ruled regions of one sheet rather than a stack of cards. A card
+     inside a card gets a faint fill so nesting stays legible. */
   & [data-slot='card'] {
     border-color: var(--border);
+    background: transparent;
     box-shadow: none;
     transition: border-color var(--motion-hover) var(--ease-standard);
+  }
+
+  & [data-slot='card'] [data-slot='card'] {
+    background: color-mix(in oklch, var(--foreground) 2.5%, transparent);
+  }
+
+  /* Inside the Cinema shell a top-level card is an editorial section: a rule above,
+     content aligned to the page grid, no side frame. Only nested cards keep a box. */
+  & [data-slot='cinema-shell'] main [data-slot='card']:not([data-slot='card'] [data-slot='card']) {
+    border-width: 1px 0 0;
+    border-radius: 0;
+    padding-top: 1.25rem;
+    padding-bottom: 0.25rem;
+  }
+
+  &
+    [data-slot='cinema-shell']
+    main
+    [data-slot='card']:not([data-slot='card'] [data-slot='card'])
+    > :is([data-slot='card-header'], [data-slot='card-content'], [data-slot='card-footer']) {
+    padding-inline: 0;
   }
 
   & [data-slot='card-title'] {

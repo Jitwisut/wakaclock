@@ -17,20 +17,11 @@ import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 import { TimeCoreDial } from './time-core-dial';
 import styles from './time-core.module.css';
+import { supportsWebGL } from './webgl';
 
 const TimeCoreScene = dynamic(() => import('./time-core-scene'), { ssr: false });
 
 const EASE = [0.16, 1, 0.3, 1] as const;
-
-/** True when this browser can create a WebGL context. */
-export function supportsWebGL(): boolean {
-  try {
-    const canvas = document.createElement('canvas');
-    return Boolean(canvas.getContext('webgl2') ?? canvas.getContext('webgl'));
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Whether the stage should animate: on screen and in a visible tab. Off screen or in a

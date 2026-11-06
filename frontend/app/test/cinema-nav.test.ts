@@ -55,6 +55,16 @@ describe('activeScene', () => {
     expect(activeScene('/dashboard/wakaclock', scenes).scene?.item.title).toBe('Overview');
   });
 
+  it('never numbers a page without its own entry as Overview', () => {
+    expect(activeScene('/dashboard/wakaclock/agents', scenes)).toEqual({
+      scene: null,
+      subHref: null,
+    });
+    expect(activeScene('/dashboard/wakaclock/settings/keys', scenes).scene?.item.title).toBe(
+      'Settings'
+    );
+  });
+
   it('finds nothing outside the dashboard', () => {
     expect(activeScene('/pricing', scenes)).toEqual({ scene: null, subHref: null });
   });

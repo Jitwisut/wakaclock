@@ -7,7 +7,6 @@ import { ArrowUpRight, CheckCircle2Icon, HeartPulseIcon } from 'lucide-react';
 import { motion } from 'motion/react';
 import Link from 'next/link';
 
-import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { IncompleteTimeBadge } from '@/components/wakaclock/delivery-status-notice';
 import { XpBar } from '@/components/wakaclock/rpg/xp-bar';
@@ -50,16 +49,19 @@ function GoalOrb({ isLoading, todaySeconds }: { isLoading: boolean; todaySeconds
   }
 
   return (
-    <Card className="items-center justify-center gap-3 px-5 py-5" data-slot="quest-widget">
-      <div className="relative size-40">
+    <div
+      className="flex flex-col items-center justify-center gap-4 border-t px-6 py-8 sm:border-t-0 sm:border-l"
+      data-slot="quest-widget"
+    >
+      <div className="relative size-36">
         <svg aria-hidden className="size-full" viewBox="0 0 200 200">
           <circle
-            className="stroke-muted"
+            className="stroke-border"
             cx="100"
             cy="100"
             fill="none"
             r={RING_RADIUS}
-            strokeWidth="14"
+            strokeWidth="5"
           />
           <motion.circle
             animate={{ strokeDashoffset: RING_CIRCUMFERENCE * (1 - (isLoading ? 0 : progress)) }}
@@ -70,8 +72,8 @@ function GoalOrb({ isLoading, todaySeconds }: { isLoading: boolean; todaySeconds
             initial={{ strokeDashoffset: RING_CIRCUMFERENCE }}
             r={RING_RADIUS}
             strokeDasharray={RING_CIRCUMFERENCE}
-            strokeLinecap="round"
-            strokeWidth="14"
+            strokeLinecap="butt"
+            strokeWidth="5"
             transform="rotate(-90 100 100)"
             transition={{ duration: 1.2, ease: [0.2, 0, 0, 1] }}
           />
@@ -82,7 +84,7 @@ function GoalOrb({ isLoading, todaySeconds }: { isLoading: boolean; todaySeconds
             aria-valuemax={100}
             aria-valuemin={0}
             aria-valuenow={Math.round(progress * 100)}
-            className="text-3xl font-semibold tracking-tight tabular-nums"
+            className="font-display text-4xl font-medium tracking-[-0.04em] tabular-nums"
             role="progressbar"
           >
             {isLoading ? '··' : `${Math.round(progress * 100)}%`}
@@ -90,12 +92,17 @@ function GoalOrb({ isLoading, todaySeconds }: { isLoading: boolean; todaySeconds
         </div>
       </div>
       <div className="text-center">
-        <p className="text-sm font-semibold">Today&apos;s quest</p>
-        <p className={cn('text-muted-foreground text-xs', complete && 'text-primary font-medium')}>
+        <p className="cinema-label">Today&apos;s quest</p>
+        <p
+          className={cn(
+            'text-muted-foreground mt-1.5 text-sm',
+            complete && 'text-primary font-medium'
+          )}
+        >
           {note}
         </p>
       </div>
-    </Card>
+    </div>
   );
 }
 
@@ -136,11 +143,14 @@ export function CharacterSheetHero() {
     : (statusBar.data?.total_seconds ?? 0);
 
   return (
-    <div className="grid grid-cols-1 gap-5 sm:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-      <Card aria-labelledby="today-heading" className="gap-4 px-5 py-5" role="region">
-        <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs">
-          <span className="inline-flex items-center gap-1.5">
-            <span aria-hidden className="bg-primary size-1.5 rounded-full" /> Refreshes every minute
+    <div className="grid grid-cols-1 border-y sm:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+      <section
+        aria-labelledby="today-heading"
+        className="flex min-w-0 flex-col gap-5 py-6 sm:pr-8"
+      >
+        <div className="cinema-label flex w-full flex-wrap items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-2">
+            <span aria-hidden className="bg-primary size-1.5" /> Refreshes every minute
           </span>
           {now && (
             <span>
@@ -160,7 +170,7 @@ export function CharacterSheetHero() {
           {statusBar.isLoading ? (
             <Skeleton className="mt-2 h-12 w-48" />
           ) : (
-            <p className="mt-1 text-5xl leading-none font-semibold tracking-tight tabular-nums">
+            <p className="font-display mt-2 text-[length:clamp(3.5rem,6vw,5.25rem)] leading-[0.9] font-medium tracking-[-0.05em] tabular-nums">
               {activeAvailable ? (
                 <AnimatedDuration seconds={todaySeconds} />
               ) : (
@@ -170,20 +180,20 @@ export function CharacterSheetHero() {
           )}
         </div>
         <IncompleteTimeBadge />
-        <div className="text-muted-foreground flex flex-wrap gap-2 text-xs">
-          <span className="bg-muted inline-flex items-center gap-1.5 rounded-full px-2.5 py-1">
+        <div className="cinema-label flex flex-wrap items-center gap-x-4 gap-y-2">
+          <span className="inline-flex items-center gap-1.5">
             <HeartPulseIcon aria-hidden className="size-3.5" />
-            <strong className="text-foreground">
+            <strong className="text-foreground font-medium">
               {formatCompactNumber(statusBar.data?.heartbeat_count ?? 0)}
             </strong>{' '}
             heartbeats
           </span>
-          <span className="bg-muted rounded-full px-2.5 py-1">
+          <span className="border-l pl-4">
             {activeAvailable ? 'Active' : 'WakaTime-compatible'}
           </span>
         </div>
-        <div className="mt-auto flex flex-wrap items-end justify-between gap-4 border-t pt-4">
-          <div className="min-w-48 flex-1">
+        <div className="mt-auto flex flex-col items-start gap-4 border-t pt-4">
+          <div className="w-full max-w-md">
             <XpBar
               isLoading={allTime.isLoading}
               totalSeconds={
@@ -200,7 +210,7 @@ export function CharacterSheetHero() {
             Explore your activity <ArrowUpRight aria-hidden size={15} />
           </Link>
         </div>
-      </Card>
+      </section>
       <GoalOrb isLoading={statusBar.isLoading} todaySeconds={todaySeconds} />
     </div>
   );

@@ -26,6 +26,7 @@ import { useVisibleNavItems } from '@/hooks/use-visible-nav-items';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 import { activeScene, type CinemaScene, cinemaScenes } from './cinema-nav';
+import { CinemaSceneProvider } from './cinema-scene-context';
 import styles from './cinema-shell.module.css';
 
 const EASE = [0.16, 1, 0.3, 1] as const;
@@ -296,7 +297,7 @@ function CinemaSlate({ onOpenIndex }: { onOpenIndex: () => void }) {
 export function CinemaShell({ children }: { children: React.ReactNode }) {
   const { open } = useSidebar();
   const [indexOpen, setIndexOpen] = React.useState(false);
-  const pathname = usePathname();
+  const { active, pathname } = useScenes();
 
   React.useEffect(() => {
     setIndexOpen(false);
@@ -312,7 +313,7 @@ export function CinemaShell({ children }: { children: React.ReactNode }) {
         <div className={styles.column}>
           <CinemaSlate onOpenIndex={() => setIndexOpen(true)} />
           <main className={styles.main} id="cinema-main" tabIndex={-1}>
-            {children}
+            <CinemaSceneProvider value={active.scene}>{children}</CinemaSceneProvider>
           </main>
         </div>
         <CinemaIndex onOpenChange={setIndexOpen} open={indexOpen} />

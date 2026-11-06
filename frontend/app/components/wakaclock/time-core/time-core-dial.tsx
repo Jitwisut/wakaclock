@@ -19,8 +19,9 @@ export function TimeCoreDial({
   const outer = (RING_BASE_RADIUS + RING_SPACING * 6 + 0.18) * scale;
   const size = outer * 2 + 80;
   const c = size / 2;
+  // Rounded so server and browser trig agree to the digit (otherwise hydration differs).
   const point = (angle: number, r: number) =>
-    `${c + Math.sin(angle) * r},${c - Math.cos(angle) * r}`;
+    `${(c + Math.sin(angle) * r).toFixed(2)},${(c - Math.cos(angle) * r).toFixed(2)}`;
 
   return (
     <svg

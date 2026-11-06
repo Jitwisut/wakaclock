@@ -36,7 +36,7 @@ function LifetimeRow({
         <dt className="text-sm">{label}</dt>
         {subtext && <dd className="text-muted-foreground text-xs">{subtext}</dd>}
       </div>
-      <dd className="shrink-0 text-lg font-semibold tracking-tight tabular-nums">
+      <dd className="font-display shrink-0 text-2xl font-medium tracking-[-0.03em] tabular-nums">
         {isLoading ? <Skeleton className="h-6 w-16" /> : value}
       </dd>
     </div>

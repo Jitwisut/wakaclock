@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { AuthForm, type AuthMode } from '@/components/auth/auth-form';
+import { CinemaAuthStage } from '@/components/auth/cinema-auth-stage';
+import { LayoutSwitch } from '@/components/wakaclock/layout-switch';
 import { useWakaclockUserStore } from '@/lib/wakaclock/user-store';
 
 /** Where a visitor lands when they arrive at /login directly rather than being sent there. */
@@ -94,7 +96,10 @@ export function AuthScreen({ mode }: { mode: AuthMode }) {
       >
         {mode === 'login' ? 'Skip to sign-in form' : 'Skip to registration form'}
       </a>
-      <SignalPanel mode={mode} />
+      <LayoutSwitch
+        classic={<SignalPanel mode={mode} />}
+        native={<CinemaAuthStage mode={mode} />}
+      />
 
       <main
         className="flex items-center justify-center px-6 py-14 sm:px-10 lg:px-16"

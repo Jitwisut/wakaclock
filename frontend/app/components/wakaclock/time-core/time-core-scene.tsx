@@ -110,13 +110,15 @@ function Arc({
   React.useEffect(() => () => geometry.dispose(), [geometry]);
   const [hovered, setHovered] = React.useState(false);
   const mesh = React.useRef<THREE.Mesh>(null);
-  const born = React.useRef<null | number>(null);
+  // Seconds of rendered time since mount, from frame deltas: the intro plays over frames
+  // actually drawn, so an on-demand canvas never skips straight to the end of it.
+  const elapsed = React.useRef(0);
 
-  useFrame((state) => {
+  useFrame((_, delta) => {
     const target = mesh.current;
     if (!target) return;
-    born.current ??= state.clock.elapsedTime;
-    const age = reducedMotion ? 1 : (state.clock.elapsedTime - born.current - index * 0.08) / 0.9;
+    elapsed.current += delta;
+    const age = reducedMotion ? 1 : (elapsed.current - index * 0.08) / 0.9;
     const grow = easeOut(Math.min(1, Math.max(0, age)));
     target.scale.set(1, Math.max(0.001, grow), 1);
     const lift = selected || hovered ? 0.07 : 0;
@@ -273,14 +275,12 @@ function LabelProjector({
  */
 function CoreSpindle({ model, reducedMotion }: { model: TimeCoreModel; reducedMotion: boolean }) {
   const group = React.useRef<THREE.Group>(null);
-  const born = React.useRef<null | number>(null);
-  useFrame((state) => {
+  const elapsed = React.useRef(0);
+  useFrame((_, delta) => {
     const node = group.current;
     if (!node) return;
-    born.current ??= state.clock.elapsedTime;
-    const t = reducedMotion
-      ? 1
-      : easeOut(Math.min(1, (state.clock.elapsedTime - born.current) / 1.4));
+    elapsed.current += delta;
+    const t = reducedMotion ? 1 : easeOut(Math.min(1, elapsed.current / 1.4));
     node.scale.set(1, Math.max(0.001, t), 1);
   });
 
@@ -357,17 +357,17 @@ function Dust({ count, reducedMotion }: { count: number; reducedMotion: boolean 
 function CameraRig({ reducedMotion }: { reducedMotion: boolean }) {
   const { camera } = useThree();
   const settled = React.useRef(reducedMotion);
-  const start = React.useRef<null | number>(null);
+  const elapsed = React.useRef(0);
   const from = React.useMemo(() => new THREE.Vector3(0, 2.4, 10.5), []);
   const to = React.useMemo(() => new THREE.Vector3(0, 4.2, 7.6), []);
   React.useLayoutEffect(() => {
     camera.position.copy(reducedMotion ? to : from);
     camera.lookAt(0, -0.45, 0);
   }, [camera, from, reducedMotion, to]);
-  useFrame((state) => {
+  useFrame((_, delta) => {
     if (settled.current) return;
-    start.current ??= state.clock.elapsedTime;
-    const t = Math.min(1, (state.clock.elapsedTime - start.current) / 1.8);
+    elapsed.current += delta;
+    const t = Math.min(1, elapsed.current / 1.8);
     camera.position.lerpVectors(from, to, easeOut(t));
     camera.lookAt(0, -0.45, 0);
     if (t >= 1) settled.current = true;
@@ -375,8 +375,9 @@ function CameraRig({ reducedMotion }: { reducedMotion: boolean }) {
   return null;
 }
 
-export default function TimeCoreScene({
-  active,
+/** Everything inside the canvas: dial, rings, spindle, dust, camera and labels. */
+export function TimeCoreWorld({
+  compact,
   exploded,
   focusedRing,
   model,
@@ -385,25 +386,10 @@ export default function TimeCoreScene({
   overlay,
   reducedMotion,
   selectedArcId,
-}: TimeCoreSceneProps) {
-  const [compact, setCompact] = React.useState(false);
+}: { compact: boolean } & Omit<TimeCoreSceneProps, 'active'>) {
   const ringGroups = React.useRef<(null | THREE.Group)[]>([]);
-  React.useEffect(() => {
-    const query = window.matchMedia('(max-width: 767px)');
-    const update = () => setCompact(query.matches);
-    update();
-    query.addEventListener('change', update);
-    return () => query.removeEventListener('change', update);
-  }, []);
-
   return (
-    <Canvas
-      camera={{ far: 60, fov: 36, near: 0.1, position: [0, 4.2, 7.6] }}
-      dpr={compact ? [1, 1.5] : [1, 1.75]}
-      frameloop={active ? 'always' : 'demand'}
-      gl={{ antialias: true, powerPreference: 'low-power' }}
-      onPointerMissed={() => onHover(null)}
-    >
+    <>
       <CameraRig reducedMotion={reducedMotion} />
       <ambientLight intensity={0.45} />
       <directionalLight color="#fff3df" intensity={1.6} position={[-4, 6, 3]} />
@@ -441,8 +427,31 @@ export default function TimeCoreScene({
         <Dust count={compact ? 70 : 200} reducedMotion={reducedMotion} />
       </group>
       <LabelProjector overlay={overlay} rings={ringGroups} />
+    </>
+  );
+}
+
+export default function TimeCoreScene({ active, ...props }: TimeCoreSceneProps) {
+  const [compact, setCompact] = React.useState(false);
+  React.useEffect(() => {
+    const query = window.matchMedia('(max-width: 767px)');
+    const update = () => setCompact(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  return (
+    <Canvas
+      camera={{ far: 60, fov: 36, near: 0.1, position: [0, 4.2, 7.6] }}
+      dpr={compact ? [1, 1.5] : [1, 1.75]}
+      frameloop={active ? 'always' : 'demand'}
+      gl={{ antialias: true, powerPreference: 'low-power' }}
+      onPointerMissed={() => props.onHover(null)}
+    >
+      <TimeCoreWorld compact={compact} {...props} />
       <OrbitControls
-        autoRotate={active && !reducedMotion}
+        autoRotate={active && !props.reducedMotion}
         autoRotateSpeed={0.35}
         enableDamping
         enablePan={false}
