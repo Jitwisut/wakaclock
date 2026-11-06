@@ -53,6 +53,18 @@ describe('buildTimeCore', () => {
     expect(model.rings[0].cssColor).toMatch(/^oklch\(/);
   });
 
+  it("uses the server's Activity with timeout figure for the headline", () => {
+    const blocks = [block('web', 6, 60)];
+    expect(
+      buildTimeCore(response(blocks, { wakatime_compatible_seconds: 4000 })).totalSeconds
+    ).toBe(4000);
+    expect(buildTimeCore(response(blocks, { total_seconds: 3700 })).totalSeconds).toBe(3700);
+    expect(
+      buildTimeCore(response(blocks, { total_seconds: 3700, wakatime_compatible_seconds: 0 }))
+        .totalSeconds
+    ).toBe(0);
+  });
+
   it('counts time outside any project in the total but draws it on no ring', () => {
     const model = buildTimeCore(
       response([block(null, 3, 20), block('  ', 4, 10), block('web', 9, 30)])

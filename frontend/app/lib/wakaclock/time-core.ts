@@ -61,7 +61,10 @@ export type TimeCoreModel = {
   rangeStart: number;
   rings: TimeCoreRing[];
   sessionCount: number;
-  /** Activity with timeout: the sum of every duration block, unassigned included. */
+  /**
+   * Activity with timeout: `wakatime_compatible_seconds`, else `total_seconds`, else the sum
+   * of every duration block (unassigned included). Matches the Sessions panel.
+   */
   totalSeconds: number;
 };
 
@@ -117,9 +120,12 @@ export function buildTimeCore(data: DurationsResponse): TimeCoreModel {
       : rangeStart + DAY_SECONDS;
   const rangeSeconds = rangeEnd - rangeStart;
 
-  const totalSeconds = blocks.reduce((sum, block) => sum + block.duration_seconds, 0);
+  const blockSeconds = blocks.reduce((sum, block) => sum + block.duration_seconds, 0);
+  // The headline is the same "Activity with timeout" figure the Sessions panel shows
+  // (owner approval 2026-11-07); the block sum is the fallback when the server omits it.
+  const totalSeconds = data.wakatime_compatible_seconds ?? data.total_seconds ?? blockSeconds;
   const visible = blocks.filter((block) => !isUnassignedTimelineProject(block.project));
-  const hiddenSeconds = totalSeconds - visible.reduce((sum, b) => sum + b.duration_seconds, 0);
+  const hiddenSeconds = blockSeconds - visible.reduce((sum, b) => sum + b.duration_seconds, 0);
   const sessions = buildTimelineSessions(visible);
 
   const byProject = new Map<string, TimeCoreArc[]>();
