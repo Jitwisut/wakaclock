@@ -1,0 +1,493 @@
+/*
+ * The Time Core stage. Always dark (the --stage tokens), in light mode too: a lit set
+ * inside the editorial page. Asymmetric: numbers on a narrow left column, the dial taking
+ * the larger right side, and a HUD drawn as hairlines and mono labels rather than cards.
+ */
+
+.stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+  margin-inline: calc(var(--gutter) * -1);
+  margin-top: calc(clamp(1.25rem, 2.6vw, 2.5rem) * -1);
+  border-bottom: 1px solid var(--stage-line);
+  background: var(--stage);
+  color: var(--stage-foreground);
+  isolation: isolate;
+}
+
+@media (min-width: 1024px) {
+  .stage {
+    min-height: min(46rem, calc(100svh - var(--bar-height)));
+    grid-template-columns: minmax(20rem, 5fr) minmax(0, 7fr);
+  }
+}
+
+.stage :global(.cinema-label) {
+  color: var(--stage-muted);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------- Copy column ---------- */
+
+.copy {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1.75rem;
+  padding: clamp(1.75rem, 4vw, 3.5rem) var(--gutter) 2rem;
+}
+
+.total {
+  margin: 0.75rem 0 0;
+  font-family: var(--display-family);
+  font-size: var(--type-hero);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.055em;
+  line-height: 0.88;
+}
+
+.totalCaption {
+  margin-top: 0.75rem;
+  color: var(--stage-muted);
+  font-size: 1rem;
+}
+
+.totalCaption :global(.cinema-serif) {
+  color: var(--stage-foreground);
+  font-size: 1.375rem;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--stage-line);
+}
+
+.metrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-right: 1px solid var(--stage-line);
+  padding: 0.875rem 0.75rem 0 0;
+}
+
+.metrics > div + div {
+  padding-left: 0.875rem;
+}
+
+.metrics > div:last-child {
+  border-right: 0;
+}
+
+.metrics dd {
+  font-family: var(--display-family);
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Measured human / AI split. */
+.attribution {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.attributionBar {
+  display: flex;
+  height: 6px;
+  gap: 2px;
+}
+
+.attributionBar span {
+  min-width: 2px;
+}
+
+.stage [data-part='human'] {
+  --part: #efe9dc;
+}
+
+.stage [data-part='both'] {
+  --part: #8fa6bf;
+}
+
+.stage [data-part='ai'] {
+  --part: #3ccf8e;
+}
+
+.attributionBar span {
+  background: var(--part);
+}
+
+.attributionLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  font-size: 0.8125rem;
+}
+
+.attributionLegend > div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+}
+
+.attributionLegend dt {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--stage-muted);
+}
+
+.attributionLegend dt::before {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  background: var(--part);
+}
+
+.attributionLegend dd {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Project list: the accessible twin of the dial. */
+.legend {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--stage-line);
+}
+
+.legendItem {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 1.75rem 0.625rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.625rem;
+  border-bottom: 1px solid var(--stage-line);
+  padding-block: 0.625rem;
+  color: var(--stage-foreground);
+  text-align: left;
+  transition:
+    background-color var(--motion-hover) var(--ease-standard),
+    padding var(--motion-panel) var(--ease-emphasized);
+}
+
+.legendItem:hover,
+.legendItem[aria-pressed='true'] {
+  background: oklch(0.96 0.01 85 / 0.04);
+  padding-left: 0.5rem;
+}
+
+.legendItem i {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+.legendIndex {
+  font-family: var(--font-mono);
+  font-size: var(--type-label);
+  color: var(--stage-muted);
+}
+
+.legendName {
+  overflow: hidden;
+  font-size: 0.875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.legendValue {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--stage-muted);
+}
+
+.note {
+  color: var(--stage-muted);
+  font-size: 0.75rem;
+}
+
+/* ---------- Viewport ---------- */
+
+.viewport {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 24rem;
+  flex-direction: column;
+  border-top: 1px solid var(--stage-line);
+}
+
+@media (min-width: 1024px) {
+  .viewport {
+    border-top: 0;
+    border-left: 1px solid var(--stage-line);
+  }
+}
+
+.hudTop,
+.hudBottom {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem var(--gutter);
+}
+
+.hudBottom {
+  flex-wrap: wrap;
+  border-top: 1px solid var(--stage-line);
+}
+
+.canvas {
+  position: relative;
+  min-height: 22rem;
+  flex: 1;
+  cursor: grab;
+}
+
+.canvas:active {
+  cursor: grabbing;
+}
+
+.canvas > :global(div):not(.labels),
+.canvas > svg {
+  position: absolute !important;
+  inset: 0;
+}
+
+/* Corner brackets: the viewfinder. */
+.canvas::before,
+.canvas::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-color: var(--stage-muted);
+  pointer-events: none;
+}
+
+.canvas::before {
+  top: 0.75rem;
+  left: 0.75rem;
+  border-top: 1px solid;
+  border-left: 1px solid;
+}
+
+.canvas::after {
+  right: 0.75rem;
+  bottom: 0.75rem;
+  border-right: 1px solid;
+  border-bottom: 1px solid;
+}
+
+.emptyNote {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--stage-muted);
+  font-size: 0.875rem;
+  pointer-events: none;
+}
+
+.dayNav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.dayNav button,
+.explode {
+  display: inline-flex;
+  height: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid var(--stage-line);
+  border-radius: var(--radius);
+  color: var(--stage-foreground);
+  transition:
+    background-color var(--motion-hover) var(--ease-standard),
+    border-color var(--motion-hover) var(--ease-standard),
+    transform var(--motion-micro) var(--ease-emphasized);
+}
+
+.dayNav button {
+  width: 2.25rem;
+}
+
+.dayNav button svg,
+.explode svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.dayNav button:hover:not(:disabled),
+.explode:hover:not(:disabled) {
+  border-color: oklch(0.96 0.01 85 / 0.35);
+  background: oklch(0.96 0.01 85 / 0.06);
+}
+
+.dayNav button:active:not(:disabled),
+.explode:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.dayNav button:disabled,
+.explode:disabled {
+  opacity: 0.35;
+}
+
+.dayNavLabel {
+  min-width: 6.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.explode {
+  padding-inline: 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.explode[aria-pressed='true'] {
+  border-color: var(--primary-500);
+  color: var(--primary-400);
+}
+
+.inspector {
+  display: grid;
+  min-width: min(100%, 16rem);
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  gap: 0.125rem 1rem;
+  margin-left: auto;
+  font-size: 0.8125rem;
+}
+
+.inspector :global(.cinema-label) {
+  grid-column: 1 / -1;
+}
+
+.inspectorProject {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.inspectorProject i {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex-shrink: 0;
+}
+
+.inspectorTime,
+.inspectorDuration {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--stage-muted);
+}
+
+.inspectorDuration {
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: end;
+  color: var(--stage-foreground);
+}
+
+.inspectorHint {
+  grid-column: 1 / -1;
+  color: var(--stage-muted);
+  font-size: 0.75rem;
+}
+
+/* Labels the WebGL scene positions over its anchors (see LabelProjector). */
+.labels {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.labels > span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  opacity: 0;
+  translate: -50% -50%;
+  will-change: transform;
+}
+
+.labels > :global(.time-core-layer-label) {
+  translate: 0 -50%;
+}
+
+.stage :global(.time-core-hour) {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  color: var(--stage-muted);
+  pointer-events: none;
+  user-select: none;
+}
+
+.stage :global(.time-core-layer-label) {
+  display: inline-block;
+  border-left: 1px solid var(--primary-500);
+  padding-left: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--stage-foreground);
+  pointer-events: none;
+}
+
+@media (max-width: 767px) {
+  .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metrics > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .metrics > div:nth-child(3) {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--stage-line);
+    padding: 0.875rem 0 0;
+    margin-top: 0.875rem;
+  }
+
+  .inspector {
+    margin-left: 0;
+    width: 100%;
+  }
+}

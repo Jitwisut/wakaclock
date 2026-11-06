@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `sync-status-panel.native` layout, every other preset the
- * `sync-status-panel.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `sync-status-panel.native` layout, every other preset the
+ * `sync-status-panel.classic` one (the layout before the theme redesigns).
  */
 
 import { LayoutSwitch } from '@/components/wakaclock/layout-switch';

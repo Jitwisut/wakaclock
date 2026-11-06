@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `top-projects.native` layout, every other preset the
- * `top-projects.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `top-projects.native` layout, every other preset the
+ * `top-projects.classic` one (the layout before the theme redesigns).
  */
 
 import { LayoutSwitch } from '@/components/wakaclock/layout-switch';

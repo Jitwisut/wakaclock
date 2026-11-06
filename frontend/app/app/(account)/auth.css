@@ -62,14 +62,14 @@
 }
 
 /*
- * Motion Native: the brand panel becomes the same graphite stage the dashboard heroes
+ * Cinema: the brand panel becomes the same graphite stage the dashboard heroes
  * use, with the AtoAxis green carried by the accent text instead of the whole surface.
  */
-[data-theme-preset='motion-native'] .auth-brand-panel {
+[data-theme-preset='cinema'] .auth-brand-panel {
   background: oklch(0.205 0.006 265);
   color: oklch(0.95 0.003 265);
 }
 
-[data-theme-preset='motion-native'] .auth-brand-panel #auth-panel-heading {
+[data-theme-preset='cinema'] .auth-brand-panel #auth-panel-heading {
   color: var(--primary-300);
 }

@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `attribution-mix-list.native` layout, every other preset the
- * `attribution-mix-list.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `attribution-mix-list.native` layout, every other preset the
+ * `attribution-mix-list.classic` one (the layout before the theme redesigns).
  */
 
 import type * as React from 'react';

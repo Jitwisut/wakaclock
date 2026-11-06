@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `attribution-overview.native` layout, every other preset the
- * `attribution-overview.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `attribution-overview.native` layout, every other preset the
+ * `attribution-overview.classic` one (the layout before the theme redesigns).
  */
 
 import type * as React from 'react';

@@ -1,5 +1,5 @@
 export const DEFAULT_THEME = {
-  preset: 'motion-native',
+  preset: 'cinema',
   radius: 'default',
   scale: 'none',
   contentLayout: 'full',
@@ -9,6 +9,19 @@ export type ThemePreset = string;
 export type ThemeRadius = 'default' | 'lg' | 'md' | 'none' | 'sm' | 'xl';
 export type ThemeScale = 'lg' | 'none' | 'sm';
 export type ThemeContentLayout = 'centered' | 'full';
+
+/**
+ * Presets that were retired and the preset that replaced them. Cinema replaced Motion
+ * Native (owner decision 2026-11-07); a browser still holding the old cookie gets the
+ * replacement instead of an unthemed page.
+ */
+const RETIRED_PRESETS: Record<string, ThemePreset> = { 'motion-native': 'cinema' };
+
+/** The preset to render for a stored value, mapping retired presets forward. */
+export function resolvePreset(value: string | undefined): ThemePreset {
+  if (!value) return DEFAULT_THEME.preset;
+  return RETIRED_PRESETS[value] ?? value;
+}
 
 export type ThemeType = {
   contentLayout: ThemeContentLayout;
@@ -27,9 +40,9 @@ export type ThemeType = {
  */
 export const THEMES = [
   {
-    name: 'Motion Native',
-    value: 'motion-native',
-    colors: ['oklch(0.52 0.12 158)'],
+    name: 'Cinema',
+    value: 'cinema',
+    colors: ['oklch(0.7 0.15 158)', 'oklch(0.2 0.012 255)'],
   },
   {
     name: 'Retro Pixel 3D',

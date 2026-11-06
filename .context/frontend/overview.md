@@ -89,49 +89,66 @@ live agent or project that is not on the sky is listed but not drawn; a project 
 shared "other" planet only when its id is in that planet's `folded_keys`. While live, the page shows the
 `useDeliveryHealth` warning, since queued data arrives late.
 
-### Motion Native — default theme preset
+### Cinema — default theme preset
 
-`[data-theme-preset='motion-native']` in `app/themes.css` is the dashboard default
-(`lib/themes.ts` `DEFAULT_THEME`); the other presets, Retro Pixel 3D included, stay
-selectable in the theme customizer. Owner decision 2026-11-03.
+`[data-theme-preset='cinema']` in `app/themes.css` is the dashboard default
+(`lib/themes.ts` `DEFAULT_THEME`). It **replaced Motion Native** on 2026-11-07 (owner
+decision); `resolvePreset()` maps a stored `motion-native` cookie to `cinema`. The other
+presets, Retro Pixel 3D included, stay selectable in the theme customizer.
 
-- All visual values are tokens in that block (colour, type, radius, `--elevation-*`,
-  `--material-*`, `--motion-*` durations, `--ease-*` curves, layers) with light and dark
-  values. Components read tokens; the skin below the tokens restyles shadcn primitives by
-  `data-slot`, as the Retro preset does.
-- Page-level art in CSS modules (overview, settings, timeline, heatmap, time-machine
-  city, insights) has `:global([data-theme-preset='motion-native'])` overrides at the end
-  of each file. New page art should read the preset tokens rather than fixed colours.
-- Motion rules: transform/opacity only; material blur only on small floating surfaces;
-  no infinite animation on an idle page (attention pulses run a few iterations). Measured
-  on a production build: zero infinite animations after 6 s idle on the audited routes.
-- Appearance is Light / Dark / System (`components/layout/header/theme-switch.tsx`);
-  the dashboard and account layouts default to System.
-- `app/dashboard/(auth)/template.tsx` gives every dashboard route a short entrance; the
-  toolbar shows a breadcrumb (`toolbar-breadcrumb.tsx`); the sidebar's current-page
-  highlight glides between items (`nav-main.tsx`, visible only when a preset opts in).
-- Marketing pages (`app/(marketing)`, `marketing.css`) are a separate art-directed
-  system and do not use presets; they were not redesigned in this pass.
+- Art direction "futuristic editorial cinema": cinema-black stage, graphite, warm ivory
+  type, the AtoAxis green as the only accent (owner chose green over the prompt's orange),
+  atmospheric blue for secondary series. Light mode is ivory paper; `--stage-*` surfaces
+  (the Time Core) stay dark in both modes. 4px corners, hairline rules, no resting shadow.
+- Type: Space Grotesk (display), Instrument Serif (`.cinema-serif` accents), IBM Plex Mono
+  (`.cinema-label` technical labels), IBM Plex Sans Thai (text; Latin and Thai files are
+  two `next/font` families). Vendored woff2 in `public/fonts` — builds never fetch fonts.
+- All visual values are tokens in the preset block; the skin below restyles shadcn
+  primitives by `data-slot`. CSS-module page art keeps `:global([data-theme-preset='cinema'])`
+  overrides at the end of each file.
+- Shell: `components/layout/dashboard-shell.tsx` is a facade — Cinema renders
+  `components/layout/cinema/cinema-shell.tsx` (numbered navigation rail, slate bar with
+  scene number and breadcrumb, full-screen index below `lg`), every other preset the
+  classic shadcn sidebar + `SiteHeader`. Both sit in `SidebarProvider`, so the rail reuses
+  the `sidebar_state` cookie and ⌘B.
+- Overview (`page.native.tsx`) is composed as scenes: 01 Time Core stage, 02 The range,
+  03 AI & code, 04 The record (`components/wakaclock/cinema-section.tsx`).
+- **Time Core** (`components/wakaclock/time-core/`): the selected day from
+  `GET /durations` as a 24-hour dial — a ring per project, an arc per grouped session, an
+  exploded view, a centre spindle that is split human / both / AI **only** when
+  `active_coverage === 'measured'`. `lib/wakaclock/time-core.ts` builds the one model the
+  WebGL scene (React Three Fiber, lazy), the SVG fallback (no WebGL) and the accessible
+  project list all render. It shares the Sessions panel's query key. Labels are plain DOM
+  positioned by `LabelProjector` — drei `<Html>` breaks under React 19 on unmount.
+- Motion rules: transform/opacity only; no infinite animation on an idle page, with one
+  owner-approved exception: the Time Core scene may idle-rotate while on screen in a
+  visible tab (it drops to on-demand rendering otherwise, and is static under reduced
+  motion).
+- Appearance is Light / Dark / System; the dashboard and account layouts default to System.
+- Marketing pages (`app/(marketing)`, `marketing.css`) are a separate art-directed system
+  and are explicitly out of scope for the Cinema redesign (owner, 2026-11-07).
+- Delivery is phased (owner): PR1 design system + shell + Overview + Time Core; PR2
+  Analytics / Insights / AI; PR3 the remaining dashboard pages, auth and guest pages. Until
+  PR2/PR3 land, those pages keep their Motion Native-era compositions under Cinema tokens.
 
-### Layouts are per theme — Motion Native only
+### Layouts are per theme — Cinema only
 
 Owner rule (2026-11-04): a theme redesign must not change the other presets. The rebuilt
-page compositions (bento overview, analytics inspector, grouped forms, `workspace.tsx`
-primitives) render **only** for `motion-native`; every other preset (Retro Pixel 3D
-included) keeps the layout it had before that redesign.
+page compositions render **only** for `cinema`; every other preset (Retro Pixel 3D
+included) keeps the layout it had before the theme redesigns.
 
-- Each redesigned module is split: `<name>.native.tsx` (Motion Native layout),
-  `<name>.classic.tsx` (the original layout) and a facade at `<name>.tsx` that renders one
-  through `components/wakaclock/layout-switch.tsx` (reads `useActivePreset()`). Changed
-  CSS modules have a `<name>.classic.module.css` twin. Import the facade path from other
-  code so test mocks keep applying; only `analytics-filter-bar` is imported per variant
-  because its props differ.
-- To change a page for Motion Native, edit the `.native` file; for the other presets, the
+- Each redesigned module is split: `<name>.native.tsx` (Cinema layout — the suffix
+  predates the rename), `<name>.classic.tsx` (the original layout) and a facade at
+  `<name>.tsx` that renders one through `components/wakaclock/layout-switch.tsx` (reads
+  `useActivePreset()`). Changed CSS modules have a `<name>.classic.module.css` twin. Import
+  the facade path from other code so test mocks keep applying; only `analytics-filter-bar`
+  is imported per variant because its props differ.
+- To change a page for Cinema, edit the `.native` file; for the other presets, the
   `.classic` file. Do not restyle a shared component in a way every preset sees unless the
   owner asks for that.
-- Tests run twice (Vitest projects `motion-native` and `classic`; `test/setup-classic.ts`
-  forces the classic layout). `*.native.test.tsx` / `*.classic.test.tsx` hold checks that
-  apply to one layout only.
+- Tests run twice (Vitest projects `cinema` and `classic`; `test/setup-classic.ts` forces
+  the classic layout). `*.native.test.tsx` / `*.classic.test.tsx` hold checks that apply
+  to one layout only.
 
 ### Settings shell and 3D tilt — Teams page
 

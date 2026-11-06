@@ -18,4 +18,70 @@ const geistMono = localFont({
   display: 'swap',
 });
 
-export const fontVariables = cn(geist.variable, geistMono.variable);
+/*
+ * Cinema preset faces (see public/fonts/README.md). Only the text face is preloaded:
+ * it carries every paragraph and control, while display, serif and mono appear in
+ * headings and labels where a swap is barely visible.
+ *
+ * IBM Plex Sans Thai is two families because `next/font/local` cannot scope a file with
+ * `unicode-range`. The text stack in `themes.css` lists Latin first, then Thai, so the
+ * browser picks the Thai file per glyph.
+ */
+const cinemaDisplay = localFont({
+  src: '../public/fonts/cinema-display.woff2',
+  variable: '--font-cinema-display',
+  weight: '300 700',
+  display: 'swap',
+  preload: false,
+});
+
+const cinemaSerif = localFont({
+  src: [
+    { path: '../public/fonts/cinema-serif.woff2', style: 'normal', weight: '400' },
+    { path: '../public/fonts/cinema-serif-italic.woff2', style: 'italic', weight: '400' },
+  ],
+  variable: '--font-cinema-serif',
+  display: 'swap',
+  preload: false,
+});
+
+const cinemaMono = localFont({
+  src: [
+    { path: '../public/fonts/cinema-mono-400.woff2', weight: '400' },
+    { path: '../public/fonts/cinema-mono-500.woff2', weight: '500' },
+  ],
+  variable: '--font-cinema-mono',
+  display: 'swap',
+  preload: false,
+});
+
+const cinemaTextLatin = localFont({
+  src: [
+    { path: '../public/fonts/cinema-text-latin-400.woff2', weight: '400' },
+    { path: '../public/fonts/cinema-text-latin-500.woff2', weight: '500' },
+    { path: '../public/fonts/cinema-text-latin-600.woff2', weight: '600' },
+  ],
+  variable: '--font-cinema-text',
+  display: 'swap',
+});
+
+const cinemaTextThai = localFont({
+  src: [
+    { path: '../public/fonts/cinema-text-thai-400.woff2', weight: '400' },
+    { path: '../public/fonts/cinema-text-thai-500.woff2', weight: '500' },
+    { path: '../public/fonts/cinema-text-thai-600.woff2', weight: '600' },
+  ],
+  variable: '--font-cinema-thai',
+  display: 'swap',
+  preload: false,
+});
+
+export const fontVariables = cn(
+  geist.variable,
+  geistMono.variable,
+  cinemaDisplay.variable,
+  cinemaSerif.variable,
+  cinemaMono.variable,
+  cinemaTextLatin.variable,
+  cinemaTextThai.variable
+);

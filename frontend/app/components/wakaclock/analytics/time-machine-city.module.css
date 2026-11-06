@@ -270,19 +270,19 @@
   }
 }
 
-/* ---------- Motion Native ---------- */
-:global([data-theme-preset='motion-native']) .stage {
+/* ---------- Cinema ---------- */
+:global([data-theme-preset='cinema']) .stage {
   background: oklch(0.2 0.012 240);
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) * 1.4);
   box-shadow: var(--elevation-raised);
 }
-:global([data-theme-preset='motion-native']) .zoom button {
+:global([data-theme-preset='cinema']) .zoom button {
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) - 2px);
   box-shadow: var(--elevation-raised);
 }
-:global([data-theme-preset='motion-native']) .tip {
+:global([data-theme-preset='cinema']) .tip {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--elevation-overlay);

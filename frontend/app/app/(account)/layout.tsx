@@ -10,8 +10,8 @@ import { fontVariables } from '@/lib/fonts';
 import { RootDocument, SITE_METADATA } from '@/lib/seo/root-document';
 import {
   DEFAULT_THEME,
+  resolvePreset,
   type ThemeContentLayout,
-  type ThemePreset,
   type ThemeRadius,
   type ThemeScale,
 } from '@/lib/themes';
@@ -50,7 +50,7 @@ export default async function AccountLayout({
 }>) {
   const cookieStore = await cookies();
   const themeSettings = {
-    preset: (cookieStore.get('theme_preset')?.value ?? DEFAULT_THEME.preset) as ThemePreset,
+    preset: resolvePreset(cookieStore.get('theme_preset')?.value),
     scale: (cookieStore.get('theme_scale')?.value ?? DEFAULT_THEME.scale) as ThemeScale,
     radius: (cookieStore.get('theme_radius')?.value ?? DEFAULT_THEME.radius) as ThemeRadius,
     contentLayout: (cookieStore.get('theme_content_layout')?.value ??

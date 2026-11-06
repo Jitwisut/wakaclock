@@ -6,5 +6,5 @@ import { vi } from 'vitest';
 
 vi.mock('@/components/wakaclock/layout-switch', () => ({
   LayoutSwitch: ({ classic }: { classic: React.ReactNode }) => classic,
-  NATIVE_LAYOUT_PRESET: 'motion-native',
+  NATIVE_LAYOUT_PRESET: 'cinema',
 }));

@@ -1,6 +1,7 @@
 import { DashboardPanel } from '@/components/dashboard-panels';
-import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
+import { CinemaSection } from '@/components/wakaclock/cinema-section';
 import { RequireUser } from '@/components/wakaclock/require-user';
+import { TimeCore } from '@/components/wakaclock/time-core/time-core';
 
 import { BrowsingPanel } from './components/browsing-panel';
 import { CharacterSheetHero } from './components/character-sheet-hero';
@@ -15,83 +16,103 @@ import { SummariesPanel } from './components/summaries-panel';
 import { TopProjects } from './components/top-projects';
 
 /**
- * Reading order, most glanceable first: today → lifetime → highlights for the range →
- * stats and projects side by side → the daily trend → AI/code analytics → today's
- * session-level detail. One toolbar range drives every range-based panel.
+ * Cinema overview, composed as scenes:
+ *
+ * 01 The day — the Time Core stage, full-bleed under the slate.
+ * 02 The range — progress, highlights and projects for the toolbar range, set as an
+ *    asymmetric editorial grid rather than a uniform bento.
+ * 03 AI & code — attribution analytics.
+ * 04 The record — browsing and the session-level timeline.
+ *
+ * Every panel is still individually switchable from Settings (lib/dashboard-panels.ts);
+ * one toolbar range drives every range-based panel.
  */
 export default function WakaclockOverviewPage() {
   return (
-    <div className="flex flex-col gap-5">
-      <WakaclockPageHeader
-        actions={<OverviewToolbar />}
-        description="Your time, focus and progress at a glance."
-        title="Overview"
-      />
-      <RequireUser>
-        <OverviewMotion>
-          {/*
-            A bento grid: each panel is a cell sized to its content, today first. Every
-            panel stays individually switchable from Settings (lib/dashboard-panels.ts).
-          */}
-          <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-            <DashboardPanel id="overview.character-sheet">
-              <Reveal className="lg:col-span-8">
-                <CharacterSheetHero />
-              </Reveal>
-            </DashboardPanel>
+    <RequireUser>
+      <OverviewMotion>
+        <h1 className="sr-only">Overview</h1>
+        <div className="flex flex-col gap-[clamp(3rem,6vw,5.5rem)]">
+          <DashboardPanel id="overview.time-core">
+            <TimeCore />
+          </DashboardPanel>
 
-            <DashboardPanel id="overview.status-tiles">
-              <Reveal className="lg:col-span-4" delay={0.06}>
-                <StatusTiles />
-              </Reveal>
-            </DashboardPanel>
+          <CinemaSection
+            actions={<OverviewToolbar />}
+            aside="your time, focus and progress across the range"
+            id="overview-range"
+            number="02"
+            title="The range"
+          >
+            <div className="grid grid-cols-1 gap-x-8 gap-y-10 lg:grid-cols-12">
+              <DashboardPanel id="overview.character-sheet">
+                <Reveal className="lg:col-span-7">
+                  <CharacterSheetHero />
+                </Reveal>
+              </DashboardPanel>
+              <DashboardPanel id="overview.status-tiles">
+                <Reveal className="lg:col-span-5" delay={0.06}>
+                  <StatusTiles />
+                </Reveal>
+              </DashboardPanel>
+              <DashboardPanel id="overview.insights">
+                <Reveal className="lg:col-span-12">
+                  <OverviewInsights />
+                </Reveal>
+              </DashboardPanel>
+              <DashboardPanel id="overview.top-projects">
+                <Reveal className="lg:col-span-5">
+                  <TopProjects />
+                </Reveal>
+              </DashboardPanel>
+              <DashboardPanel id="overview.range-stats">
+                <Reveal className="lg:col-span-7" delay={0.06}>
+                  <RangeStats />
+                </Reveal>
+              </DashboardPanel>
+              <DashboardPanel id="overview.summaries">
+                <Reveal className="lg:col-span-12">
+                  <SummariesPanel />
+                </Reveal>
+              </DashboardPanel>
+            </div>
+          </CinemaSection>
 
-            <DashboardPanel id="overview.insights">
-              <Reveal className="lg:col-span-12">
-                <OverviewInsights />
-              </Reveal>
-            </DashboardPanel>
-
-            <DashboardPanel id="overview.range-stats">
-              <Reveal className="lg:col-span-7">
-                <RangeStats />
-              </Reveal>
-            </DashboardPanel>
-            <DashboardPanel id="overview.top-projects">
-              <Reveal className="lg:col-span-5" delay={0.06}>
-                <TopProjects />
-              </Reveal>
-            </DashboardPanel>
-
-            <DashboardPanel id="overview.summaries">
-              <Reveal className="lg:col-span-12">
-                <SummariesPanel />
-              </Reveal>
-            </DashboardPanel>
-
-            <DashboardPanel id="overview.analytics">
-              <Reveal className="flex flex-col gap-3 lg:col-span-12">
-                <h2 className="text-sm font-semibold tracking-tight">AI &amp; code</h2>
+          <DashboardPanel id="overview.analytics">
+            <CinemaSection
+              aside="who wrote the change — measured, inferred or unknown"
+              id="overview-ai"
+              number="03"
+              title="AI & code"
+            >
+              <Reveal>
                 <PhaseNineDashboard />
               </Reveal>
-            </DashboardPanel>
+            </CinemaSection>
+          </DashboardPanel>
 
-            <DashboardPanel id="overview.browsing">
-              <section className="flex flex-col gap-3 lg:col-span-12">
-                <h2 className="text-sm font-semibold tracking-tight">Browsing</h2>
-                <BrowsingPanel />
-              </section>
-            </DashboardPanel>
-
-            <DashboardPanel id="overview.duration-timeline">
-              <Reveal className="flex flex-col gap-3 lg:col-span-12">
-                <h2 className="text-sm font-semibold tracking-tight">Sessions</h2>
-                <DurationTimeline />
-              </Reveal>
-            </DashboardPanel>
-          </div>
-        </OverviewMotion>
-      </RequireUser>
-    </div>
+          <CinemaSection
+            aside="where the hours went, session by session"
+            id="overview-record"
+            number="04"
+            title="The record"
+          >
+            <div className="flex flex-col gap-10">
+              <DashboardPanel id="overview.duration-timeline">
+                <Reveal>
+                  <DurationTimeline />
+                </Reveal>
+              </DashboardPanel>
+              <DashboardPanel id="overview.browsing">
+                <section aria-label="Browsing" className="flex flex-col gap-3">
+                  <h3 className="cinema-label">Browsing</h3>
+                  <BrowsingPanel />
+                </section>
+              </DashboardPanel>
+            </div>
+          </CinemaSection>
+        </div>
+      </OverviewMotion>
+    </RequireUser>
   );
 }

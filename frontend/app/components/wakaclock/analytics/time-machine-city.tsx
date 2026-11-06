@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `time-machine-city.native` layout, every other preset the
- * `time-machine-city.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `time-machine-city.native` layout, every other preset the
+ * `time-machine-city.classic` one (the layout before the theme redesigns).
  */
 
 import type * as React from 'react';

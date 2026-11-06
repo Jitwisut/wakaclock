@@ -1,6 +1,6 @@
 /*
- * Theme facade: Motion Native renders the `pulse-monitor.native` layout, every other preset the
- * `pulse-monitor.classic` one (the layout before the Motion Native redesign).
+ * Theme facade: Cinema renders the `pulse-monitor.native` layout, every other preset the
+ * `pulse-monitor.classic` one (the layout before the theme redesigns).
  */
 
 import type * as React from 'react';
