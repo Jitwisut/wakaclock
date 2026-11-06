@@ -1,18 +1,13 @@
-import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
-import { RequireUser } from '@/components/wakaclock/require-user';
+/*
+ * Theme facade: Motion Native renders the `page.native` layout, every other preset the
+ * `page.classic` one (the layout before the Motion Native redesign).
+ */
 
-import { SyncStatusPanel } from './components/sync-status-panel';
+import { LayoutSwitch } from '@/components/wakaclock/layout-switch';
+
+import * as Classic from './page.classic';
+import * as Native from './page.native';
 
 export default function WakaclockSyncPage() {
-  return (
-    <div className="flex flex-col gap-5">
-      <WakaclockPageHeader
-        description="Whether your devices' activity has reached the server, and what is still waiting."
-        title="Sync status"
-      />
-      <RequireUser>
-        <SyncStatusPanel />
-      </RequireUser>
-    </div>
-  );
+  return <LayoutSwitch classic={<Classic.default />} native={<Native.default />} />;
 }

@@ -210,4 +210,12 @@ function useThemeConfig(): ThemeContextType {
 }
 useThemeConfig.displayName = 'useThemeConfig';
 
-export { ActiveThemeProvider, useThemeConfig };
+/**
+ * The active preset, or the default one outside an ActiveThemeProvider (isolated tests,
+ * Storybook). Unlike useThemeConfig it never throws, so layout code can read it anywhere.
+ */
+function useActivePreset(): ThemeType['preset'] {
+  return useContext(ThemeContext)?.theme.preset ?? DEFAULT_THEME.preset;
+}
+
+export { ActiveThemeProvider, useActivePreset, useThemeConfig };

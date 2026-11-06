@@ -1,48 +1,23 @@
-'use client';
+/*
+ * Theme facade: Motion Native renders the `requires-feature.native` layout, every other preset the
+ * `requires-feature.classic` one (the layout before the Motion Native redesign).
+ */
 
 import type * as React from 'react';
 
-import { Skeleton } from '@/components/ui/skeleton';
-import { UnavailableNotice } from '@/components/wakaclock/workspace';
-import { useCapabilities } from '@/hooks/use-capabilities';
+import { LayoutSwitch } from '@/components/wakaclock/layout-switch';
 
-/**
- * Gate a page with the server-advertised feature matrix.
- *
- * A route can exist while its runtime is deliberately disabled. Rendering the
- * page in that state causes a guaranteed 503 request and makes an unavailable
- * capability look like a transient application error. Wait for the capability
- * response, then explain the deployment state without making the request.
- */
-export function RequiresFeature({
-  children,
-  feature,
-  featureKey,
-}: {
-  children: React.ReactNode;
-  feature: string;
-  featureKey: string;
-}) {
-  const { isLoading, featureAvailability } = useCapabilities();
+import * as Classic from './requires-feature.classic';
+import * as Native from './requires-feature.native';
 
-  if (isLoading || featureAvailability === undefined) {
-    return <Skeleton className="h-64 w-full" />;
-  }
-
-  if (featureAvailability[featureKey] !== true) {
-    return (
-      <UnavailableNotice title={`${feature} is unavailable in this deployment`}>
-        <p>
-          The server has this capability disabled, so no request was sent. This page will become
-          available when the deployment enables the complete {feature.toLowerCase()} runtime.
-        </p>
-        <p className="text-xs">
-          Check the server capability manifest or contact the deployment administrator for the
-          rollout status.
-        </p>
-      </UnavailableNotice>
-    );
-  }
-
-  return children;
+export function RequiresFeature(
+  props: React.ComponentProps<typeof Classic.RequiresFeature> &
+    React.ComponentProps<typeof Native.RequiresFeature>
+) {
+  return (
+    <LayoutSwitch
+      classic={<Classic.RequiresFeature {...props} />}
+      native={<Native.RequiresFeature {...props} />}
+    />
+  );
 }

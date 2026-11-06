@@ -1,31 +1,13 @@
-'use client';
+/*
+ * Theme facade: Motion Native renders the `page.native` layout, every other preset the
+ * `page.classic` one (the layout before the Motion Native redesign).
+ */
 
-import { Suspense } from 'react';
+import { LayoutSwitch } from '@/components/wakaclock/layout-switch';
 
-import {
-  AgentUniversePanel,
-  AgentUniverseRange,
-} from '@/components/wakaclock/agents/agent-universe';
-import { WakaclockPageHeader } from '@/components/wakaclock/page-header';
-import { RequireUser } from '@/components/wakaclock/require-user';
+import * as Classic from './page.classic';
+import * as Native from './page.native';
 
 export default function AgentUniversePage() {
-  return (
-    <div className="flex flex-col gap-5">
-      <WakaclockPageHeader
-        actions={
-          <Suspense fallback={null}>
-            <AgentUniverseRange />
-          </Suspense>
-        }
-        description="See which AI agents worked on which projects, and how many tokens they used."
-        title="Agent Universe"
-      />
-      <RequireUser>
-        <Suspense fallback={null}>
-          <AgentUniversePanel />
-        </Suspense>
-      </RequireUser>
-    </div>
-  );
+  return <LayoutSwitch classic={<Classic.default />} native={<Native.default />} />;
 }

@@ -28,6 +28,24 @@ export default defineConfig({
     // Behavior
     // ---------------------------------------------------------------------------
     passWithNoTests: true,
+
+    // Two layouts, one suite: Motion Native renders the rebuilt pages, every other preset
+    // the original ones (see components/wakaclock/layout-switch.tsx). `*.native.test.*`
+    // and `*.classic.test.*` hold the checks that only apply to one of them.
+    projects: [
+      {
+        extends: true,
+        test: { name: 'motion-native', exclude: ['**/*.classic.test.{ts,tsx}'] },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'classic',
+          exclude: ['**/*.native.test.{ts,tsx}'],
+          setupFiles: ['./test/setup-classic.ts'],
+        },
+      },
+    ],
     isolate: true,
     watch: false,
 
