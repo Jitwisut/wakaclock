@@ -1,9 +1,11 @@
+import { renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { WakaclockError } from '@/lib/wakaclock/client';
 import {
   reportTeamBillingAccessFailure,
   teamBillingRecoveryGuidance,
+  useTeamBillingAccessLossReport,
 } from '@/lib/wakaclock/team-billing-recovery';
 
 describe('billing recovery guidance', () => {
@@ -60,5 +62,38 @@ describe('billing recovery guidance', () => {
     expect(lost).not.toHaveBeenCalled();
     const denied = new WakaclockError('Owner required', 403);
     await expect(reportTeamBillingAccessFailure(Promise.reject(denied))).rejects.toBe(denied);
+  });
+});
+
+describe('query access-loss report', () => {
+  it('reports each new 401/403 query error once, using the latest callback', () => {
+    const first = vi.fn();
+    const latest = vi.fn();
+    const denied = new WakaclockError('Owner required', 403);
+    const { rerender } = renderHook(
+      ({ error, report }) => useTeamBillingAccessLossReport(error, report),
+      { initialProps: { error: null as unknown, report: first } }
+    );
+    expect(first).not.toHaveBeenCalled();
+    rerender({ error: denied, report: first });
+    rerender({ error: denied, report: latest });
+    expect(first).toHaveBeenCalledExactlyOnceWith(denied);
+    expect(latest).not.toHaveBeenCalled();
+    const expired = new WakaclockError('Sign in again', 401);
+    rerender({ error: expired, report: latest });
+    expect(latest).toHaveBeenCalledExactlyOnceWith(expired);
+  });
+
+  it('ignores errors that do not mean lost access', () => {
+    const report = vi.fn();
+    const { rerender } = renderHook(({ error }) => useTeamBillingAccessLossReport(error, report), {
+      initialProps: { error: new WakaclockError('unavailable', 503) as unknown },
+    });
+    rerender({ error: new Error('network') });
+    rerender({ error: undefined });
+    expect(report).not.toHaveBeenCalled();
+    expect(() =>
+      renderHook(() => useTeamBillingAccessLossReport(new WakaclockError('x', 403)))
+    ).not.toThrow();
   });
 });

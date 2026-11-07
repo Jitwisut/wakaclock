@@ -1,16 +1,22 @@
 'use client';
 
 import { useState } from 'react';
+
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+
 import { Button } from '@/components/ui/button';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
-import { reportTeamBillingAccessFailure } from '@/lib/wakaclock/team-billing-recovery';
+import {
+  reportTeamBillingAccessFailure,
+  useTeamBillingAccessLossReport,
+} from '@/lib/wakaclock/team-billing-recovery';
 import {
   getTeamTrial,
   recoverTeamTrial,
   startTeamTrial,
 } from '@/lib/wakaclock/team-trial-endpoints';
+
 import {
   TeamBillingOwnerBoundary,
   useOptionalTeamBillingOwnerBoundary,
@@ -41,19 +47,19 @@ function TrialScope({ organizationId, userId }: Props) {
   const key = wakaclockKeys.teamTrial(userId, organizationId);
   const status = useQuery({
     queryKey: key,
-    queryFn: ({ signal }) =>
-      reportTeamBillingAccessFailure(getTeamTrial(organizationId, signal), boundary.report),
+    queryFn: ({ signal }) => getTeamTrial(organizationId, signal),
     enabled: open && Boolean(userId) && !boundary.error,
     retry: false,
     staleTime: 0,
     gcTime: 0,
     refetchInterval: open && !boundary.error ? 15_000 : false,
   });
+  useTeamBillingAccessLossReport(status.error, boundary.report);
   const change = useMutation({
     mutationFn: (
       action:
+        | { kind: 'recover'; revision: number; transition: string }
         | { kind: 'start'; seats: number }
-        | { kind: 'recover'; transition: string; revision: number }
     ) =>
       reportTeamBillingAccessFailure(
         action.kind === 'start'
@@ -103,11 +109,11 @@ function TrialScope({ organizationId, userId }: Props) {
   return (
     <section aria-label="Team trial" className="space-y-2 rounded border p-3">
       <Button
-        variant="outline"
         onClick={() => {
           setOpen(!open);
           setConfirmed('');
         }}
+        variant="outline"
       >
         {open ? 'Close trial status' : 'Team trial (Owner)'}
       </Button>
@@ -117,13 +123,13 @@ function TrialScope({ organizationId, userId }: Props) {
             A one-time 14-day trial without a payment card. Sharing remains each member’s choice.
           </p>
           <Button
-            variant="outline"
             disabled={status.isFetching || change.isPending}
             onClick={async () => {
               change.reset();
               setConfirmed('');
               await boundary.reload(() => status.refetch());
             }}
+            variant="outline"
           >
             Reload trial status
           </Button>
@@ -189,16 +195,16 @@ function TrialScope({ organizationId, userId }: Props) {
                     Trial developer package
                     <select
                       aria-label="Trial developer package"
-                      value={seats}
                       onChange={(event) => {
                         setSeats(Number(event.target.value));
                         setConfirmed('');
                       }}
+                      value={seats}
                     >
                       {[10, 25, 50, 100]
                         .filter((n) => data.packages.includes(n))
                         .map((n) => (
-                          <option key={n} value={n} disabled={n < data.developer_seats}>
+                          <option disabled={n < data.developer_seats} key={n} value={n}>
                             {n}
                           </option>
                         ))}
@@ -210,9 +216,9 @@ function TrialScope({ organizationId, userId }: Props) {
                     <label className="flex items-center gap-2">
                       <input
                         aria-label="Confirm trial action"
-                        type="checkbox"
                         checked={confirmed === confirmation}
                         onChange={(event) => setConfirmed(event.target.checked ? confirmation : '')}
+                        type="checkbox"
                       />
                       {recovery
                         ? 'I authorize checking the original saved trial.'
