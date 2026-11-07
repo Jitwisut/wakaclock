@@ -5,7 +5,7 @@ import { TeamGithubPanel } from '@/app/dashboard/(auth)/wakaclock/teams/componen
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 
 const state = vi.hoisted(() => ({
-  user: 'member-a',
+  user: 'member-a' as null | string,
   connection: vi.fn(),
   propose: vi.fn(),
   decide: vi.fn(),
@@ -20,7 +20,7 @@ const state = vi.hoisted(() => ({
   work: vi.fn(),
 }));
 vi.mock('@/lib/wakaclock/user-store', () => ({
-  useWakaclockUserStore: (select: (s: { userId: string }) => unknown) =>
+  useWakaclockUserStore: (select: (s: { userId: null | string }) => unknown) =>
     select({ userId: state.user }),
 }));
 vi.mock('@/lib/wakaclock/endpoints-v2', () => ({ listOrganizationTeams: state.teams }));
@@ -116,6 +116,21 @@ function panel() {
   );
   return { ...render(tree()), client, tree };
 }
+it('reads nothing without a signed-in user', () => {
+  state.user = null;
+  panel();
+  for (const read of [
+    state.connection,
+    state.installations,
+    state.projects,
+    state.teams,
+    state.work,
+    state.sessions,
+    state.receipt,
+  ]) {
+    expect(read).not.toHaveBeenCalled();
+  }
+});
 it('stops a link confirmation after the account changes while proposal is in flight', async () => {
   let resolve!: (value: unknown) => void;
   state.propose.mockReturnValue(
