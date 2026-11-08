@@ -39,14 +39,14 @@ interface CitySceneOptions {
 const FLOOR_HEIGHT = 0.42;
 const BURST_POINTS = 80;
 const BURST_LIFE = 1.6;
-const BURST_COLOURS = { failure: 0xff_4b_37, success: 0x41_e0_8f };
+const BURST_COLOURS = { failure: 0xFF_4B_37, success: 0x41_E0_8F };
 const SKY_STOPS: Array<[number, number]> = [
-  [0, 0x0c_22_30],
-  [0.18, 0x1f_55_70],
-  [0.5, 0x4f_9c_c0],
-  [0.76, 0x4f_9c_c0],
-  [0.88, 0xd9_8a_58],
-  [0.95, 0x3a_35_60],
+  [0, 0x0C_22_30],
+  [0.18, 0x1F_55_70],
+  [0.5, 0x4F_9C_C0],
+  [0.76, 0x4F_9C_C0],
+  [0.88, 0xD9_8A_58],
+  [0.95, 0x3A_35_60],
   [1, 0x12_17_33],
 ];
 
@@ -110,9 +110,9 @@ export function createCityScene({
   const focus = new THREE.Vector3(0, 3, 0);
   const lookTarget = new THREE.Vector3(0, 3, 0);
 
-  const hemisphere = new THREE.HemisphereLight(0xdc_ec_ff, 0x31_43_3c, 1.5);
+  const hemisphere = new THREE.HemisphereLight(0xDC_EC_FF, 0x31_43_3C, 1.5);
   scene.add(hemisphere);
-  const sun = new THREE.DirectionalLight(0xff_ff_ff, 2.4);
+  const sun = new THREE.DirectionalLight(0xFF_FF_FF, 2.4);
   const reach = Math.max(layout.width, layout.depth, 30);
   sun.position.set(reach * 0.7, reach * 1.1, reach * 0.5);
   sun.castShadow = true;
@@ -130,7 +130,7 @@ export function createCityScene({
 
   const ground = new THREE.Mesh(
     new THREE.BoxGeometry(layout.width + 7, 0.6, layout.depth + 7),
-    new THREE.MeshStandardMaterial({ color: 0x0d_20_24, roughness: 0.9 })
+    new THREE.MeshStandardMaterial({ color: 0x0D_20_24, roughness: 0.9 })
   );
   ground.position.y = -0.31;
   ground.receiveShadow = true;
@@ -140,7 +140,7 @@ export function createCityScene({
   for (const district of layout.districts) {
     const plate = new THREE.Mesh(
       new THREE.BoxGeometry(district.size + 0.5, 0.12, district.size + 0.5),
-      new THREE.MeshStandardMaterial({ color: 0x1a_3a_3a, roughness: 0.9 })
+      new THREE.MeshStandardMaterial({ color: 0x1A_3A_3A, roughness: 0.9 })
     );
     plate.position.set(
       district.x + district.size / 2 - half,
@@ -169,7 +169,7 @@ export function createCityScene({
     Array.from({ length: run.capacity }, () => run.tower)
   );
   const floorMaterial = new THREE.MeshStandardMaterial({
-    emissive: 0xff_ff_ff,
+    emissive: 0xFF_FF_FF,
     emissiveIntensity: 0,
     emissiveMap: floorTexture(true),
     map: floorTexture(false),
@@ -187,7 +187,7 @@ export function createCityScene({
 
   const beamMaterial = new THREE.MeshBasicMaterial({
     blending: THREE.AdditiveBlending,
-    color: 0x63_d6_c0,
+    color: 0x63_D6_C0,
     depthWrite: false,
     opacity: 0.14,
     side: THREE.DoubleSide,
@@ -199,7 +199,7 @@ export function createCityScene({
   scene.add(beam);
   const outline = new THREE.Mesh(
     new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshBasicMaterial({ color: 0xff_ff_ff, wireframe: true })
+    new THREE.MeshBasicMaterial({ color: 0xFF_FF_FF, wireframe: true })
   );
   outline.visible = false;
   scene.add(outline);
