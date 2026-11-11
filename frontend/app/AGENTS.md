@@ -48,8 +48,9 @@ Generated outputs: `coverage/`, `test-results/`, `playwright-report/`, `.next/`.
 
 - Vitest runs in `jsdom` and matches `**/*.{test,spec}.{ts,tsx}`; common setup
   lives in `test/setup.ts`.
-- Coverage is enforced (100% thresholds). Use `npm run test:coverage` before
-  merging.
+- Coverage is enforced with a ratchet floor in `vitest.config.ts` (target 100%;
+  raise the floor as tests land, never lower it). Use `npm run test:coverage`
+  before merging.
 - Playwright tests live in `e2e/` and match `**/*.spec.ts`. Use
   `npm run test:e2e:ui` to debug.
 

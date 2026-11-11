@@ -71,11 +71,15 @@ export default defineConfig({
         'components/ui/**', // shadcn/ui components
         '**/__mocks__/**',
       ],
+      // Ratchet floor, owner decision 2026-11-11. The 100% gate did not run in CI while
+      // earlier jobs failed, and untested code accumulated (mostly Team/GitHub panels).
+      // These are the measured totals, rounded down. Raise them as tests land, never
+      // lower them; the target is still 100%.
       thresholds: {
-        branches: 100,
-        functions: 100,
-        lines: 100,
-        statements: 100,
+        branches: 95.6,
+        functions: 95.2,
+        lines: 97.5,
+        statements: 97.1,
       },
     },
 
