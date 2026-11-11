@@ -77,7 +77,7 @@ export type AppSidebarProps = {
  *
  * @see Sidebar - Base sidebar component
  */
-const AppSidebar = React.forwardRef<HTMLDivElement, AppSidebarProps>(function AppSidebar(
+const AppSidebar = React.forwardRef<HTMLDivElement, AppSidebarProps>(function AppSidebarRender(
   { labels, testId = 'app-sidebar', ...props },
   ref
 ) {

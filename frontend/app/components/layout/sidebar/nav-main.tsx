@@ -131,7 +131,7 @@ function NavActiveIndicator() {
   );
 }
 
-const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMain(
+const NavMain = React.forwardRef<HTMLDivElement, NavMainProps>(function NavMainRender(
   { items = navItems, labels, testId = 'nav-main' },
   ref
 ) {
