@@ -182,6 +182,18 @@ describe('city data', () => {
     expect(findShrinks([module('a/b', [point(0, 200), point(1, 130)])])).toEqual([]);
   });
 
+  it('lists drops from different modules in day order', () => {
+    expect(
+      findShrinks([
+        module('late/drop', [point(0, 1000), point(1, 1000), point(2, 500)]),
+        module('early/drop', [point(0, 800), point(1, 200)]),
+      ])
+    ).toEqual([
+      { day: 1, path: 'early/drop', percent: 75 },
+      { day: 2, path: 'late/drop', percent: 50 },
+    ]);
+  });
+
   it('places an event on the last day at or before it', () => {
     const days = ['2026-08-01', '2026-08-05'];
     const third = Date.UTC(2026, 7, 3, 12) / 1000;

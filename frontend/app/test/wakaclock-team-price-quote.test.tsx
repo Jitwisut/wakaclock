@@ -154,3 +154,27 @@ it('connects the server-authorized test quote to durable confirmation', async ()
   expect(mocks.confirm).toHaveBeenCalledWith('org', 'quote-1');
   expect(screen.queryByText('Preview only. Purchasing is not available.')).not.toBeInTheDocument();
 });
+it.each([
+  ['inclusive', 'Listed price includes tax.'],
+  ['exclusive', 'Tax is additional to the listed price.'],
+  ['unspecified', 'Tax treatment is not yet confirmed.'],
+])('describes %s tax treatment without inventing a total', async (behavior, message) => {
+  mocks.get.mockImplementation(async () => ({ ...sample(), tax_behavior: behavior }));
+  mount();
+  fireEvent.click(screen.getByText('View package price'));
+  expect(await screen.findByText(message)).toBeInTheDocument();
+  expect(screen.getByText(/Total due: unavailable/)).toBeInTheDocument();
+});
+it('never offers checkout for a quote whose amount cannot be displayed', async () => {
+  mocks.get.mockImplementation(async () => ({
+    ...sample(),
+    currency: '<usd>',
+    test_checkout_confirmation_available: true,
+  }));
+  mount();
+  fireEvent.click(screen.getByText('View package price'));
+  await screen.findByText(/Package price: Unavailable per month for 10 developers/);
+  expect(screen.getByText('Preview only. Purchasing is not available.')).toBeInTheDocument();
+  expect(screen.queryByText('Prepare test Checkout')).not.toBeInTheDocument();
+  expect(mocks.confirm).not.toHaveBeenCalled();
+});
