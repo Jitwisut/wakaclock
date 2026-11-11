@@ -4,9 +4,9 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState } fro
 
 interface Boundary {
   error: unknown;
-  revision: number;
-  report: (error: unknown) => void;
   reload: (read: () => Promise<{ isSuccess: boolean }>) => Promise<void>;
+  report: (error: unknown) => void;
+  revision: number;
 }
 const Context = createContext<Boundary | null>(null);
 

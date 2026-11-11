@@ -204,8 +204,54 @@ pub(crate) fn configure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Restores `XDG_CONFIG_HOME` when a test ends, even on panic. Tests in this
+    /// module hold `ENV` so they never observe each other's process environment.
+    struct XdgConfigHome(Option<std::ffi::OsString>);
+    impl XdgConfigHome {
+        fn set(value: Option<&Path>) -> Self {
+            let previous = std::env::var_os("XDG_CONFIG_HOME");
+            match value {
+                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            Self(previous)
+        }
+    }
+    impl Drop for XdgConfigHome {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+    static ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[test]
+    fn a_configured_xdg_root_is_refused_instead_of_installing_elsewhere() {
+        let _env = ENV.blocking_lock();
+        let home = std::env::temp_dir().join(format!("opencode-plugin-{}", uuid::Uuid::new_v4()));
+        let _xdg = XdgConfigHome::set(Some(&home.join("custom-config")));
+        let error = configure(
+            &home,
+            Some("opencode-v2-2.0.26"),
+            false,
+            Path::new("/fixture/cli"),
+            &"a".repeat(64),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "opencode_custom_config_scope_review_required"
+        );
+        assert!(!home.exists());
+    }
+
     #[test]
     fn explicit_versions_upgrade_and_remove_only_owned_plugin_without_changing_user_config() {
+        // GitHub runners set XDG_CONFIG_HOME; this test covers the default root.
+        let _env = ENV.blocking_lock();
+        let _xdg = XdgConfigHome::set(None);
         let home = std::env::temp_dir().join(format!("opencode-plugin-{}", uuid::Uuid::new_v4()));
         let root = home.join(".config/opencode");
         fs::create_dir_all(&root).unwrap();

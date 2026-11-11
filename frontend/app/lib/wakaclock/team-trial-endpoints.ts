@@ -1,29 +1,30 @@
 import { unwrapV2, wakaclockV2Client } from './client-v2';
+
 import type { V2Envelope } from './types';
 
 export interface TeamTrialStatus {
+  analytics_reason: string;
+  analytics_status: string;
+  can_start: boolean;
+  developer_seats: number;
   disposition:
-    | 'not_started'
     | 'active'
     | 'expired'
-    | 'subscription_managed'
+    | 'not_started'
     | 'recovery_required'
+    | 'subscription_managed'
     | 'unconfirmed';
-  package_seats: number | null;
-  developer_seats: number;
-  trial_started_at: string | null;
-  trial_ends_at: string | null;
-  entitlement_revision: number | null;
+  entitlement_revision: null | number;
   observed_at: string;
-  can_start: boolean;
-  recovery: { transition_id: string; expected_revision: number } | null;
-  reason: string | null;
-  analytics_status: string;
-  analytics_reason: string;
-  trial_days: number;
+  package_seats: null | number;
   packages: number[];
   payment_card_required: false;
   personal_capture_affected: false;
+  reason: null | string;
+  recovery: { expected_revision: number; transition_id: string } | null;
+  trial_days: number;
+  trial_ends_at: null | string;
+  trial_started_at: null | string;
 }
 const path = (org: string) => `/organizations/${org}/billing/trial`;
 export async function getTeamTrial(org: string, signal?: AbortSignal) {
