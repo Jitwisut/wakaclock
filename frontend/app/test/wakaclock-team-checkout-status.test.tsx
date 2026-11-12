@@ -138,3 +138,29 @@ it('displays fresh test invoice evidence but removes it when reloading loses per
   await screen.findByText('Owner access required');
   expect(screen.queryByText('Invoice coverage: settled')).not.toBeInTheDocument();
 });
+
+it('shows the last observation and lets the Owner withdraw recovery authorization', async () => {
+  mocks.get.mockResolvedValue({ ...pending, observed_at: '2026-10-14T12:00:00Z' });
+  mount();
+  fireEvent.click(screen.getByText('Existing Checkout (Owner)'));
+  const confirm = await screen.findByLabelText('Confirm existing Checkout recovery');
+  expect(screen.getByText('Last observation: 2026-10-14T12:00:00Z')).toBeInTheDocument();
+  fireEvent.click(confirm);
+  expect(screen.getByText('Check existing Checkout')).toBeEnabled();
+  fireEvent.click(confirm);
+  expect(confirm).not.toBeChecked();
+  expect(screen.getByText('Check existing Checkout')).toBeDisabled();
+  expect(mocks.recover).not.toHaveBeenCalled();
+});
+it.each([
+  ['the customer prerequisite is not current', 'owner', { available: false, observation: 1 }],
+  ['no account is signed in', '', undefined],
+])('renders nothing and requests nothing while %s', (_case, user, authority) => {
+  const { container } = render(
+    <QueryClientProvider client={new QueryClient()}>
+      <TeamCheckoutStatusPanel authority={authority} organizationId="org" userId={user} />
+    </QueryClientProvider>
+  );
+  expect(container).toBeEmptyDOMElement();
+  expect(mocks.get).not.toHaveBeenCalled();
+});

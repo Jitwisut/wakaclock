@@ -1,6 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
+import {
+  TeamBillingOwnerBoundary,
+  useTeamBillingOwnerBoundary,
+} from '@/app/dashboard/(auth)/wakaclock/teams/components/team-billing-owner-boundary';
 import { TeamTrialPanel } from '@/app/dashboard/(auth)/wakaclock/teams/components/team-trial-panel';
 import { WakaclockError } from '@/lib/wakaclock/client';
 import type { TeamTrialStatus } from '@/lib/wakaclock/team-trial-endpoints';
@@ -166,4 +170,49 @@ it('does not accept an incompatible trial duration or generate a client-side rep
   await screen.findByText(/trial contract is unavailable/);
   expect(screen.queryByText('Start no-card trial')).not.toBeInTheDocument();
   expect(screen.queryByText(/Trial ends:/)).not.toBeInTheDocument();
+});
+it('reports observed analytics agreement and lets the Owner withdraw the confirmation', async () => {
+  mocks.get.mockResolvedValue({ ...sample(), analytics_status: 'observed' });
+  mount();
+  fireEvent.click(screen.getByText('Team trial (Owner)'));
+  await screen.findByText(/Privacy and enrollment agreement observed/);
+  expect(screen.queryByText(/Analytics remain withheld/)).not.toBeInTheDocument();
+  const confirm = screen.getByLabelText('Confirm trial action');
+  fireEvent.click(confirm);
+  expect(confirm).toBeChecked();
+  expect(screen.getByText('Start no-card trial')).toBeEnabled();
+  fireEvent.click(confirm);
+  expect(confirm).not.toBeChecked();
+  expect(screen.getByText('Start no-card trial')).toBeDisabled();
+  expect(mocks.start).not.toHaveBeenCalled();
+});
+it.each([
+  ['existing_purchase_requires_review', 'Review the existing purchase before starting a trial.'],
+  ['developer_capacity_exceeded', /current developer count is above the supported packages/],
+])('explains why a trial cannot start: %s', async (reason, message) => {
+  mocks.get.mockResolvedValue({ ...sample(), can_start: false, reason });
+  mount();
+  fireEvent.click(screen.getByText('Team trial (Owner)'));
+  expect(await screen.findByText(message)).toBeInTheDocument();
+  expect(screen.queryByText('Start no-card trial')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Trial developer package')).not.toBeInTheDocument();
+});
+it('reports lost Owner access to a boundary shared with sibling billing panels', async () => {
+  function Sibling() {
+    return <p>{useTeamBillingOwnerBoundary().error ? 'sibling locked' : 'sibling open'}</p>;
+  }
+  mocks.get.mockRejectedValue(new WakaclockError('Owner required', 403));
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <TeamBillingOwnerBoundary>
+        <TeamTrialPanel organizationId="org" userId="owner" />
+        <Sibling />
+      </TeamBillingOwnerBoundary>
+    </QueryClientProvider>
+  );
+  expect(screen.getByText('sibling open')).toBeInTheDocument();
+  fireEvent.click(screen.getByText('Team trial (Owner)'));
+  await screen.findByText('Owner required');
+  expect(screen.getByText('sibling locked')).toBeInTheDocument();
+  expect(screen.queryByText('Start no-card trial')).not.toBeInTheDocument();
 });

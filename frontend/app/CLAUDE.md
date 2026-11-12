@@ -24,7 +24,7 @@ npm run format:check      # Prettier check
 # Unit tests (Vitest, jsdom)
 npm run test:run          # Run once
 npm run test:watch        # Watch mode
-npm run test:coverage     # With coverage (100% thresholds enforced)
+npm run test:coverage     # With coverage (ratchet floor enforced; target 100%)
 npx vitest run test/my-file.test.ts   # Run a single test file
 
 # E2E tests (Playwright - auto-starts dev server)
@@ -98,8 +98,9 @@ import { cn } from '@/lib/utils';
   `**/*.{test,spec}.{ts,tsx}`
 - Setup file: `test/setup.ts` (mocks matchMedia, IntersectionObserver,
   ResizeObserver, etc.)
-- Coverage: V8 provider, **100% thresholds** on
-  branches/functions/lines/statements
+- Coverage: V8 provider, **ratchet-floor thresholds** on
+  branches/functions/lines/statements (see `vitest.config.ts`; raise them as
+  tests land, never lower them; target 100%)
 - Coverage excludes: `components/ui/**` (vendor), `node_modules/`, `test/`,
   config files, `__mocks__/`
 - Mocks: `mockReset`, `restoreMocks`, `clearMocks` all enabled

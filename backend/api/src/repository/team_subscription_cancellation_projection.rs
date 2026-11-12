@@ -286,7 +286,7 @@ impl CancellationRepository {
             } else {
                 60
             };
-            let count=write.sql().execute("UPDATE team_subscription_cancellations SET read_only=$2,disposition=$3,last_observation_id=$4,observed_at=$5,lease_id=$6,lease_until=$7,retry_at=GREATEST(retry_at,$8::timestamptz+make_interval(secs=>$9)),last_error_code=CASE WHEN $10 THEN NULL ELSE last_error_code END WHERE operation_id=$1 AND revision=$11 AND last_observation_id IS NOT DISTINCT FROM $12::uuid",&[&request.operation(),&next.read_only,&next.disposition,&next.last_observation,&next.observed_at,&next.lease,&next.lease_until,&now,&delay,&current,&projection.basis.revision,&projection.basis.last_observation]).await?;
+            let count=write.sql().execute("UPDATE team_subscription_cancellations SET read_only=$2,disposition=$3,last_observation_id=$4,observed_at=$5,lease_id=$6,lease_until=$7,retry_at=GREATEST(retry_at,$8::timestamptz+make_interval(secs=>$9::int)),last_error_code=CASE WHEN $10 THEN NULL ELSE last_error_code END WHERE operation_id=$1 AND revision=$11 AND last_observation_id IS NOT DISTINCT FROM $12::uuid",&[&request.operation(),&next.read_only,&next.disposition,&next.last_observation,&next.observed_at,&next.lease,&next.lease_until,&now,&delay,&current,&projection.basis.revision,&projection.basis.last_observation]).await?;
             ensure!(count == 1, "cancellation_projection_predecessor_changed");
         }
         let metadata = serde_json::to_value(&projection)?;

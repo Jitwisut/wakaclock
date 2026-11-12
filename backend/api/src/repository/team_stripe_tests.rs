@@ -1314,7 +1314,20 @@ async fn stripe_checkout_confirmation_durability_and_owner_fences() {
         .is_none());
 
     // Isolated replay of the pre-dispatch checkpoint, now through the actual worker/HTTP adapter.
-    pg.execute("UPDATE team_stripe_checkout_intents SET disposition='pending',first_attempt_at=now(),retry_at=now(),lease_id=NULL,lease_until=NULL WHERE operation_id=$1",&[&claim.operation]).await.unwrap();
+    // A create POST is authorized only for the never-dispatched intent (revision 1, not lookup-only,
+    // no recovery actor), so the checkpoint restores those columns too. No recovery authorization
+    // exists yet, so no (operation_id, revision) row is orphaned by rewinding the revision.
+    assert_eq!(
+        pg.query_one(
+            "SELECT count(*) FROM team_stripe_checkout_authorizations WHERE operation_id=$1",
+            &[&claim.operation]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        0
+    );
+    pg.execute("UPDATE team_stripe_checkout_intents SET disposition='pending',revision=1,lookup_only=false,recovery_actor=NULL,first_attempt_at=now(),retry_at=now(),lease_id=NULL,lease_until=NULL WHERE operation_id=$1",&[&claim.operation]).await.unwrap();
     use axum::{
         response::IntoResponse,
         routing::{get, post},
@@ -1734,7 +1747,18 @@ async fn stripe_checkout_confirmation_durability_and_owner_fences() {
     )
     .await
     .unwrap();
-    pg.execute("UPDATE team_stripe_checkout_intents SET disposition='pending',session_id=NULL,subscription_id=NULL,first_attempt_at=now(),retry_at=now(),lease_id=NULL,lease_until=NULL WHERE operation_id=$1", &[&claim.operation]).await.unwrap();
+    // Same create-only fence as the first replay: rewind to the never-dispatched revision.
+    assert_eq!(
+        pg.query_one(
+            "SELECT count(*) FROM team_stripe_checkout_authorizations WHERE operation_id=$1",
+            &[&claim.operation]
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0),
+        0
+    );
+    pg.execute("UPDATE team_stripe_checkout_intents SET disposition='pending',revision=1,lookup_only=false,recovery_actor=NULL,session_id=NULL,subscription_id=NULL,first_attempt_at=now(),retry_at=now(),lease_id=NULL,lease_until=NULL WHERE operation_id=$1", &[&claim.operation]).await.unwrap();
     subscription_failure.store(true, Ordering::SeqCst);
     let before = subscription_calls.load(Ordering::SeqCst);
     assert_eq!(

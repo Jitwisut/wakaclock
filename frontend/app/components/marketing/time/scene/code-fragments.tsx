@@ -95,9 +95,14 @@ export function CodeFragments({
   useEffect(() => {
     const resolved = monoFamily();
     let alive = true;
-    void document.fonts.load(`${FONT_PX}px ${resolved}`).finally(() => {
-      if (alive) setFamily(resolved);
-    });
+    // A face that fails to load still draws in the fallback; it must not surface as an
+    // unhandled rejection.
+    void document.fonts
+      .load(`${FONT_PX}px ${resolved}`)
+      .catch(() => undefined)
+      .finally(() => {
+        if (alive) setFamily(resolved);
+      });
     return () => {
       alive = false;
     };
