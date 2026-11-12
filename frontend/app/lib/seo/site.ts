@@ -221,10 +221,10 @@ const NEW_GUIDES_DATE = '2026-09-20';
 const ATTRIBUTION_UPDATE_DATE = '2026-09-21';
 const THAI_SEO_UPDATE_DATE = '2026-09-23';
 const MIGRATION_GUIDE_DATE = '2026-09-28';
-/** Privacy page: consent-gated website analytics and campaign attribution disclosed. */
-const WEBSITE_ANALYTICS_DATE = '2026-10-19';
 /** Search-keyword pass: home subtitle, AI tracker/cost, WakaTime and VS Code headings and FAQs. */
 const SEARCH_KEYWORDS_DATE = '2026-10-22';
+/** Answer-first opening paragraphs rewritten on the pages whose lead was a single line. */
+const ANSWER_LEADS_DATE = '2026-11-12';
 const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/': SEARCH_KEYWORDS_DATE,
   '/teams': AUDIT_REVIEW_DATE,
@@ -239,13 +239,13 @@ const ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
   '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
   '/about': ATTRIBUTION_UPDATE_DATE,
-  '/contact': AUDIT_REVIEW_DATE_ROUND_3,
-  '/terms': AUDIT_REVIEW_DATE_ROUND_3,
-  '/privacy': WEBSITE_ANALYTICS_DATE,
-  '/early-access': AUDIT_REVIEW_DATE_ROUND_3,
-  '/docs/getting-started': AUDIT_REVIEW_DATE_ROUND_3,
+  '/contact': ANSWER_LEADS_DATE,
+  '/terms': ANSWER_LEADS_DATE,
+  '/privacy': ANSWER_LEADS_DATE,
+  '/early-access': ANSWER_LEADS_DATE,
+  '/docs/getting-started': ANSWER_LEADS_DATE,
   '/docs/migrate-from-wakatime': MIGRATION_GUIDE_DATE,
-  '/integrations/vscode': SEARCH_KEYWORDS_DATE,
+  '/integrations/vscode': ANSWER_LEADS_DATE,
   '/join': AUDIT_REVIEW_DATE_ROUND_3,
 };
 /** Thai route-specific content dates, including guides authored in both languages. */
@@ -255,18 +255,75 @@ const TH_ROUTE_CONTENT_DATES: Readonly<Record<string, string>> = {
   '/wakatime-alternative': SEARCH_KEYWORDS_DATE,
   '/ai-coding-tracker': SEARCH_KEYWORDS_DATE,
   '/ai-cost-tracking': SEARCH_KEYWORDS_DATE,
-  '/integrations/vscode': SEARCH_KEYWORDS_DATE,
+  '/integrations/vscode': ANSWER_LEADS_DATE,
   '/developer-analytics': THAI_SEO_UPDATE_DATE,
   '/teams': THAI_SEO_UPDATE_DATE,
-  '/pricing': THAI_SEO_UPDATE_DATE,
+  '/pricing': ANSWER_LEADS_DATE,
   '/integrations': THAI_SEO_UPDATE_DATE,
-  '/docs': THAI_SEO_UPDATE_DATE,
+  '/docs': ANSWER_LEADS_DATE,
+  '/docs/getting-started': ANSWER_LEADS_DATE,
+  '/contact': ANSWER_LEADS_DATE,
+  '/terms': ANSWER_LEADS_DATE,
+  '/early-access': ANSWER_LEADS_DATE,
   '/docs/how-coding-time-is-calculated': NEW_GUIDES_DATE,
   '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
   '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
   '/docs/migrate-from-wakatime': MIGRATION_GUIDE_DATE,
-  '/privacy': WEBSITE_ANALYTICS_DATE,
+  '/privacy': ANSWER_LEADS_DATE,
+  // The FAQ on the Thai campaign page was punctuated as questions on this date.
+  '/join': ANSWER_LEADS_DATE,
 };
+
+/**
+ * The day each page was first published, taken from the commit that added its route.
+ *
+ * `datePublished` and `dateModified` are a pair: with only the second, a reader cannot
+ * tell a page revised last week from one written last week. These are facts from the
+ * repository history, not estimates — add a page's real first-publication date here when
+ * the route is created, and never back-date or "refresh" one.
+ *
+ * The three September guides use the day their copy was written (`NEW_GUIDES_DATE`), one
+ * day before the commit that shipped them, so a page is never published after the content
+ * date it already shows.
+ */
+const FIRST_SITE_DATE = '2026-08-12';
+const AUDIT_EXPANSION_DATE = '2026-08-23';
+const ROUTE_PUBLISHED_DATES: Readonly<Record<string, string>> = {
+  '/': FIRST_SITE_DATE,
+  '/teams': '2026-08-13',
+  '/wakatime-alternative': FIRST_SITE_DATE,
+  '/ai-coding-tracker': FIRST_SITE_DATE,
+  '/ai-cost-tracking': AUDIT_EXPANSION_DATE,
+  '/developer-analytics': FIRST_SITE_DATE,
+  '/integrations': FIRST_SITE_DATE,
+  '/integrations/vscode': FIRST_SITE_DATE,
+  '/pricing': FIRST_SITE_DATE,
+  '/privacy': FIRST_SITE_DATE,
+  '/docs': FIRST_SITE_DATE,
+  '/docs/getting-started': FIRST_SITE_DATE,
+  '/docs/migrate-from-wakatime': MIGRATION_GUIDE_DATE,
+  '/docs/how-coding-time-is-calculated': NEW_GUIDES_DATE,
+  '/docs/ai-attribution-and-coverage': NEW_GUIDES_DATE,
+  '/docs/ai-cost-methodology': NEW_GUIDES_DATE,
+  '/about': AUDIT_EXPANSION_DATE,
+  '/contact': AUDIT_EXPANSION_DATE,
+  '/terms': AUDIT_EXPANSION_DATE,
+  '/early-access': AUDIT_EXPANSION_DATE,
+  '/join': AUDIT_EXPANSION_DATE,
+};
+/** Thai pages launched together on one day; the guides added later shipped in both languages. */
+const TH_LATER_GUIDES: ReadonlySet<string> = new Set([
+  '/docs/migrate-from-wakatime',
+  '/docs/how-coding-time-is-calculated',
+  '/docs/ai-attribution-and-coverage',
+  '/docs/ai-cost-methodology',
+]);
+
+export function contentPublished(path: string, locale: SiteLocale): string | undefined {
+  const english = ROUTE_PUBLISHED_DATES[path];
+  if (locale === 'en' || !english) return english;
+  return TH_LATER_GUIDES.has(path) ? english : AUDIT_EXPANSION_DATE;
+}
 
 export function contentModified(path: string, locale: SiteLocale): string | undefined {
   // The September 11 audit updated English copy only, so Thai pages carry their own dates.
@@ -291,15 +348,22 @@ export const SITE_MODIFIED = [
 /** Locale-aware route inventory. Add a real content date only when the page changes. */
 export const PUBLIC_ROUTE_DEFINITIONS: readonly PublicRouteDefinition[] = SITE_LOCALES.flatMap(
   (locale) =>
-    EN_PUBLIC_ROUTES.map((path) => {
-      const lastModified = contentModified(path, locale);
-      return {
-        locale,
-        path: localizedPath(locale, path),
-        ...(lastModified ? { lastModified } : {}),
-      };
-    })
+    EN_PUBLIC_ROUTES.map((path) => ({
+      locale,
+      path: localizedPath(locale, path),
+      // Left undefined, not defaulted, for a route with no recorded content date.
+      lastModified: contentModified(path, locale),
+    }))
 );
+
+/**
+ * The date shown beside a page's byline and in the feed. A page with its own recorded
+ * content date uses it; one without falls back to the site-wide date rather than to none,
+ * because a visible "Reviewed" line cannot be left blank.
+ */
+export function reviewedDate(path: string, locale: SiteLocale): string {
+  return contentModified(path, locale) ?? SITE_MODIFIED;
+}
 
 /** Canonical public URL paths, including both language variants. */
 export const PUBLIC_ROUTES = [...EN_PUBLIC_ROUTES, ...TH_PUBLIC_ROUTES] as readonly string[];

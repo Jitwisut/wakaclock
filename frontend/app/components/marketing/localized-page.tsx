@@ -8,17 +8,17 @@ import {
   howToSchema,
   type HowToStep,
   organizationSchema,
+  techArticleSchema,
   webPageSchema,
 } from '@/lib/seo/schema';
 import {
-  contentModified,
   createMarketingMetadata,
   FOUNDER,
   localizedPath,
   ORGANIZATION,
   PRODUCT_STATUS,
   PUBLIC_EVIDENCE_URL,
-  SITE_MODIFIED,
+  reviewedDate,
   SITE_NAME,
   type SiteLocale,
 } from '@/lib/seo/site';
@@ -180,7 +180,7 @@ function PageIndex({ copy, locale }: { copy: ReturnType<typeof getCopy>; locale:
 
 /** Who wrote the page and when it was last reviewed, as plain, linkable text. */
 function Byline({ locale, path }: { locale: SiteLocale; path: MarketingPageKey }) {
-  const reviewed = contentModified(path, locale) ?? SITE_MODIFIED;
+  const reviewed = reviewedDate(path, locale);
   const th = locale === 'th';
   return (
     <p className="mkt-byline">
@@ -240,6 +240,12 @@ function pageSchemas(
       sections: copy.sections.map(({ id, heading }) => ({ id, name: heading })),
     }),
   ];
+  // The guides under /docs are authored technical articles; the /docs index is a hub.
+  if (path.startsWith('/docs/')) {
+    schemas.push(
+      techArticleSchema({ path, locale, headline: copy.title, description: copy.description })
+    );
+  }
   if (copy.faq) schemas.push(faqSchema(copy.faq.entries));
   if (hasAnswerGuide(path, locale)) schemas.push(productTourSchema(locale));
   if (copy.schema === 'organization') schemas.push(organizationSchema());

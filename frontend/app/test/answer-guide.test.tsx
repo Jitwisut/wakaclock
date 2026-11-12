@@ -82,11 +82,20 @@ describe('audit answer guides', () => {
     expect(sourceLabels.some((label) => label?.includes('WakaTime'))).toBe(false);
   });
 
-  it('does not invent a content update for untouched translations', () => {
-    const page = { path: '/contact', name: 'Contact', description: 'Contact AtoAxis' };
+  it('dates a page only from what the repository records, per language', () => {
+    const page = { path: '/teams', name: 'Teams', description: 'Teams' };
+    // English and Thai copy are edited separately, so each carries its own date.
     expect(webPageSchema({ ...page, locale: 'en' }).dateModified).toBe(
-      contentModified('/contact', 'en')
+      contentModified('/teams', 'en')
     );
-    expect(webPageSchema({ ...page, locale: 'th' })).not.toHaveProperty('dateModified');
+    expect(webPageSchema({ ...page, locale: 'th' }).dateModified).toBe(
+      contentModified('/teams', 'th')
+    );
+    expect(contentModified('/teams', 'th')).not.toBe(contentModified('/teams', 'en'));
+
+    // A route with no recorded date gets none — never today's date, never a guess.
+    const undated = webPageSchema({ ...page, path: '/not-a-recorded-page', locale: 'th' });
+    expect(undated).not.toHaveProperty('dateModified');
+    expect(undated).not.toHaveProperty('datePublished');
   });
 });

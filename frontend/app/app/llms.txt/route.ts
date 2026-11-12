@@ -27,17 +27,20 @@ ${PRODUCT_STATUS.en.signup} Customers do not deploy or maintain its infrastructu
 - [AI coding activity tracking](${absoluteUrl('/ai-coding-tracker')}): How AI-attributed work is recorded, and what is not automatic.
 - [AI cost and token tracking](${absoluteUrl('/ai-cost-tracking')}): Token classes, how estimated cost is derived from versioned effective prices, cost per project, and the coverage reported with every total.
 - [Developer analytics](${absoluteUrl('/developer-analytics')}): The metrics produced and how each is derived.
+- [Integrations](${absoluteUrl('/integrations')}): Which editors connect, the first-party VS Code extension, and how a WakaTime-compatible plugin is pointed at the hosted API.
 - [Pricing](${absoluteUrl('/pricing')}): Planned launch pricing and Early Access status.
 - [Teams](${absoluteUrl('/teams')}): Coding presence for remote teams — Early Access prototype, not available as a production feature.
 - [About](${absoluteUrl('/about')}): Who builds it and the product purpose.
 - [Contact](${absoluteUrl('/contact')}): Early Access and support contact details.
 - [Terms](${absoluteUrl('/terms')}): Terms for the hosted product and Early Access.
 - [Join Early Access](${absoluteUrl('/join')}): The offer in one page — what ships today, what it will cost, what is still in development, and the signup form.
+- [Early Access signup](${absoluteUrl('/early-access')}): The plain signup form; joining records interest only and takes no payment.
 
 The WakaTime comparison was checked against the official pricing and plugins pages in August 2026 and is scheduled for a monthly review.
 
 ## Documentation
 
+- [Documentation index](${absoluteUrl('/docs')}): Where to start, and which guide covers setup, time calculation, AI attribution, AI cost and privacy.
 - [Getting started](${absoluteUrl('/docs/getting-started')}): Requirements, installation, connecting an editor, verifying tracking, troubleshooting.
 - [Migrate from WakaTime](${absoluteUrl('/docs/migrate-from-wakatime')}): Keep the WakaTime plugin, change api_url and api_key, then import a WakaTime heartbeat export without double-counting.
 - [How coding time is calculated](${absoluteUrl('/docs/how-coding-time-is-calculated')}): Heartbeats, duration blocks, the default idle timeout and a worked example.
@@ -85,6 +88,14 @@ enabled for invited users, but organisation seats, team administration and billi
 - WakaTime (a competitor) supports more AI providers; AtoAxis currently ships automatic hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI.
 - Heartbeats never contain source code, prompts, AI responses, or the content of keystrokes.
 
+## Machine-readable resources
+
+- [Full-text version](${absoluteUrl('/llms-full.txt')}): The same public pages with their full copy in one plain-text file.
+- [Product summary (JSON)](${absoluteUrl('/ai/summary.json')}): Definition, capabilities, limitations and evidence links in English and Thai.
+- [FAQ (JSON)](${absoluteUrl('/ai/faq.json')}): The homepage questions and answers in English and Thai.
+- [Sitemap](${absoluteUrl('/sitemap.xml')}): Every public URL with its language alternates and last-modified date.
+- [RSS feed](${absoluteUrl('/feed.xml')}): Public product and documentation pages as a feed.
+
 ## Thai pages
 
 The Thai pages mirror the English ones one-for-one. AtoAxis เป็นเครื่องมือ (โปรแกรม) ติดตามเวลาการเขียนโค้ดสำหรับนักพัฒนา รองรับ WakaTime API และเก็บประวัติครบถ้วน.
@@ -94,6 +105,8 @@ The Thai pages mirror the English ones one-for-one. AtoAxis เป็นเค�
 - [การติดตาม AI coding](${absoluteUrl('/th/ai-coding-tracker')}): วิธีบันทึกงานที่ AI ช่วย การแยก AI / human / Unattributed และสิ่งที่ไม่อัตโนมัติ.
 - [ต้นทุนและ token ของ AI](${absoluteUrl('/th/ai-cost-tracking')}): กลุ่ม token วิธีคำนวณต้นทุนประมาณจากราคาที่มีเวอร์ชัน ต้นทุนต่อโปรเจกต์ และ coverage ที่แนบมากับทุกยอดรวม.
 - [Developer analytics](${absoluteUrl('/th/developer-analytics')}): metric ที่ระบบสร้างและวิธีได้มาของแต่ละตัว.
+- [การเชื่อมต่อ](${absoluteUrl('/th/integrations')}): editor ที่เชื่อมต่อได้ extension ของ VS Code และวิธีชี้ WakaTime plugin มาที่ hosted API.
+- [เอกสาร](${absoluteUrl('/th/docs')}): จุดเริ่มต้นและคู่มือแต่ละเรื่อง ตั้งแต่การตั้งค่า วิธีคำนวณเวลา AI attribution ค่าใช้จ่าย AI และ privacy.
 - [ราคา](${absoluteUrl('/th/pricing')}): ราคาเปิดตัวที่วางไว้และสถานะ Early Access.
 - [ทีม](${absoluteUrl('/th/teams')}): coding presence สำหรับทีม remote — ต้นแบบ Early Access ยังไม่ใช่ฟีเจอร์ที่ใช้งานจริง.
 - [เกี่ยวกับ](${absoluteUrl('/th/about')}): ตัวตนของบริษัทและเป้าหมายของผลิตภัณฑ์.

@@ -12,14 +12,20 @@ import {
   howToSchema,
   organizationSchema,
   softwareApplicationSchema,
+  techArticleSchema,
+  webPageSchema,
   websiteSchema,
 } from '@/lib/seo/schema';
 import {
   absoluteUrl,
+  contentModified,
+  contentPublished,
   createMarketingMetadata,
   PRIVATE_ROUTE_PREFIXES,
   PUBLIC_ROUTE_DEFINITIONS,
   PUBLIC_ROUTES,
+  reviewedDate,
+  SITE_MODIFIED,
   SITE_NAME,
 } from '@/lib/seo/site';
 
@@ -205,6 +211,81 @@ describe('structured data', () => {
  * module with a different environment. This is the guard that stops a production build
  * from silently publishing canonicals and JSON-LD pointing at localhost.
  */
+describe('page identity and dates', () => {
+  it('records when each page was first published, per language', () => {
+    expect(contentPublished('/pricing', 'en')).toBe('2026-08-12');
+    // The Thai site launched later than the English one...
+    expect(contentPublished('/pricing', 'th')).toBe('2026-08-23');
+    // ...except guides written in both languages on the same day.
+    expect(contentPublished('/docs/migrate-from-wakatime', 'th')).toBe(
+      contentPublished('/docs/migrate-from-wakatime', 'en')
+    );
+    expect(contentPublished('/not-a-recorded-page', 'en')).toBeUndefined();
+    expect(contentPublished('/not-a-recorded-page', 'th')).toBeUndefined();
+  });
+
+  it('shows a page its own content date, and the site-wide date only when it has none', () => {
+    expect(reviewedDate('/pricing', 'th')).toBe(contentModified('/pricing', 'th'));
+    expect(reviewedDate('/not-a-recorded-page', 'en')).toBe(SITE_MODIFIED);
+  });
+
+  it('never publishes a page after it was last modified', () => {
+    for (const { locale, path } of PUBLIC_ROUTE_DEFINITIONS) {
+      const route = locale === 'th' ? path.replace(/^\/th(?=\/|$)/, '') || '/' : path;
+      const published = contentPublished(route, locale);
+      const modified = contentModified(route, locale);
+
+      expect(published, `${locale}${route} has no publication date`).toBeDefined();
+      expect(modified, `${locale}${route} has no content date`).toBeDefined();
+      expect((published as string) <= (modified as string)).toBe(true);
+    }
+  });
+
+  it('ties every page to the product entity, its image and its quotable passages', () => {
+    const page = webPageSchema({
+      path: '/pricing',
+      locale: 'en',
+      name: 'Pricing',
+      description: 'Planned pricing.',
+    });
+
+    expect(page.about).toEqual({ '@id': absoluteUrl('/#software') });
+    expect(softwareApplicationSchema()['@id']).toBe(absoluteUrl('/#software'));
+    expect(page.primaryImageOfPage).toMatchObject({
+      '@type': 'ImageObject',
+      url: absoluteUrl('/opengraph-image'),
+    });
+    expect(page.datePublished).toBe('2026-08-12');
+    // The hero lead and the campaign lead are named differently from a content page's.
+    expect(page.speakable).toMatchObject({
+      cssSelector: expect.arrayContaining(['h1', '.axis-page-lead', '.tx-lead']),
+    });
+  });
+
+  it('describes a documentation guide as a dated, authored TechArticle', () => {
+    const article = techArticleSchema({
+      path: '/docs/ai-cost-methodology',
+      locale: 'th',
+      headline: 'วิธีคำนวณค่าใช้จ่าย AI',
+      description: 'คำอธิบาย',
+    });
+    const url = absoluteUrl('/th/docs/ai-cost-methodology');
+
+    expect(article).toMatchObject({
+      '@type': 'TechArticle',
+      '@id': `${url}#article`,
+      inLanguage: 'th-TH',
+      datePublished: '2026-09-20',
+      mainEntityOfPage: { '@id': `${url}#webpage` },
+      about: { '@id': absoluteUrl('/#software') },
+    });
+    expect(article.author).toMatchObject({ '@type': 'Person' });
+    expect(
+      techArticleSchema({ path: '/docs/x', locale: 'en', headline: 'X', description: 'X' })
+    ).toMatchObject({ inLanguage: 'en' });
+  });
+});
+
 describe('site URL resolution', () => {
   const originalUrl = process.env.NEXT_PUBLIC_APP_URL;
   const originalNodeEnv = process.env.NODE_ENV;
@@ -320,10 +401,24 @@ describe('sitemap', () => {
       }
     }
 
-    // The distinction that matters: a synthetic value would land on every route,
-    // because it comes from the clock rather than from an edit.
-    expect(entries.some((entry) => entry.lastModified === undefined)).toBe(true);
+    // The distinction that matters: a synthetic value comes from the clock, so it would be
+    // the same on every route. Hand-recorded content dates differ from page to page.
+    const dates = new Set(entries.map((entry) => entry.lastModified));
+    expect(dates.size).toBeGreaterThan(3);
     expect(entries.map((entry) => new URL(entry.url).pathname)).toContain('/th');
+  });
+
+  it('declares the same en, th and x-default alternates the pages do', () => {
+    const thaiPricing = sitemap().find((entry) => entry.url.endsWith('/th/pricing'));
+
+    expect(thaiPricing?.alternates?.languages).toEqual({
+      en: absoluteUrl('/pricing'),
+      th: absoluteUrl('/th/pricing'),
+      'x-default': absoluteUrl('/pricing'),
+    });
+    expect(
+      sitemap().find((entry) => entry.url === absoluteUrl('/th'))?.alternates?.languages
+    ).toEqual({ en: absoluteUrl('/'), th: absoluteUrl('/th'), 'x-default': absoluteUrl('/') });
   });
 });
 
@@ -396,5 +491,24 @@ describe('robots', () => {
 
   it('points at the sitemap', () => {
     expect(robots().sitemap).toBe(absoluteUrl('/sitemap.xml'));
+  });
+
+  it('names the answer-engine agents and keeps private routes closed to each of them', () => {
+    const rules = [robots().rules].flat();
+    const named = new Map(rules.map((rule) => [String(rule.userAgent), rule]));
+
+    for (const agent of [
+      'GPTBot',
+      'OAI-SearchBot',
+      'ClaudeBot',
+      'Claude-SearchBot',
+      'PerplexityBot',
+    ]) {
+      const rule = named.get(agent);
+
+      expect(rule, `${agent} has no rule`).toBeDefined();
+      expect(rule?.allow).toBe('/');
+      expect([rule?.disallow].flat()).toContain('/dashboard/');
+    }
   });
 });

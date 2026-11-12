@@ -1,9 +1,5 @@
-import {
-  EN_HOME,
-  MARKETING_PAGE_KEYS,
-  PAGE_COPY,
-} from '@/components/marketing/marketing-copy';
-import { absoluteUrl, SITE_MODIFIED, SITE_NAME } from '@/lib/seo/site';
+import { EN_HOME, MARKETING_PAGE_KEYS, PAGE_COPY } from '@/components/marketing/marketing-copy';
+import { absoluteUrl, reviewedDate, SITE_MODIFIED, SITE_NAME } from '@/lib/seo/site';
 
 export const dynamic = 'force-static';
 
@@ -29,11 +25,14 @@ export function GET(): Response {
   const feedUrl = absoluteUrl('/feed.xml');
   const items = FEED_ITEMS.map(({ description, path, title }) => {
     const url = absoluteUrl(path);
+    // Feed readers sort and de-duplicate on pubDate; the page's content date is the honest one.
+    const modified = reviewedDate(path, 'en');
 
     return `    <item>
       <title>${escapeXml(title)}</title>
       <link>${escapeXml(url)}</link>
       <guid isPermaLink="true">${escapeXml(url)}</guid>
+      <pubDate>${new Date(`${modified}T00:00:00Z`).toUTCString()}</pubDate>
       <description>${escapeXml(description)}</description>
     </item>`;
   }).join('\n');

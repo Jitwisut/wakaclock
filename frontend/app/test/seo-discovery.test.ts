@@ -5,8 +5,9 @@ import { GET as getFaq } from '@/app/ai/faq.json/route';
 import { GET as getSummary } from '@/app/ai/summary.json/route';
 import { GET as getFeed } from '@/app/feed.xml/route';
 import { GET as getFullText } from '@/app/llms-full.txt/route';
+import { GET as getLlms } from '@/app/llms.txt/route';
 import { EN_HOME, TH_HOME } from '@/components/marketing/marketing-copy';
-import { PRODUCT_ANSWER } from '@/lib/seo/site';
+import { absoluteUrl, PRODUCT_ANSWER, PUBLIC_ROUTES } from '@/lib/seo/site';
 
 describe('SEO and AI discovery routes', () => {
   it('keeps the homepage definition, limitations and bilingual FAQs in the full-text export', async () => {
@@ -30,6 +31,22 @@ describe('SEO and AI discovery routes', () => {
     expect(xml).toContain('<rss version="2.0"');
     expect(xml).toContain('<atom:link');
     expect(xml).toContain('<guid isPermaLink="true">');
+    // One dated entry per item, so a reader can order and de-duplicate them.
+    const items = xml.match(/<item>/g) ?? [];
+    expect(items.length).toBeGreaterThan(0);
+    expect(xml.match(/<pubDate>[^<]+ GMT<\/pubDate>/g)).toHaveLength(items.length);
+  });
+
+  it('lists every public page in llms.txt, in both languages', async () => {
+    const body = await getLlms().text();
+
+    // A page in the sitemap but missing from this map is one an answer engine is never
+    // told about. The closing parenthesis keeps /docs from matching /docs/getting-started.
+    for (const route of PUBLIC_ROUTES) {
+      expect(body, `${route} is missing from llms.txt`).toContain(`(${absoluteUrl(route)})`);
+    }
+    expect(body).toContain(absoluteUrl('/llms-full.txt'));
+    expect(body).toContain(absoluteUrl('/ai/summary.json'));
   });
 
   it('publishes bilingual machine-readable summary and FAQ documents', async () => {
