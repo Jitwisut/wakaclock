@@ -56,7 +56,7 @@ describe("display authorship reconciliation",()=>{
   expect(isAuthorshipAcknowledgement(parked.request,{digest:original.digest,status:"matched"})).toBe(false);
   expect(isAuthorshipAcknowledgement(parked.request,{digest:original.digest,status:"revoked"})).toBe(true);
  });
- it.each(["text"])("retains the original %s payload and retries receipts after expiry and restart",async(mode)=>{
+ it.each(["text","external"])("retains the original %s payload and retries receipts after expiry and restart",async(mode)=>{
   const clock=vi.spyOn(Date,"now");
   clock.mockReturnValue(31_000);
   try {

@@ -494,6 +494,8 @@ export class HeartbeatBufferManager {
     const normalizedWorkspaceRoot = workspaceRoot ? normalizeFsPath(workspaceRoot) : undefined;
     if (!normalizedEntity) return;
 
+    const observationScope = this.journalScope;
+    const observationJournal = this.journal;
     const sendObservation = this.cli.sendEditorObservation;
     const getObservationStatus = this.cli.getEditorObservationStatus;
     const observationId =
@@ -608,6 +610,21 @@ export class HeartbeatBufferManager {
 
     if (this.journalScope) {
       this.externalPayloads.set(observationId, payload);
+      const scope = this.journalScope;
+      const revision = payload.revision ?? 0;
+      const fingerprint = metadata.content_fingerprint;
+      if (observationJournal && this.journal === observationJournal &&
+          scope === observationScope && !this.capturePaused && this.attributionScopes.includes(scope) &&
+          typeof fingerprint === "string" && /^sha256:[a-f0-9]{64}$/.test(fingerprint) &&
+          linesAdded !== undefined && linesDeleted !== undefined &&
+          (linesAdded > 0 || linesDeleted > 0) &&
+          !this.authorship.some(o => o.scope === scope &&
+            o.heartbeatId === observationId && o.revision === revision)) {
+        this.authorship.push({
+          heartbeatId: observationId, revision, scope, entity: normalizedEntity,
+          timeMs: now, fingerprint, expiresAt: Date.now() + AUTHORSHIP_TTL_MS,
+        });
+      }
       this.external.delete(observationId);
       this.checkpoint();
       await this.flushExternalPayloads();
