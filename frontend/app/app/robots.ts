@@ -21,9 +21,16 @@ const AI_CRAWLER_USER_AGENTS = [
   'OAI-SearchBot',
   'ChatGPT-User',
   'ClaudeBot',
+  'Claude-SearchBot',
+  'Claude-User',
   'PerplexityBot',
   'Perplexity-User',
   'Google-Extended',
+  'Applebot-Extended',
+  'Amazonbot',
+  'DuckAssistBot',
+  'MistralAI-User',
+  'meta-externalagent',
   'CCBot',
 ] as const;
 

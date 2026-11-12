@@ -1035,6 +1035,12 @@
   & .axis-faq-question::-webkit-details-marker {
     display: none;
   }
+  /* The question is an h3 for the outline; it keeps the summary's type, not a heading's. */
+  & .axis-faq-heading {
+    margin: 0;
+    font: inherit;
+    letter-spacing: inherit;
+  }
   & .axis-faq-toggle {
     font-size: 24px;
     width: 30px;

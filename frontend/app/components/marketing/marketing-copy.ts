@@ -3035,7 +3035,7 @@ generic(
     title: 'VS Code time tracker extension',
     description:
       'A coding time tracker for VS Code, coming to the Marketplace as a Preview. Use your WakaTime plugin today or join Early Access to get the extension first.',
-    lead: 'The first-party extension buffers metadata-only editor activity and sends heartbeats through wakaclock-cli.',
+    lead: `The ${SITE_NAME} extension tracks coding time in VS Code from metadata only: file, project, branch, language and editor, plus save, debug and build activity and keystroke counts. It never sends file contents. It buffers that activity and sends heartbeats through wakaclock-cli, and it needs VS Code 1.90 or newer and an API key from the dashboard.`,
     headings: [
       'What it tracks',
       'Requirements',
@@ -3080,8 +3080,8 @@ generic(
   {
     title: 'โปรแกรมจับเวลาเขียนโค้ดสำหรับ VS Code',
     description:
-      'ส่วนขยาย AtoAxis สำหรับ VS Code ช่วยวัดเวลาเขียนโปรแกรม กำลังจะเปิดใน Marketplace แบบ Preview ระหว่างนี้ใช้ WakaTime plugin ได้เลย หรือสมัคร Early Access เพื่อใช้ก่อน',
-    lead: 'extension ของเราจะ buffer editor activity แบบ metadata แล้วส่ง heartbeat ผ่าน wakaclock-cli',
+      'ส่วนขยาย AtoAxis สำหรับ VS Code ช่วยวัดเวลาเขียนโปรแกรม จะเปิดใน Marketplace แบบ Preview ระหว่างนี้ใช้ WakaTime plugin ได้ หรือสมัคร Early Access เพื่อใช้ก่อน',
+    lead: `extension ของ ${SITE_NAME} จับเวลาเขียนโค้ดใน VS Code จาก metadata เท่านั้น ได้แก่ ไฟล์ โปรเจกต์ branch ภาษา และ editor รวมถึงกิจกรรม save, debug, build และจำนวน keystroke โดยไม่ส่งเนื้อหาไฟล์ ตัว extension จะ buffer กิจกรรมแล้วส่ง heartbeat ผ่าน wakaclock-cli และต้องใช้ VS Code 1.90 ขึ้นไปกับ API key จาก dashboard`,
     headings: [
       'ข้อมูลที่ติดตาม',
       'สิ่งที่ต้องมี',
@@ -3165,7 +3165,7 @@ generic(
   {
     title: 'ราคา AtoAxis: แผน hosted เดียว ประวัติครบถ้วน',
     description: `ตรวจราคาเป้าหมายของ AtoAxis: $${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี พร้อมสิ่งที่รวมในแผนและสถานะ Early Access ซึ่งยังไม่เปิด checkout หรือเก็บเงิน`,
-    lead: 'ช่วง Early Access ยังไม่เปิด checkout และยังไม่มีการเรียกเก็บเงิน',
+    lead: `${SITE_NAME} วางแผนเปิดแผน hosted เพียงแผนเดียวสำหรับติดตามเวลาเขียนโค้ด ราคา $${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี ช่วง Early Access ยังไม่เปิด checkout การลงชื่อจึงเป็นเพียงการแสดงความสนใจ ไม่เริ่มแผนแบบชำระเงินและไม่เก็บข้อมูลการชำระเงิน`,
     headings: ['สิ่งที่รวมในแผน', 'การเรียกเก็บเงินและสถานะ'],
     faqEntries: [
       {
@@ -3205,7 +3205,7 @@ generic(
     title: 'Privacy and data collection',
     description:
       'See every field an AtoAxis heartbeat stores, what never leaves your machine, how long data is kept and how to delete your account history.',
-    lead: 'Heartbeats carry metadata and counts, never source code, prompts, responses or transcript bodies.',
+    lead: `An ${SITE_NAME} heartbeat carries activity metadata and counts: file path, project and Git branch, language, editor, OS and machine, keystroke and line counts, AI fields and timestamps. It never carries source code, diffs, prompts, AI responses or transcript bodies. This page lists every stored field, how data travels, how long it is kept and how to delete it.`,
     headings: [
       'What is collected',
       'What is never collected',
@@ -3261,7 +3261,7 @@ generic(
     title: 'Privacy และข้อมูลที่เก็บ',
     description:
       'ดูทุก field ที่ heartbeat ของ AtoAxis เก็บ สิ่งที่ไม่เคยออกจากเครื่องของคุณ เช่น source code ระยะเวลาเก็บข้อมูล และวิธีลบประวัติบัญชีของคุณ',
-    lead: 'Heartbeat มี metadata และ counts ไม่เก็บ source code, prompt, response หรือ transcript body',
+    lead: `heartbeat ของ ${SITE_NAME} มีเฉพาะ metadata และตัวเลขนับของกิจกรรม ได้แก่ file path โปรเจกต์และ Git branch ภาษา editor ระบบปฏิบัติการและเครื่อง จำนวน keystroke และบรรทัด field ของ AI และ timestamp ระบบไม่เก็บ source code, diff, prompt, response ของ AI หรือ transcript body หน้านี้ระบุทุก field ที่เก็บ เส้นทางของข้อมูล ระยะเวลาเก็บรักษา และวิธีลบ`,
     headings: [
       'ข้อมูลที่เก็บ',
       'สิ่งที่ไม่เคยเก็บ',
@@ -3367,7 +3367,7 @@ generic(
     title: 'เอกสาร AtoAxis: คู่มือติดตามเวลาเขียนโค้ด',
     description:
       'เริ่มใช้ AtoAxis จากคู่มือเชื่อม editor และตรวจ heartbeat แรก อ่านวิธีคำนวณเวลา AI attribution การตั้งค่า integration และข้อมูลที่ส่งเพื่อใช้งานอย่างเข้าใจ',
-    lead: 'เชื่อม editor และทำความเข้าใจ hosted product ผ่านคู่มือนี้',
+    lead: `เอกสาร ${SITE_NAME} อธิบายวิธีเชื่อม editor ตรวจ heartbeat แรก และทำความเข้าใจ metadata ที่ใช้ติดตามเวลาเขียนโค้ด ผู้ใช้ใหม่ควรเริ่มที่คู่มือเริ่มต้นใช้งาน ซึ่งเรียงขั้นตอนตั้งแต่บัญชี API key การเชื่อม editor จนถึง heartbeat แรกที่ตรวจสอบแล้ว`,
     headings: [
       'เอกสารนี้มีอะไรบ้าง?',
       'เริ่มติดตามเวลาการเขียนโค้ดอย่างไร?',
@@ -3418,7 +3418,7 @@ generic(
     title: 'Getting started with AtoAxis time tracking',
     description:
       'Create an AtoAxis API key, connect VS Code or a WakaTime-compatible plugin, and confirm your first heartbeat appears in the dashboard.',
-    lead: 'Create an account, generate an API key and connect your editor when Early Access opens.',
+    lead: `To start tracking coding time with ${SITE_NAME}, generate an API key in the dashboard, connect VS Code or any editor that already has a WakaTime plugin, and confirm the first heartbeat arrived with wakaclock-cli status or the dashboard Overview page. During Early Access, keys are issued to people on the list rather than at signup.`,
     headings: [
       'Requirements',
       'Create an API key',
@@ -3463,7 +3463,7 @@ generic(
     title: 'เริ่มต้นใช้งาน AtoAxis: ติดตามเวลาเขียนโค้ด',
     description:
       'สร้าง API key ของ AtoAxis เชื่อม VS Code หรือ plugin ที่รองรับ WakaTime แล้วตรวจว่า heartbeat แรกขึ้นใน dashboard ก่อนเริ่มใช้งานจริง',
-    lead: 'สร้างบัญชี API key และเชื่อม editor เมื่อ Early Access เปิด',
+    lead: `เริ่มติดตามเวลาเขียนโค้ดกับ ${SITE_NAME} ได้ในสามขั้นตอน คือสร้าง API key ใน dashboard เชื่อม VS Code หรือ editor ที่มี WakaTime plugin อยู่แล้ว และตรวจว่า heartbeat แรกเข้าแล้วด้วยคำสั่ง wakaclock-cli status หรือหน้า Overview ใน dashboard ช่วง Early Access ระบบออก key ให้ผู้ที่อยู่ในรายชื่อ ไม่ได้ออกทันทีตอนลงทะเบียน`,
     headings: [
       'สิ่งที่ต้องเตรียม',
       'สร้าง API key',
@@ -3665,7 +3665,7 @@ generic(
     title: 'Contact AtoAxis about Early Access',
     description:
       'Ask AtoAxis about Early Access, editor compatibility, WakaTime migration, AI attribution or privacy. A real person on the team reads every message.',
-    lead: 'Ask about Early Access, hosted analytics, integrations or privacy.',
+    lead: `Use this page to ask the ${SITE_NAME} team about Early Access, editor compatibility, moving from WakaTime, AI attribution or privacy. A real person on the team building the product reads every message, not an automated support queue. Name the editor you use and whether it already has a WakaTime plugin to get the exact setting to change.`,
     headings: ['Topics we can help with'],
     form: 'contact',
     faqEntries: [
@@ -3694,7 +3694,7 @@ generic(
     title: 'ติดต่อ AtoAxis เรื่อง Early Access และการตั้งค่า',
     description:
       'สอบถาม AtoAxis เรื่อง Early Access การใช้กับ editor ของคุณ การย้ายจาก WakaTime, AI attribution หรือ privacy คนในทีมพัฒนาอ่านทุกข้อความด้วยตัวเอง',
-    lead: 'สอบถามเรื่อง Early Access, hosted analytics, integrations หรือ privacy',
+    lead: `ใช้หน้านี้สอบถามทีม ${SITE_NAME} เรื่อง Early Access การใช้กับ editor ของคุณ การย้ายจาก WakaTime, AI attribution หรือ privacy คนในทีมที่พัฒนาผลิตภัณฑ์อ่านทุกข้อความเอง ไม่ใช่คิวระบบอัตโนมัติ หากบอกชื่อ editor ที่ใช้และมี WakaTime plugin อยู่แล้วหรือไม่ คุณจะได้คำตอบพร้อมค่าที่ต้องแก้`,
     headings: ['หัวข้อที่สอบถามได้'],
     form: 'contact',
     faqEntries: [
@@ -3726,7 +3726,7 @@ generic(
     title: 'AtoAxis terms for Early Access and hosted use',
     description:
       'Read the preliminary AtoAxis terms: what joining Early Access means, who owns the activity data you send, acceptable use and how to ask questions.',
-    lead: `These preliminary terms describe the ${SITE_NAME} Early Access website.`,
+    lead: `These preliminary terms cover the ${SITE_NAME} website and Early Access list. Joining Early Access registers interest only: no account is created and no payment is taken. You own the activity data you send; it is not sold, shared with advertisers or used as training material. One API key identifies one account, and these terms will be replaced before the product becomes payable.`,
     headings: ['Early Access', 'Hosted service and data', 'Acceptable use', 'Questions'],
     faqEntries: [
       {
@@ -3753,7 +3753,7 @@ generic(
     title: 'ข้อกำหนดการใช้งาน AtoAxis ช่วง Early Access',
     description:
       'อ่านข้อกำหนดเบื้องต้นของ AtoAxis: การเข้าร่วม Early Access หมายถึงอะไร ใครเป็นเจ้าของข้อมูลกิจกรรมที่คุณส่ง การใช้งานที่ยอมรับได้ และช่องทางสอบถาม',
-    lead: `ข้อกำหนดเบื้องต้นนี้อธิบายเว็บไซต์ ${SITE_NAME} ในช่วง Early Access`,
+    lead: `ข้อกำหนดเบื้องต้นนี้ครอบคลุมเว็บไซต์ ${SITE_NAME} และรายชื่อ Early Access การเข้าร่วม Early Access เป็นเพียงการแสดงความสนใจ ไม่มีการสร้างบัญชีและไม่มีการเรียกเก็บเงิน ข้อมูลกิจกรรมที่คุณส่งเป็นของคุณ ไม่ถูกขาย ไม่ถูกแบ่งให้ผู้โฆษณา และไม่ถูกใช้ฝึกโมเดล API key หนึ่งดวงระบุถึงบัญชีเดียว`,
     headings: ['Early Access', 'Hosted service และข้อมูล', 'การใช้งานที่ยอมรับได้', 'คำถาม'],
     faqEntries: [
       {
@@ -3782,7 +3782,7 @@ generic(
     title: 'Join AtoAxis Early Access for time tracking',
     description:
       'Join the AtoAxis Early Access list for WakaTime-compatible developer time tracking. Joining records interest only; no account or payment is created.',
-    lead: 'Register interest in hosted developer time tracking and launch updates.',
+    lead: `Join the ${SITE_NAME} Early Access list to register interest in hosted, WakaTime-compatible developer time tracking. Joining creates no charge and collects no payment details. API keys are issued to people on the list as Early Access opens, and the planned price is $${PRICING.monthlyUsd} per month or $${PRICING.annualUsd} per year for one complete plan.`,
     headings: [],
     form: 'early-access',
     faqEntries: [
@@ -3805,7 +3805,7 @@ generic(
     title: 'เข้าร่วม AtoAxis Early Access ติดตามเวลาเขียนโค้ด',
     description:
       'ลงชื่อเข้าร่วม Early Access ของ AtoAxis เครื่องมือติดตามเวลาเขียนโค้ดที่รองรับ WakaTime API การลงชื่อคือการแสดงความสนใจ ไม่สร้างบัญชีและไม่เรียกเก็บเงิน',
-    lead: 'ลงทะเบียนความสนใจใน hosted developer time tracking และข่าวการเปิดตัว',
+    lead: `ลงชื่อในรายชื่อ Early Access ของ ${SITE_NAME} เพื่อแสดงความสนใจในบริการ hosted สำหรับติดตามเวลาเขียนโค้ดที่รองรับ WakaTime API การลงชื่อไม่มีค่าใช้จ่ายและไม่เก็บข้อมูลการชำระเงิน ระบบจะออก API key ให้ผู้ที่อยู่ในรายชื่อเมื่อ Early Access เปิด ราคาที่วางไว้คือ $${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี สำหรับแผนเดียวที่ครบทุกฟีเจอร์`,
     headings: [],
     form: 'early-access',
     faqEntries: [

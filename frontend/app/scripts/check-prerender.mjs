@@ -12,7 +12,7 @@
  * Run after `next build`:  node scripts/check-prerender.mjs
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const APP_DIR = '.next/server/app';
@@ -30,6 +30,7 @@ const PUBLIC_ROUTES = [
   '/privacy',
   '/docs',
   '/docs/getting-started',
+  '/docs/migrate-from-wakatime',
   '/docs/how-coding-time-is-calculated',
   '/docs/ai-attribution-and-coverage',
   '/docs/ai-cost-methodology',
@@ -142,6 +143,18 @@ if (!/href="#early-access">/.test(readFileSync(join(APP_DIR, 'join.html'), 'utf8
 }
 if (!/name="early-access"/.test(readFileSync(join(APP_DIR, 'join.html'), 'utf8'))) {
   failures.push('en/join: missing signup form');
+}
+
+// Every page's og:image and twitter:image point at /opengraph-image. The file that renders
+// it once sat outside app/, so the route did not exist and every shared link 404'd on its
+// preview — invisible to unit tests, which only assert the metadata string.
+for (const image of ['opengraph-image', 'twitter-image']) {
+  if (!readdirSync(APP_DIR).some((entry) => entry.startsWith(image))) {
+    failures.push(`/${image}: social preview route is missing from the build`);
+  }
+}
+if (!/property="og:image" content="[^"]*\/opengraph-image"/.test(homepage)) {
+  failures.push('en/: og:image does not point at /opengraph-image');
 }
 
 if (failures.length > 0) {

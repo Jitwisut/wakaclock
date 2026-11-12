@@ -129,21 +129,21 @@ const COPY = {
     faqHeading: 'ก่อนตัดสินใจลงทะเบียน',
     faq: [
       {
-        question: 'ลงทะเบียนแล้วเกิดอะไรขึ้นต่อ',
+        question: 'ลงทะเบียนแล้วเกิดอะไรขึ้นต่อ?',
         answer:
           'ชื่อของคุณจะอยู่ในรายชื่อ Early Access และได้รับข่าวการเปิดตัวทางอีเมล เมื่อถึงรอบออก key เราจะส่ง key สำหรับบัญชีของคุณให้',
       },
       {
-        question: 'ต้องเลิกใช้ WakaTime ไหม',
+        question: 'ต้องเลิกใช้ WakaTime ไหม?',
         answer: `ไม่ต้อง ${SITE_NAME} รองรับ WakaTime API และ import ไฟล์ export ของ WakaTime ได้ จึงใช้คู่กันเพื่อเทียบผลก่อนตัดสินใจได้`,
       },
       {
-        question: 'ระบบอ่าน source code ของเราหรือเปล่า',
+        question: 'ระบบอ่าน source code ของเราหรือเปล่า?',
         answer:
           'ไม่ heartbeat มีแค่ metadata และตัวเลข เช่น path, project, branch, ภาษา, editor และจำนวน keystroke กับ character ไม่มีเนื้อหาไฟล์ prompt หรือคำตอบของ AI',
       },
       {
-        question: 'อะไรที่ยังไม่พร้อม',
+        question: 'อะไรที่ยังไม่พร้อม?',
         answer:
           'dashboard สำหรับทีมและองค์กรเต็มรูปแบบยังอยู่ระหว่างพัฒนา แต่มี leaderboard แบบ opt-in และ presence prototype เมื่อ server รัน PostgreSQL plugin ที่เราดูแลเองมีเฉพาะ VS Code ส่วน Cursor และ Copilot ต้องมี adapter ก่อนจึงจะ attribute งานได้',
       },
@@ -204,7 +204,10 @@ export function CampaignPage({ locale = 'en' }: { locale?: SiteLocale }) {
           ))}
         </h1>
 
-        <p className="mx-auto mt-6 max-w-2xl text-lg text-pretty" style={{ color: MKT_FG_MUTED }}>
+        <p
+          className="mkt-campaign-lead mx-auto mt-6 max-w-2xl text-lg text-pretty"
+          style={{ color: MKT_FG_MUTED }}
+        >
           {copy.lead}
         </p>
 
