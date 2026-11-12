@@ -61,6 +61,9 @@ export interface AiEditEvent {
   actor_confidence?: number;
   tool_event_id?: string;
   canonical_operation_id?: string;
+  authorship_fingerprint?: string;
+  authorship_proof_version?: number;
+  authorship_display_only?: boolean;
   content_fingerprint?: string;
   change_kind?: string;
 }
@@ -99,6 +102,7 @@ interface PersistedSidecarCursor {
   seen_transport_keys: string[];
   seen_operation_keys?: string[];
   events: AiEditEvent[];
+  authorship_events?: AiEditEvent[];
   consumed_event_ids: string[];
   pending_observations?: PendingEditorObservation[];
 }
@@ -116,6 +120,7 @@ export class AiAttributionStore {
   private cursorPath: string;
   private ownerScopes?: readonly string[];
   private readonly events = new Map<string, AiEditEvent>();
+  private readonly displayEvents = new Map<string, AiEditEvent>();
   private readonly pendingObservations = new Map<string, PendingEditorObservation>();
   private consumed = new Set<string>();
   private readOffset = 0;
@@ -141,7 +146,7 @@ export class AiAttributionStore {
     if (scopes.some(scope => !/^[a-f0-9]{64}$/.test(scope))) throw new Error("sidecar_scope_invalid");
     this.ownerScopes = [...scopes];
     this.cursorPath = path.join(path.dirname(this.logPath), `ai-events-${createHash("sha256").update(scopes.join("\0")).digest("hex")}.cursor.json`);
-    this.events.clear(); this.pendingObservations.clear(); this.consumed.clear();
+    this.events.clear(); this.displayEvents.clear(); this.pendingObservations.clear(); this.consumed.clear();
     this.seenTransportKeys.clear(); this.seenOperationKeys.clear();
     this.readOffset=0; this.partialLine=Buffer.alloc(0); this.fileIdentity=undefined;
     this.streamId=undefined; this.lastSequence=undefined; this.cursorLoaded=false;
@@ -349,6 +354,11 @@ export class AiAttributionStore {
     }
   }
 
+  public async authorshipEvents(): Promise<readonly AiEditEvent[]> {
+    await this.refresh();
+    return [...new Map([...this.events, ...this.displayEvents]).values()];
+  }
+
   private async refresh(): Promise<void> {
     if (this.refreshInFlight) {
       return this.refreshInFlight;
@@ -455,9 +465,10 @@ export class AiAttributionStore {
     ) {
       return;
     }
+    this.rememberDisplayEvent(candidate);
     if (
-      candidate.content_fingerprint !== undefined &&
-      !isContentFingerprint(candidate.content_fingerprint)
+      candidate.authorship_display_only === true ||
+      (candidate.content_fingerprint !== undefined && !isContentFingerprint(candidate.content_fingerprint))
     ) {
       return;
     }
@@ -515,6 +526,23 @@ export class AiAttributionStore {
       return;
     }
     this.events.set(event.event_id, event);
+  }
+
+  private rememberDisplayEvent(candidate: Partial<AiEditEvent>): void {
+    if (candidate.agent !== "claude-code" || !candidate.owner_scope_id ||
+        (this.ownerScopes !== undefined && !this.ownerScopes.includes(candidate.owner_scope_id)) ||
+        (!isContentFingerprint(candidate.authorship_fingerprint) &&
+          !(candidate.tool_event_id && (candidate.source === "agent_hook" || candidate.source === "transcript")))) return;
+    // The broker serializes missing timing evidence as JSON null. Display evidence
+    // is independently useful, but must never enter the timing classifier's cache.
+    const event = {...candidate, content_fingerprint: undefined};
+    if (!this.isValidEvent(event)) return;
+    this.displayEvents.set(event.event_id, event);
+    while (this.displayEvents.size > MAX_SIDECAR_EVENTS) {
+      const oldest = this.displayEvents.keys().next().value;
+      if (oldest === undefined) break;
+      this.displayEvents.delete(oldest);
+    }
   }
 
   private async loadCursor(): Promise<void> {
@@ -575,6 +603,9 @@ export class AiAttributionStore {
           this.seenOperationKeys.add(operationKey);
         }
       }
+    }
+    for (const event of Array.isArray(snapshot.authorship_events) ? snapshot.authorship_events : []) {
+      if (event && typeof event === "object") this.rememberDisplayEvent(event);
     }
     for (const eventId of Array.isArray(snapshot.consumed_event_ids)
       ? snapshot.consumed_event_ids
@@ -669,6 +700,7 @@ export class AiAttributionStore {
       seen_transport_keys: Array.from(this.seenTransportKeys),
       seen_operation_keys: Array.from(this.seenOperationKeys),
       events: Array.from(this.events.values()),
+      authorship_events: Array.from(this.displayEvents.values()),
       consumed_event_ids: Array.from(this.consumed),
       pending_observations: Array.from(this.pendingObservations.values())
     };

@@ -2,7 +2,7 @@
   "name": "atoaxis-vscode",
   "displayName": "AtoAxis \u2014 Developer Time Tracking",
   "description": "WakaTime-compatible coding time tracking with AI-agent attribution. Invite-only Early Access: requires an AtoAxis API key.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "atoaxis",
   "icon": "images/icon.png",
   "galleryBanner": {

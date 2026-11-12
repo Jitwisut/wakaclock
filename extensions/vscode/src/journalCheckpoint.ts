@@ -12,5 +12,6 @@ export function validateEditorCheckpoint(value: unknown): boolean {
   if (state.rejections !== undefined && !pairs(state.rejections, v => typeof v === "string")) return false;
   if (state.external !== undefined && !pairs(state.external, v => object(v) && typeof v.entity === "string" && typeof v.now === "number" && Number.isFinite(v.now) && object(v.metadata))) return false;
   if (state.externalPayloads !== undefined && !pairs(state.externalPayloads, v => object(v) && typeof v.heartbeat_id === "string")) return false;
+  if (state.authorship !== undefined && (!Array.isArray(state.authorship) || !state.authorship.every(v => object(v) && typeof v.heartbeatId === "string" && typeof v.scope === "string" && typeof v.entity === "string" && Number.isFinite(v.timeMs) && Number.isFinite(v.expiresAt)))) return false;
   return true;
 }

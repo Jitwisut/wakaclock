@@ -1,3 +1,7 @@
+import {
+  AUTHORSHIP_TTL_MS, isAuthorshipAcknowledgement, mergeRecoveredAuthorship, parkUnverifiedAuthorship,
+  reconcileAuthorship, retainAuthorshipObservation, type AuthorshipObservation,
+} from "./matchedAuthorship";
 import type {
   Selection,
   TextDocument,
@@ -82,6 +86,7 @@ interface FlushSnapshot {
 }
 
 interface JournalCheckpoint {
+  authorship?: AuthorshipObservation[];
   states: BufferedFileState[];
   retries: [string, FlushSnapshot[]][];
   detached: BufferedFileState[];
@@ -91,6 +96,9 @@ interface JournalCheckpoint {
 }
 
 export class HeartbeatBufferManager {
+  private authorship: AuthorshipObservation[] = [];
+  private attributionScopes: readonly string[] = [];
+  private authorshipInFlight?: Promise<void>;
   private readonly states = new Map<string, BufferedFileState>();
   private readonly lineMeasurements = new DocumentLineMeasurements();
   private readonly lastLineMeasurements = new Map<string, LineMeasurement>();
@@ -133,7 +141,7 @@ export class HeartbeatBufferManager {
     this.lastObservedEntity = undefined;
   }
 
-  public setAttributionOwnerScopes(scopes: readonly string[]): void { this.aiAttributionStore.setOwnerScopes(scopes); }
+  public setAttributionOwnerScopes(scopes: readonly string[]): void { this.attributionScopes = [...scopes]; this.aiAttributionStore.setOwnerScopes(scopes); }
 
   public enableJournal(directory: string, scope: string, verifiedRecoveryDirectories: readonly string[] = []): void {
     this.journalScope = scope;
@@ -166,6 +174,7 @@ export class HeartbeatBufferManager {
         }
         const recovered = previous.read();
       if (recovered) {
+        this.authorship.push(...(recovered.authorship ?? []));
         for (const [id, value] of recovered.external ?? []) importVerified(this.external, id, value);
         for (const [id, value] of recovered.externalPayloads ?? []) importVerified(this.externalPayloads, id, value);
         for (const [id, code] of recovered.rejections ?? []) importVerified(this.rejections, id, code);
@@ -186,6 +195,7 @@ export class HeartbeatBufferManager {
       }
       }
       }
+      this.authorship = mergeRecoveredAuthorship(this.authorship);
       // Transfer ownership only after the new journal is durable. Corrupt source
       // journals retain all evidence and make capture unhealthy until repaired.
       this.checkpoint();
@@ -337,14 +347,14 @@ export class HeartbeatBufferManager {
   private checkpoint(): void {
     if (this.journalError) throw new Error(this.journalError);
     if (!this.journal) return; // Legacy callers/tests opt in explicitly.
-    this.journal.append({ states: [...this.states.values()], retries: [...this.retrySnapshots], detached: [...this.detached.values()], rejections: [...this.rejections], external: [...this.external], externalPayloads: [...this.externalPayloads] },
+    this.journal.append({ authorship: this.authorship, states: [...this.states.values()], retries: [...this.retrySnapshots], detached: [...this.detached.values()], rejections: [...this.rejections], external: [...this.external], externalPayloads: [...this.externalPayloads] },
       Math.max([...this.states.values()].filter(s => this.hasPendingActivity(s)).length + [...this.retrySnapshots.values()].reduce((n, s) => n + s.length, 0) + this.detached.size + this.external.size + this.externalPayloads.size, this.rejections.size));
   }
 
   public constructor(
     private readonly getConfig: () => WakaclockConfigSnapshot,
     private readonly cli: Pick<WakaclockCliService, "sendHeartbeat"> &
-      Partial<Pick<WakaclockCliService, "sendEditorObservation" | "getEditorObservationStatus" | "acceptJournalBatch">>,
+      Partial<Pick<WakaclockCliService, "sendEditorObservation" | "getEditorObservationStatus" | "acceptJournalBatch" | "sendMatchedAuthorship">>,
     private readonly logger: Logger,
     private readonly onHeartbeatSent?: HeartbeatSentHandler,
     private readonly aiAttributionStore: AiAttributionStore = new AiAttributionStore(),
@@ -606,6 +616,7 @@ export class HeartbeatBufferManager {
 
     try {
       await this.cli.sendHeartbeat(normalizedEntity, true, "coding", [], payload);
+      void this.reconcileMatchedAuthorship();
       this.onHeartbeatSent?.();
       this.logger.debug("flushed external file-change heartbeat", {
         entity: normalizedEntity,
@@ -699,6 +710,50 @@ export class HeartbeatBufferManager {
         await this.flushFileInternal(entity, reason, { now, force: true });
       }
     });
+  }
+
+  public reconcileMatchedAuthorship(): Promise<void> {
+    this.authorshipInFlight ??= this.reconcileAuthorshipInternal().finally(() => {
+      this.authorshipInFlight = undefined;
+    });
+    return this.authorshipInFlight;
+  }
+
+  private async reconcileAuthorshipInternal(): Promise<void> {
+    if (this.capturePaused || this.journalError || !this.journal || !this.cli.sendMatchedAuthorship) return;
+    try {
+      if (!this.authorship.length) return;
+      const events = await this.aiAttributionStore.authorshipEvents();
+      if (this.capturePaused || this.journalError || !this.journal) return;
+      const now = Date.now();
+      const before = JSON.stringify(this.authorship);
+      for (const observation of this.authorship) parkUnverifiedAuthorship(observation);
+      const eligible = this.authorship.filter(o => this.attributionScopes.includes(o.scope));
+      const parked = this.authorship.filter(o =>
+        !this.attributionScopes.includes(o.scope) && retainAuthorshipObservation(o, now)
+      );
+      this.authorship = [...parked, ...reconcileAuthorship(eligible, events, now)];
+      if (before !== JSON.stringify(this.authorship)) this.checkpoint();
+      const pending = this.authorship.filter(o =>
+        this.attributionScopes.includes(o.scope) && o.request && !o.acknowledged && !o.blockedReason
+      ).sort((a, b) => (a.lastAttemptAt ?? -1) - (b.lastAttemptAt ?? -1));
+      const journal = this.journal;
+      for (const observation of pending.slice(0, 8)) {
+        if (this.capturePaused || this.journalError || this.journal !== journal) break;
+        if (!this.attributionScopes.includes(observation.scope)) continue;
+        const request = observation.request!;
+        try {
+          observation.lastAttemptAt = Date.now();
+          this.checkpoint();
+          const receipt = await this.cli.sendMatchedAuthorship(observation.scope, request);
+          if (this.journal !== journal || this.capturePaused) break;
+          if (observation.request !== request || !this.attributionScopes.includes(observation.scope) ||
+              !isAuthorshipAcknowledgement(request, receipt)) continue;
+          observation.acknowledged = true;
+          this.checkpoint();
+        } catch { /* Offline or uncertain receipts remain durable for retry. */ }
+      }
+    } catch { /* Display enrichment cannot interrupt original activity delivery. */ }
   }
 
   public getBufferedSeconds(now = Date.now()): number {
@@ -824,9 +879,20 @@ export class HeartbeatBufferManager {
         this.detached.set(detachedId, captured);
         this.clearMeasurements(state);
         this.checkpoint();
+        const displayObservation = captured.pendingEditorChanges.length === 1 ? {...captured.pendingEditorChanges[0]} : undefined;
         const matchedAiOperation = await this.classifyPendingAttribution(captured, now, measurement);
         if (this.hasPendingActivity(captured)) {
-          snapshots.push(this.captureSnapshot(captured, category, write, measurement, matchedAiOperation));
+          const snapshot = this.captureSnapshot(captured, category, write, measurement, matchedAiOperation);
+          if (this.journalScope && this.attributionScopes.includes(this.journalScope) && displayObservation &&
+              snapshot.payload.actor_type === "unknown" && measurement?.status === "measured" &&
+              !measurement.containsReplay && measurement.changeEvents === 1 &&
+              ((measurement.linesAdded ?? 0) > 0 || (measurement.linesDeleted ?? 0) > 0)) {
+            this.authorship.push({heartbeatId:snapshot.payload.heartbeat_id!, revision:snapshot.payload.revision ?? 0,
+              scope:this.journalScope, entity, timeMs:displayObservation.timeMs,
+              fingerprint:displayObservation.contentFingerprint, toolId:displayObservation.toolEventId,
+              expiresAt:Date.now()+AUTHORSHIP_TTL_MS});
+          }
+          snapshots.push(snapshot);
         }
         this.detached.delete(detachedId);
       }
@@ -861,6 +927,7 @@ export class HeartbeatBufferManager {
       this.retrySnapshots.delete(entity);
       this.commitSnapshot(entity, now, snapshots[snapshots.length - 1]);
       this.checkpoint();
+      void this.reconcileMatchedAuthorship();
       this.onHeartbeatSent?.();
       this.logger.debug("flushed heartbeat", {
         entity,
