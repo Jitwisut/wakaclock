@@ -205,6 +205,9 @@ impl From<HeartbeatItem> for HeartbeatListEntry {
 /// 1 heartbeat ใน response list — เฉพาะ fields ที่ client ต้องการ
 #[derive(Debug, Serialize)]
 pub struct HeartbeatItem {
+    /// Display-only proof, independent of the canonical actor and all metrics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_authorship: Option<crate::model::matched_authorship::MatchedAuthorship>,
     pub entity: String,
     pub entity_type: String,
     pub time: f64,
@@ -518,9 +521,9 @@ pub async fn list(
         return Err(auth::forbidden_scope("read_logged_time"));
     }
 
-    let rows = state
-        .heartbeat_service
-        .get_by_date(user_id, &range)
+    let (rows, matched_authorship) = state
+        .matched_authorship_service
+        .history(user_id, &range)
         .await
         .map_err(|e| app_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
@@ -571,6 +574,7 @@ pub async fn list(
                 }
             }
             HeartbeatItem {
+                matched_authorship: r.heartbeat_id.as_ref().and_then(|id| matched_authorship.get(id)).cloned(),
                 // History is still owner-scoped, but the response must not become a path
                 // exfiltration endpoint. Keep project-relative names where possible and reduce
                 // legacy absolute/traversal rows to a safe basename.
@@ -1492,6 +1496,7 @@ mod tests {
     #[test]
     fn history_item_serializes_projected_actor_confidence() {
         let mut item = HeartbeatItem {
+            matched_authorship: None,
             entity: "src/main.rs".to_string(),
             entity_type: "file".to_string(),
             time: 1_700_000_000.0,

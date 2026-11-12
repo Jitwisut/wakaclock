@@ -57,6 +57,10 @@ pub fn router(app_state: Arc<AppState>) -> Router {
             post(heartbeats::create).get(heartbeats::list),
         )
         .route(
+            "/heartbeats/matched-authorship",
+            post(matched_authorship::create),
+        )
+        .route(
             "/heartbeats.bulk",
             post(heartbeats::create_bulk).delete(heartbeats::delete_bulk),
         )
@@ -300,3 +304,5 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         )
         .with_state(app_state)
 }
+
+pub mod matched_authorship;

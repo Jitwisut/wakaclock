@@ -98,3 +98,5 @@ pub(crate) mod user_identity_sync;
 mod team_financial_transaction;
 #[cfg(test)]
 mod team_financial_transaction_tests;
+
+pub mod matched_authorship;
