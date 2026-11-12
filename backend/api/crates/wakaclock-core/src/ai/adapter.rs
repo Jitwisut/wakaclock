@@ -1464,6 +1464,8 @@ mod tests {
                     lines_added: Some(1),
                     lines_deleted: Some(0),
                     content_fingerprint: None,
+                    authorship_fingerprint: None,
+                    authorship_proof_version: None,
                     active_seconds: Some(1.0),
                     transport: Some("native_plugin".to_string()),
                     tool: Some("apply_patch".to_string()),

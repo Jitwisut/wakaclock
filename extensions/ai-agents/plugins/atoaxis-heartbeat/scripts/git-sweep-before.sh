@@ -37,7 +37,7 @@ hash_material() {
 TOOL_EVENT_ID="${AGENT}-tool-$(hash_material "$KEY_MATERIAL")"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMMON_DIR="${WAKACLOCK_AGENT_COMMON_DIR:-${SCRIPT_DIR}/../../../common}"
+COMMON_DIR="${WAKACLOCK_AGENT_COMMON_DIR:-${SCRIPT_DIR}/../common}"
 PRODUCER="${COMMON_DIR}/tool-boundary-producer.py"
 if ! command -v python3 >/dev/null 2>&1 || [ ! -r "$PRODUCER" ]; then
   printf '%s\n' 'AtoAxis: producer_capture_failure; durable boundary helper required' >&2

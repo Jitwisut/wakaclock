@@ -67,6 +67,11 @@ CHANGE_KIND="$(read_field '.change_kind // .operation // .kind')"
 CHANGE_KIND="${CHANGE_KIND:-modify}"
 TOOL_EVENT_ID="$(read_field '.tool_event_id // .tool_call_id // .call_id')"
 TOOL_EVENT_ID="${TOOL_EVENT_ID:-$TOOL_CALL_ID}"
+AUTHORSHIP_FINGERPRINT="$(read_field '.authorship_fingerprint')"
+AUTHORSHIP_PROOF_VERSION="$(read_field '.authorship_proof_version | if . == 1 then 1 else null end')"
+if [[ "$CLIENT_ID" != claude-code || "$SOURCE" != agent_hook || ! "$AUTHORSHIP_FINGERPRINT" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  AUTHORSHIP_FINGERPRINT=""
+fi
 
 # Adapters should pass scalar strings directly, but an older wrapper can still
 # stringify a nested JSON object before invoking this script. Reject control bytes
@@ -185,10 +190,12 @@ ENVELOPE="$(jq -cn \
   --arg tool "$TOOL_NAME" \
   --arg tool_event_id "$TOOL_EVENT_ID" \
   --arg editor "$EDITOR_ID" \
+  --arg authorship_fingerprint "$AUTHORSHIP_FINGERPRINT" \
+  --argjson authorship_proof_version "${AUTHORSHIP_PROOF_VERSION:-null}" \
   --argjson lines_added "$LINES_ADDED" \
   --argjson lines_deleted "$LINES_DELETED" \
   --argjson active_seconds "$ACTIVE_SECONDS" \
-  '{schema_version:1,producer_version:$producer_version,event_type:"file_change",event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:(if $project_root=="" then null else $project_root end),change_kind:$change_kind,previous_entity:(if $previous_entity=="" then null else $previous_entity end),agent:$agent,provider:(if $provider=="" then null else $provider end),model:(if $model=="" then null else $model end),session_id:(if $session_id=="" then null else $session_id end),source:$source,confidence:$confidence,lines_added:$lines_added,lines_deleted:$lines_deleted,active_seconds:$active_seconds,transport:$transport,tool:(if $tool=="" then null else $tool end),tool_event_id:(if $tool_event_id=="" then null else $tool_event_id end),editor:(if $editor=="" then null else $editor end)}')"
+  '{schema_version:1,producer_version:$producer_version,event_type:"file_change",event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:(if $project_root=="" then null else $project_root end),change_kind:$change_kind,previous_entity:(if $previous_entity=="" then null else $previous_entity end),agent:$agent,provider:(if $provider=="" then null else $provider end),model:(if $model=="" then null else $model end),session_id:(if $session_id=="" then null else $session_id end),source:$source,confidence:$confidence,lines_added:$lines_added,lines_deleted:$lines_deleted,active_seconds:$active_seconds,transport:$transport,tool:(if $tool=="" then null else $tool end),tool_event_id:(if $tool_event_id=="" then null else $tool_event_id end),editor:(if $editor=="" then null else $editor end)} + (if $authorship_fingerprint=="" then {} else {authorship_fingerprint:$authorship_fingerprint} + (if $authorship_proof_version==1 then {authorship_proof_version:1} else {} end) end)')"
 
 # The producer accepts on disk before testing whether the CLI can start.
 PRODUCER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

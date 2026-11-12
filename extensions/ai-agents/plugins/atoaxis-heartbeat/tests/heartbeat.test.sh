@@ -19,7 +19,11 @@ cat >>"$ATOAXIS_CAPTURE"
 MOCK
 chmod +x "$MOCK"
 
-PAYLOAD='{"session_id":"s1","tool_use_id":"toolu1","cwd":"/repo","tool_name":"Write","tool_input":{"file_path":"src/app.ts","content":"one\ntwo\nprivate source must not leave hook"}}'
+mkdir -p "$TMP/repo/src"
+FILE="$TMP/repo/src/app.ts"
+printf 'one\r\ntwo\r\nprivate source must not leave hook — ไทย\r\n' > "$FILE"
+PAYLOAD="$(jq -cn --arg cwd "$TMP/repo" --rawfile content "$FILE" \
+  '{session_id:"s1",tool_use_id:"toolu1",cwd:$cwd,tool_name:"Write",tool_input:{file_path:"src/app.ts",content:$content}}')"
 printf '%s' "$PAYLOAD" | ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/scripts/heartbeat.sh"
 
 grep -q '"agent":"claude-code"' "$CAPTURE"
@@ -28,13 +32,38 @@ grep -q '"lines_deleted":0' "$CAPTURE"
 grep -q '"producer_version":1' "$CAPTURE"
 # The raw tool-use ID is the dedup key shared with the transcript; the event ID keeps
 # its digest form so retries of hooks from older installs stay idempotent.
-EXPECTED_HASH="$(printf '%s' 's1|toolu1|/repo/src/app.ts' | shasum -a 256 | cut -c1-40)"
+EXPECTED_HASH="$(printf '%s' "s1|toolu1|$FILE" | shasum -a 256 | cut -c1-40)"
 grep -q "\"event_id\":\"claude-code-${EXPECTED_HASH}\"" "$CAPTURE"
 grep -E -q '"tool_(call|event)_id":"toolu1"' "$CAPTURE"
+EXPECTED_FINGERPRINT="sha256:$(shasum -a 256 "$FILE" | cut -d' ' -f1)"
+grep -Fq "\"authorship_fingerprint\":\"$EXPECTED_FINGERPRINT\"" "$CAPTURE"
+grep -Fq '"authorship_proof_version":1' "$CAPTURE"
+if grep -q '"content_fingerprint"' "$CAPTURE"; then
+  echo 'display evidence reached the timing matcher' >&2
+  exit 1
+fi
 if grep -q 'private source' "$CAPTURE"; then
   echo "privacy failure: Claude content reached broker" >&2
   exit 1
 fi
+printf '\377' > "$TMP/not-utf8"
+truncate -s 524289 "$TMP/too-large"
+ln -s "$FILE" "$TMP/symlink"
+for ignored in "$TMP/not-utf8" "$TMP/too-large" "$TMP/symlink" "$TMP/missing"; do
+  test -z "$(printf '%s' "$PAYLOAD" | python3 "$ROOT/scripts/authorship-fingerprint.py" "$ignored")"
+done
+printf '%s' "$PAYLOAD" | jq '.tool_input.content = "another edit"' |
+  python3 "$ROOT/scripts/authorship-fingerprint.py" "$FILE" > "$TMP/changed-hash"
+test ! -s "$TMP/changed-hash"
+EDIT="$TMP/edit.ts"
+printf 'new\r\n' > "$EDIT"
+EDIT_PAYLOAD="$(jq -cn '{tool_name:"Edit",tool_input:{old_string:"old",new_string:"new"},tool_response:{originalFile:"old\r\n"}}')"
+expected="sha256:$(shasum -a 256 "$EDIT" | cut -d' ' -f1)"
+test "$(printf '%s' "$EDIT_PAYLOAD" | python3 "$ROOT/scripts/authorship-fingerprint.py" "$EDIT")" = "$expected"
+for change in 'del(.tool_response)' '.tool_response.originalFile = "old old"' '.tool_response.userModified = true' '.tool_name = "MultiEdit"'; do
+  test -z "$(printf '%s' "$EDIT_PAYLOAD" | jq "$change" | python3 "$ROOT/scripts/authorship-fingerprint.py" "$EDIT")"
+done
+test -z "$(python3 "$ROOT/scripts/authorship-fingerprint.py" "$EDIT" </dev/null)"
 printf '%s' '{"session_id":"s1","tool_use_id":"failed-shell","tool_name":"Bash","tool_input":{"command":"secret command"}}' \
   | ATOAXIS_CAPTURE="$CAPTURE" WAKACLOCK_CLI_PATH="$MOCK" "$ROOT/scripts/tool-abort.sh"
 grep -q 'ai producer-batch --json' "$CAPTURE"

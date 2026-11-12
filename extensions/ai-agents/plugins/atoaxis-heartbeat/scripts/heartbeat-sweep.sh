@@ -25,7 +25,7 @@ fi
 WAKACLOCK_BIN="${WAKACLOCK_BIN:-wakaclock}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
-COMMON_EMITTER="${WAKACLOCK_AGENT_COMMON_EMITTER:-${SCRIPT_DIR}/../../../common/emit-event.sh}"
+COMMON_EMITTER="${WAKACLOCK_AGENT_COMMON_EMITTER:-${SCRIPT_DIR}/../common/emit-event.sh}"
 emit_metadata() {
   if [ -x "$COMMON_EMITTER" ]; then
     "$COMMON_EMITTER"

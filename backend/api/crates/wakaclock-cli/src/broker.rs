@@ -114,6 +114,8 @@ pub(crate) fn event_from_ai_edit(event: &AiEditEvent, active_seconds: f64) -> Br
         lines_added: event.lines_added,
         lines_deleted: event.lines_deleted,
         content_fingerprint: None,
+        authorship_fingerprint: None,
+        authorship_proof_version: None,
         active_seconds: Some(active_seconds.clamp(0.0, MAX_ACTIVITY_GAP_SECONDS)),
         transport: None,
         tool: None,
@@ -401,6 +403,10 @@ async fn process_record(
     {
         let state = AiAttributionState::open()?;
         if alias_delivered_counterpart(&state, event)? {
+            if event.authorship_fingerprint.is_some() {
+                append_broker_sidecar(event, record.scope_id.as_deref(), true)
+                    .map_err(|_| AppError::Io(std::io::Error::other("broker_sidecar_unavailable")))?;
+            }
             state.mark_delivered(&record.event_id, "broker_alias")?;
             return Ok(ProcessRecordOutcome::Processed);
         }
@@ -411,7 +417,7 @@ async fn process_record(
     // being classified as Human while the API is offline. The append is idempotent by
     // event_id so a lease recovery after a crash cannot grow duplicate correlation
     // records.
-    append_broker_sidecar(event, record.scope_id.as_deref())
+    append_broker_sidecar(event, record.scope_id.as_deref(), false)
         .map_err(|_| AppError::Io(std::io::Error::other("broker_sidecar_unavailable")))?;
 
     let mut matched_editor = if event
@@ -662,6 +668,7 @@ fn has_explicit_tool_duration_evidence(event: &BrokerEventV1) -> bool {
 fn append_broker_sidecar(
     event: &BrokerEventV1,
     owner_scope: Option<&str>,
+    authorship_display_only: bool,
 ) -> Result<(), Box<dyn Error>> {
     // The sequence is reserved in the broker's durable inbox database before this
     // append. A retry therefore reuses the same stream/sequence pair without an
@@ -692,7 +699,11 @@ fn append_broker_sidecar(
     set_private_permissions(&path)?;
     // Replay never reads today's file to manufacture historical edit identity.
     // Use only a producer fingerprint observed at the actual hook boundary.
-    let content_fingerprint = event.content_fingerprint.as_deref();
+    let content_fingerprint = if authorship_display_only {
+        None
+    } else {
+        event.content_fingerprint.as_deref()
+    };
     let payload = serde_json::json!({
         "schema_version": AI_SIDECAR_SCHEMA_VERSION,
         "owner_scope_id": owner_scope,
@@ -720,6 +731,9 @@ fn append_broker_sidecar(
         "tool_event_id": event.tool_event_id,
         "producer_surface": event.producer_surface,
         "content_fingerprint": content_fingerprint,
+        "authorship_fingerprint": event.authorship_fingerprint,
+        "authorship_proof_version": event.authorship_proof_version,
+        "authorship_display_only": authorship_display_only,
         "change_kind": event.change_kind.as_str(),
         "previous_entity": event.previous_entity,
     });
@@ -1165,6 +1179,8 @@ mod tests {
             lines_added: Some(1),
             lines_deleted: Some(0),
             content_fingerprint: None,
+            authorship_fingerprint: None,
+            authorship_proof_version: None,
             active_seconds: Some(1.0),
             transport: Some("shell_hook".to_string()),
             tool: Some("apply_patch".to_string()),

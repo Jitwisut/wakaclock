@@ -33,6 +33,26 @@ function collect(current, files) {
 }
 
 if (!fs.existsSync(root)) throw new Error(`bundle directory not found: ${root}`);
+
+// Claude installs only the plugin subtree into its cache. Package the runtime
+// helpers from their shared sources so that copy is usable on its own.
+const claudeHelpers = path.join(root, "plugins", "atoaxis-heartbeat", "common");
+fs.mkdirSync(claudeHelpers, { recursive: true });
+for (const helper of [
+  "activity-producer.py",
+  "context-producer.py",
+  "emit-event.sh",
+  "metadata-producer.py",
+  "session-event.sh",
+  "tool-boundary-producer.py",
+  "tool-event-id.sh",
+]) {
+  const source = path.join(root, "common", helper);
+  const destination = path.join(claudeHelpers, helper);
+  fs.copyFileSync(source, destination);
+  fs.chmodSync(destination, fs.statSync(source).mode & 0o777);
+}
+
 const files = {};
 collect(root, files);
 const digest = hash(Buffer.from(JSON.stringify(files)));

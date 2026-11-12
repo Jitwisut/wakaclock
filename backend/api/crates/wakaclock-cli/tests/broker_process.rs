@@ -194,6 +194,8 @@ fn event(id: &str) -> BrokerEventV1 {
         lines_added: Some(1),
         lines_deleted: Some(0),
         content_fingerprint: None,
+        authorship_fingerprint: None,
+        authorship_proof_version: None,
         active_seconds: Some(1.0),
         transport: Some("test".to_string()),
         tool: Some("test".to_string()),
@@ -453,6 +455,37 @@ async fn repeated_emit_across_processes_is_durable_and_idempotent() {
     assert_eq!(second["duplicate"], true);
     assert_eq!(total_rows(&home.join(".wakaclock/broker.db")), 1);
     assert_eq!(api.heartbeats.lock().await.len(), 1);
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verified_claude_proof_reaches_sidecar_without_leaking_into_heartbeat() {
+    let home = temp_home("claude-authorship-proof");
+    let api = fake_api(200).await;
+    let mut input = event("claude-authorship-proof");
+    input.agent = "claude-code".into();
+    input.provider = Some("anthropic".into());
+    input.tool_event_id = Some("toolu_actual".into());
+    input.authorship_fingerprint = Some(format!("sha256:{}", "a".repeat(64)));
+    input.authorship_proof_version = Some(1);
+
+    let receipt = cli(&home, &api.url, &["ai", "emit", "--json"], Some(&input)).await;
+    assert_eq!(receipt["accepted"], true);
+    let sidecar = fs::read_to_string(home.join(".wakaclock/ai-events.jsonl")).unwrap();
+    let mut records = sidecar.lines();
+    let record: serde_json::Value = serde_json::from_str(records.next().unwrap()).unwrap();
+    assert!(records.next().is_none());
+    assert_eq!(record["authorship_proof_version"], 1);
+    assert_eq!(
+        record["authorship_fingerprint"].as_str(),
+        input.authorship_fingerprint.as_deref()
+    );
+    assert!(record["content_fingerprint"].is_null());
+
+    let heartbeats = api.heartbeats.lock().await;
+    assert_eq!(heartbeats.len(), 1);
+    assert!(heartbeats[0].get("authorship_fingerprint").is_none());
+    assert!(heartbeats[0].get("authorship_proof_version").is_none());
     fs::remove_dir_all(home).unwrap();
 }
 

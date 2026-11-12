@@ -23,11 +23,9 @@ fi
 WAKACLOCK_BIN="${WAKACLOCK_BIN:-wakaclock}"
 
 
-# All native adapters share one metadata allowlist. Installed Claude plugin
-# copies may not include the sibling common directory yet, so retain a direct
-# BrokerEvent fallback for one upgrade cycle.
+# The standalone Claude cache contains the same helpers as the managed bundle.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
-COMMON_EMITTER="${WAKACLOCK_AGENT_COMMON_EMITTER:-${SCRIPT_DIR}/../../../common/emit-event.sh}"
+COMMON_EMITTER="${WAKACLOCK_AGENT_COMMON_EMITTER:-${WAKACLOCK_AGENT_COMMON_DIR:-${SCRIPT_DIR}/../common}/emit-event.sh}"
 emit_metadata() {
   if [ -x "$COMMON_EMITTER" ]; then
     "$COMMON_EMITTER"
@@ -54,6 +52,18 @@ if [ -z "$SESSION_CWD" ] && [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH"
   SESSION_CWD="$(tail -n 1000 "$TRANSCRIPT_PATH" 2>/dev/null \
     | jq -r 'select((.cwd // "") != "") | .cwd' 2>/dev/null \
     | tail -n 1 || true)"
+fi
+
+if [ -z "$FILE_PATH" ]; then
+  exit 0
+fi
+if [[ "$FILE_PATH" != /* ]]; then
+  FILE_PATH="${SESSION_CWD:-$PWD}/${FILE_PATH}"
+fi
+
+AUTHORSHIP_FINGERPRINT=""
+if [[ "$TOOL_NAME" =~ ^(Write|Edit|MultiEdit|NotebookEdit)$ ]] && [ -n "$CALL_ID" ]; then
+  AUTHORSHIP_FINGERPRINT="$(python3 "$SCRIPT_DIR/authorship-fingerprint.py" "$FILE_PATH" <<<"$INPUT" 2>/dev/null || true)"
 fi
 
 resolve_workspace_root() {
@@ -105,13 +115,6 @@ if [ -z "$AI_MODEL" ] || [ "$AI_MODEL" = "null" ]; then
       | jq -r 'select(.type == "assistant") | .message.model // empty' 2>/dev/null \
       | tail -n 1 || true)"
   fi
-fi
-
-if [ -z "$FILE_PATH" ]; then
-  exit 0
-fi
-if [[ "$FILE_PATH" != /* ]]; then
-  FILE_PATH="${SESSION_CWD:-$PWD}/${FILE_PATH}"
 fi
 
 # Rough line counts, not a real unified diff — good enough to answer "about how much did
@@ -189,9 +192,10 @@ jq -cn \
   --arg model "$AI_MODEL" \
   --arg tool "$TOOL_NAME" \
   --arg call_id "$CALL_ID" \
+  --arg authorship_fingerprint "$AUTHORSHIP_FINGERPRINT" \
   --argjson lines_added "$LINES_ADDED" \
   --argjson lines_deleted "$LINES_DELETED" \
-  '{client_id:$agent,producer_version:1,provider_id:$provider,model_id:(if $model=="" then null else $model end),event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:(if $project_root=="" then null else $project_root end),change_kind:"modify",session_id:(if $session_id=="" then null else $session_id end),source:"agent_hook",confidence:"verified",lines_added:$lines_added,lines_deleted:$lines_deleted,transport:"native_plugin",tool:$tool,tool_call_id:(if $call_id=="" then $event_id else $call_id end)}' \
+  '{client_id:$agent,producer_version:1,provider_id:$provider,model_id:(if $model=="" then null else $model end),event_id:$event_id,occurred_at:$occurred_at,entity:$entity,project_root:(if $project_root=="" then null else $project_root end),change_kind:"modify",session_id:(if $session_id=="" then null else $session_id end),source:"agent_hook",confidence:"verified",lines_added:$lines_added,lines_deleted:$lines_deleted,transport:"native_plugin",tool:$tool,tool_call_id:(if $call_id=="" then $event_id else $call_id end)} + (if $authorship_fingerprint=="" then {} else {authorship_fingerprint:$authorship_fingerprint,authorship_proof_version:1} end)' \
   | emit_metadata
 
 exit 0
