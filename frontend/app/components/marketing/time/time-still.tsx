@@ -7,7 +7,7 @@ const SLICES = generateDemoDays(DAYS);
 const TODAY_RUNS = sliceRuns(SLICES, 0);
 
 /**
- * Server-rendered still of the time ring. It is the whole visual for reduced motion, data
+ * Server-rendered still of the Intelligence Core and its time ring. It is the whole visual for reduced motion, data
  * saver and devices without WebGL, and the first frame for everyone else until the 3D scene
  * has painted over it. Same demo data and same dial geometry as the scene.
  */
@@ -15,6 +15,32 @@ export function TimeStill() {
   const ticks = Array.from({ length: 96 }, (_, index) => index * (MINUTES_PER_DAY / 96));
   return (
     <svg className="tx-still" viewBox="0 0 800 800">
+      {/* The Intelligence Core's machined rings, each on its own tilted axis. */}
+      <g className="tx-still-machinery">
+        <ellipse
+          cx={C}
+          cy={C}
+          rx={R + 70}
+          ry={(R + 70) * 0.36}
+          transform={`rotate(-24 ${C} ${C})`}
+        />
+        <ellipse
+          cx={C}
+          cy={C}
+          rx={R + 110}
+          ry={(R + 110) * 0.82}
+          transform={`rotate(38 ${C} ${C})`}
+        />
+        <ellipse
+          className="tx-still-machinery-amber"
+          cx={C}
+          cy={C}
+          rx={R + 150}
+          ry={(R + 150) * 0.2}
+          transform={`rotate(72 ${C} ${C})`}
+        />
+        <circle className="tx-still-precision" cx={C} cy={C} r={R + 190} />
+      </g>
       {/* earlier days recede up and to the right, toward a vanishing point */}
       {Array.from({ length: DAYS - 1 }, (_, index) => DAYS - 1 - index).map((day) => (
         <g key={day} opacity={Math.max(0.12, 0.5 - day * 0.06)}>
@@ -61,6 +87,18 @@ export function TimeStill() {
       })}
       {/* Drawn pointing at midnight; CSS turns it to the scrolled time (--tx-hand). */}
       <path className="tx-still-hand" d={`M${C} ${C}V${C - R + 26}`} />
+      {/* The nucleus: a soft glow built from stacked discs (no gradient ids in the page). */}
+      <g className="tx-still-nucleus">
+        {[
+          [72, 0.05],
+          [48, 0.1],
+          [30, 0.22],
+          [17, 0.55],
+        ].map(([radius, opacity]) => (
+          <circle cx={C} cy={C} key={radius} opacity={opacity} r={radius} />
+        ))}
+        <circle className="tx-still-nucleus-core" cx={C} cy={C} r="9" />
+      </g>
       <circle className="tx-still-hub" cx={C} cy={C} r="6" />
       <circle className="tx-still-ring" cx={C} cy={C} r="40" />
     </svg>

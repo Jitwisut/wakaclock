@@ -141,6 +141,23 @@ presets, Retro Pixel 3D included, stay selectable in the theme customizer.
   intro animations advance from frame `delta`, not `clock.elapsedTime`, so they are
   testable and an on-demand canvas never skips them.
 
+### Marketing — Code Universe art direction
+
+The public site (`app/(marketing)`, `app/th`) was redesigned on 2026-11-14 (owner decisions):
+dark void `#05070B`, cyan `#66D9F7` (human) and amber `#E8A66A` (AI) used as light sources,
+Space Grotesk display / Geist / Geist Mono / IBM Plex Sans Thai. **Copy, headings, ids, links,
+metadata and JSON-LD are locked** — the redesign is layout, visuals and motion only; diff the
+server HTML of every route before and after any marketing design change.
+
+- `components/marketing/cosmos.css` is the design layer, imported last by both marketing
+  layouts. It re-points the `--mkt-*` tokens and restyles; it adds no copy. Thai text gets no
+  letter-spacing or text-transform.
+- 3D lives on the homepage only. The scene (`components/marketing/time/scene/`) is the
+  Intelligence Core (`core.tsx`), today's dial and week (`time-rings.tsx`), the project galaxy
+  (`galaxy.tsx`) and the time tunnel (`tunnel.tsx`), lit by `atmosphere.tsx`, all from the
+  seeded demo data and always labelled as demo. `time-keyframes.ts` holds one camera key per
+  chapter; `timeMotion.wake` drives the opening. Content pages draw their horizon in CSS.
+
 ### Layouts are per theme — Cinema only
 
 Owner rule (2026-11-04): a theme redesign must not change the other presets. The rebuilt

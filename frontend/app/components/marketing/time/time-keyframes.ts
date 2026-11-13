@@ -1,3 +1,23 @@
+/* ---------- the Code Universe: where the galaxy and the tunnel live ---------- */
+
+/** The time tunnel's mouth (z) and the depth one day of history occupies. */
+export const TUNNEL_START = -20;
+export const TUNNEL_DAY_LENGTH = 8;
+
+function clampUnit(value: number) {
+  return Math.min(1, Math.max(0, value));
+}
+
+/** The project galaxy fades in with chapter 03 and out as the camera enters the tunnel. */
+export function galaxyVisibility(g: number): number {
+  return clampUnit((g - 1.1) / 0.8) * (1 - clampUnit((g - 3.4) / 0.6));
+}
+
+/** The tunnel's structure and markers resolve as chapter 05 approaches and then stay. */
+export function tunnelVisibility(g: number): number {
+  return clampUnit((g - 3.1) / 0.7);
+}
+
 /**
  * Camera choreography for the time ring, one keyframe per chapter. The story position `g`
  * runs 0 → CHAPTER_COUNT - 1 as the page scrolls; the rig samples a spline through these
@@ -13,18 +33,20 @@ export const RING_SPACING = 2.4;
 type Vec3 = readonly [number, number, number];
 
 export const CAMERA_KEYS: readonly { look: Vec3; pos: Vec3 }[] = [
-  // 01 — hero: today's dial, whole, framed to the right of the headline.
-  { pos: [1.6, 0.6, 12.5], look: [-2.9, 0.1, 0] },
-  // 02 — heartbeats: close on the lit arcs, framed left of the right-hand text.
-  { pos: [-3, -1.8, 9.6], look: [2.4, -0.7, -0.6] },
-  // 03 — one day: the week recedes behind a centred statement.
-  { pos: [5.2, 3.4, 8.2], look: [0, 0.2, -6] },
-  // 04 — human + AI: low and oblique across the stack.
-  { pos: [6.2, -3.4, 8], look: [-2.2, 0.2, -4] },
-  // 05 — the product: high, looking down the stack like a chart.
-  { pos: [2.2, 12, 3], look: [-2.4, 0, -7] },
-  // 06 — begin: straight down the axis, every day aligned into one tunnel.
-  { pos: [0, -1.2, 13.5], look: [0, -2.4, -8] },
+  // 01 — the awakening: a three-quarter establishing shot of the Intelligence Core, which
+  // fills the right of the frame beside the headline.
+  { pos: [4.4, 2.4, 17.5], look: [-3.6, 0.2, 0] },
+  // 02 — heartbeats: a dolly in, low and close along the machinery, text on the right.
+  { pos: [-5.2, -1.4, 8.8], look: [2.8, -0.2, -1.2] },
+  // 03 — one day, every project: pulled wide and high so the receding days and the
+  // project galaxy share the frame around a centred statement.
+  { pos: [9.5, 7.5, 17], look: [0, 0, -9] },
+  // 04 — human + AI: a slow orbit to the other flank, oblique across the stack.
+  { pos: [-9, -3.6, 7.5], look: [1.5, 0.4, -6] },
+  // 05 — the product: inside the time tunnel, travelling back through the week.
+  { pos: [0.4, 0.5, -26], look: [0, -0.1, -48] },
+  // 06 — begin: deep in the tunnel, turned around — the core burns at the far end.
+  { pos: [0.9, -0.8, -58], look: [0, 0, 0] },
 ];
 
 /**
@@ -151,14 +173,14 @@ export function onRingBand(x: number, y: number, tolerance = 0.3): boolean {
  */
 export const DAY_CAMERA_KEYS: readonly { look: Vec3; pos: Vec3 }[] = [
   CAMERA_KEYS[CAMERA_KEYS.length - 1] as { look: Vec3; pos: Vec3 },
-  // Out and above: the ring with the week's city rising beneath it.
-  { pos: [8.5, 1.5, 9], look: [0, -2.6, -3] },
-  // A low pass along the city, still above its tallest block.
-  { pos: [-9, -0.6, 4], look: [0.5, -2.8, -3.5] },
-  // Straight down over the rooftops.
-  { pos: [1.5, 9.5, 3.5], look: [0, -3.4, -3.5] },
-  // Pull back to take it all in.
-  { pos: [10, 0.5, 13], look: [1, -2.2, -3] },
+  // Out of the tunnel's mouth, still facing the core.
+  { pos: [-2.5, 1.8, -14], look: [0, 0, 0] },
+  // A long lateral pass beside the machinery.
+  { pos: [-15, 3, 4], look: [0, 0, -2] },
+  // High above, the galaxy spread beneath.
+  { pos: [4, 20, 10], look: [0, 0, -10] },
+  // Back to a calm wide view of the whole system.
+  { pos: [12, 2, 20], look: [-1, 0, -4] },
 ];
 
 /** Spline parameter along the day path for a 0–1 progress through the lower page. */

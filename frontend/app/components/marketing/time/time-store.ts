@@ -41,6 +41,8 @@ export const timeMotion = {
   /** Dusk-to-daylight blend, 0–1 (palette, glow, veils). */
   dawnTarget: 0,
   daylight: 0,
+  /** The core's awakening, 0 → 1 once from the scene's first frame (see time-rig). */
+  wake: 0,
 };
 
 const MOTION_DEFAULTS = { ...timeMotion };

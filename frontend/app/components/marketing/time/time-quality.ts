@@ -3,6 +3,10 @@ export interface TimeSceneQuality {
   bloom: boolean;
   /** Days drawn as rings, today included. */
   days: number;
+  /** Metal shards drifting around the core. */
+  debris: number;
+  /** Upper bound on nodes per project cluster in the galaxy. */
+  galaxyNodes: number;
   /** Upper bound for the device pixel ratio; the performance monitor may lower it. */
   maxDpr: number;
   /** Pointer parallax on the camera. Off for touch screens. */
@@ -12,9 +16,33 @@ export interface TimeSceneQuality {
 }
 
 export const QUALITY_TIERS = {
-  full: { bloom: true, days: 7, maxDpr: 1.75, particles: 180, parallax: true },
-  low: { bloom: false, days: 5, maxDpr: 1.25, particles: 90, parallax: true },
-  compact: { bloom: false, days: 4, maxDpr: 1.25, particles: 60, parallax: false },
+  full: {
+    bloom: true,
+    days: 7,
+    maxDpr: 1.75,
+    particles: 180,
+    parallax: true,
+    debris: 70,
+    galaxyNodes: 90,
+  },
+  low: {
+    bloom: false,
+    days: 5,
+    maxDpr: 1.25,
+    particles: 90,
+    parallax: true,
+    debris: 36,
+    galaxyNodes: 50,
+  },
+  compact: {
+    bloom: false,
+    days: 4,
+    maxDpr: 1.25,
+    particles: 60,
+    parallax: false,
+    debris: 16,
+    galaxyNodes: 30,
+  },
 } as const satisfies Record<string, TimeSceneQuality>;
 
 export interface DeviceSignals {

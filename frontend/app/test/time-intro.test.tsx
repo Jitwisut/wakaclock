@@ -157,6 +157,24 @@ describe('TimeIntro', () => {
     expect(mount().container.querySelector('.tx-intro')).toBeNull();
   });
 
+  it('lets a click or any key skip the opening straight to the page', () => {
+    const clicked = mount();
+    expect(clicked.container.querySelector('.tx-intro')).not.toBeNull();
+    act(() => {
+      window.dispatchEvent(new Event('pointerdown'));
+    });
+    expect(clicked.container.querySelector('.tx-intro')).toBeNull();
+    expect(root.dataset.intro).toBe('done');
+    clicked.unmount();
+
+    const keyed = mount();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(keyed.container.querySelector('.tx-intro')).toBeNull();
+    keyed.unmount();
+  });
+
   it('cleans up when it leaves mid-way, and copes without its root', () => {
     Object.defineProperty(document, 'readyState', { configurable: true, value: 'loading' });
     act(() => setTimeUi({ sceneStatus: 'ready' }));

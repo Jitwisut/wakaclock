@@ -7,22 +7,25 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { PerformanceMonitor } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Bloom, EffectComposer } from '@react-three/postprocessing';
-import { Color, type Fog, NoToneMapping, SRGBColorSpace } from 'three';
+import { NoToneMapping, SRGBColorSpace } from 'three';
 
 import { generateDemoDays } from '../time-data';
 import { setTimeUi, timeMotion } from '../time-store';
 
+import { Atmosphere } from './atmosphere';
 import { Burst } from './burst';
 import { CodeFragments } from './code-fragments';
+import { IntelligenceCore } from './core';
+import { Galaxy } from './galaxy';
 import { Dust, Heartbeats } from './heartbeats';
 import { Helix } from './helix';
 import { BLOOM_BASE, MidnightDirector } from './midnight-director';
 import { PointerProbe } from './pointer-probe';
-import { DAY, SCENE } from './scene-palette';
+import { SCENE } from './scene-palette';
 import { Shockwaves } from './shockwaves';
-import { TimeCity } from './time-city';
 import { TimeRig } from './time-rig';
 import { TimeRings } from './time-rings';
+import { TimeTunnel } from './tunnel';
 
 import type { TimeSceneQuality } from '../time-quality';
 import type { BloomEffect } from 'postprocessing';
@@ -48,23 +51,6 @@ function FirstFrame() {
   return null;
 }
 
-const NIGHT_BG = new Color(SCENE.bg);
-const DAY_BG = new Color(DAY.bg);
-
-/** Lerps the scene's background and fog from dusk to daylight. */
-function DaylightGrade() {
-  const { scene } = useThree();
-  const last = useRef(-1);
-  useFrame(() => {
-    const t = Math.round(timeMotion.daylight * 200) / 200;
-    if (t === last.current) return;
-    last.current = t;
-    if (scene.background instanceof Color) scene.background.copy(NIGHT_BG).lerp(DAY_BG, t);
-    (scene.fog as Fog | null)?.color.copy(NIGHT_BG).lerp(DAY_BG, t);
-  });
-  return null;
-}
-
 /**
  * In on-demand mode, asks for a frame whenever something could change the picture: a
  * scroll, the pointer, a resize, or an animation that has not come to rest yet.
@@ -81,7 +67,8 @@ function Invalidator() {
       Math.abs(m.handSpeed) > 0.5 ||
       (m.collapse > 0 && m.collapse < 1) ||
       (m.wave > 0 && m.wave < 1) ||
-      m.pulseAge < 1.2;
+      m.pulseAge < 1.2 ||
+      m.wake < 1;
     if (settling) invalidate();
   });
   useEffect(() => {
@@ -99,7 +86,8 @@ function Invalidator() {
 }
 
 /**
- * The time ring: today's 24-hour dial with the week receding behind it. Loaded with
+ * The Code Universe: the Intelligence Core with today's 24-hour dial in its plane, the week
+ * receding behind it, the project galaxy and the time tunnel. Loaded with
  * `next/dynamic` after first paint, so none of three.js is on the critical path.
  */
 export default function TimeCanvas({
@@ -119,7 +107,7 @@ export default function TimeCanvas({
 
   return (
     <Canvas
-      camera={{ fov: 36, near: 0.1, far: 80, position: [1.4, 0.6, 8.2] }}
+      camera={{ fov: 36, near: 0.1, far: 140, position: [3.8, 2.2, 26] }}
       dpr={dpr}
       frameloop={mode}
       gl={{
@@ -133,7 +121,8 @@ export default function TimeCanvas({
       }}
     >
       <color args={[SCENE.bg]} attach="background" />
-      <fog args={[SCENE.bg, 11, 34]} attach="fog" />
+      {/* Haze: the void swallows distance, so depth reads in layers. */}
+      <fog args={[SCENE.bg, 14, 62]} attach="fog" />
       {/* Adaptive quality: lower the pixel ratio when frames drop, raise it when they
           recover. No flip-flop fallback: drei counts every step up as a flip, so a fast
           machine climbing back to full quality would trip it and lose the glow for good. */}
@@ -148,14 +137,16 @@ export default function TimeCanvas({
         }}
       />
       <TimeRig parallax={quality.parallax} />
-      <DaylightGrade />
+      <Atmosphere shafts={quality.bloom || quality.parallax} />
       <Invalidator />
       <MidnightDirector bloom={bloomEffect} />
+      <IntelligenceCore debris={quality.debris} shell={quality.parallax} />
       <TimeRings bloom={bloom} days={quality.days} slices={slices} />
+      <Galaxy maxNodes={quality.galaxyNodes} slices={slices} />
+      <TimeTunnel days={quality.days} maxPulses={quality.particles * 2} slices={slices} />
       <Shockwaves />
       <CodeFragments count={quality.parallax ? 8 : 4} dim={bloom} slices={slices} />
       <Helix count={quality.particles} dim={bloom} />
-      <TimeCity days={quality.days} slices={slices} />
       <Heartbeats count={quality.particles} slices={slices} />
       <Burst count={quality.particles + 60} />
       <Dust count={quality.particles * 2} days={quality.days} interactive={quality.parallax} />

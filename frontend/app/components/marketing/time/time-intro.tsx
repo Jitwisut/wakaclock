@@ -107,8 +107,15 @@ export function TimeIntro({ copy, rootId }: { copy: TimeCopyShape['loader']; roo
       () => setForced(true),
       Math.max(0, INTRO_MAX_MS - performance.now())
     );
+    // The opening never holds anyone up: a click, a tap or any key skips straight to the
+    // page; the scene keeps waking up behind it.
+    const skip = () => setPhase('done');
+    window.addEventListener('pointerdown', skip, { once: true });
+    window.addEventListener('keydown', skip, { once: true });
     return () => {
       window.removeEventListener('load', markLoaded);
+      window.removeEventListener('pointerdown', skip);
+      window.removeEventListener('keydown', skip);
       globalThis.clearTimeout(force);
     };
   }, []);

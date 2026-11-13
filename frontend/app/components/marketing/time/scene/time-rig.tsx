@@ -19,7 +19,17 @@ import { timeMotion } from '../time-store';
 
 const position = new Vector3();
 const look = new Vector3();
+const away = new Vector3();
 const BASE_FOV = 36;
+/** Seconds the core takes to wake: darkness, machinery, energy lines, nucleus. */
+export const WAKE_SECONDS = 3.4;
+/** How far back the camera starts its approach during the awakening. */
+const APPROACH_DISTANCE = 9;
+
+/** Ease-out for the approach: fast at first, settling softly onto the composition. */
+function approachEase(t: number) {
+  return 1 - (1 - t) ** 3;
+}
 
 /**
  * Eases the story position toward the scroll target, then flies the camera along a spline
@@ -96,6 +106,12 @@ export function TimeRig({ parallax }: { parallax: boolean }) {
       timeMotion.handSpeed += (speed - timeMotion.handSpeed) * dampFactor(delta, 8);
     }
 
+    // The opening: the core wakes over a few seconds while the camera completes its
+    // approach. Delta-based, so it is frame-rate independent and runs once.
+    if (timeMotion.wake < 1 && delta > 0) {
+      timeMotion.wake = Math.min(1, timeMotion.wake + delta / WAKE_SECONDS);
+    }
+
     const lens = camera as PerspectiveCamera;
     const fov = BASE_FOV + timeMotion.warp * 9;
     if (Math.abs(lens.fov - fov) > 0.01) {
@@ -119,6 +135,10 @@ export function TimeRig({ parallax }: { parallax: boolean }) {
       look.x *= 0.1;
       position.x *= 0.55;
       position.z += 3.2;
+    }
+    if (timeMotion.wake < 1) {
+      away.subVectors(position, look).normalize();
+      position.addScaledVector(away, (1 - approachEase(timeMotion.wake)) * APPROACH_DISTANCE);
     }
     if (parallax) {
       position.x += timeMotion.pointerX * 0.35;

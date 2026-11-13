@@ -27,7 +27,6 @@ import { AnswerGuide, hasAnswerGuide } from './answer-guide';
 import { ComparisonSection } from './comparison-section';
 import { EarlyAccessForm } from './early-access-form';
 import { FaqSection } from './faq-section';
-import { HeroAtmosphere } from './hero-atmosphere';
 import {
   type MarketingBlock,
   type MarketingPageKey,
@@ -288,7 +287,6 @@ export function LocalizedMarketingPage({
         <Breadcrumbs entries={breadcrumbs} locale={locale} />
         <div className={introArt ? 'mkt-illustrated-intro' : undefined} data-page={path}>
           <header className="mkt-page-intro">
-            <HeroAtmosphere />
             {copy.badge ? (
               <p
                 className="mb-5 inline-flex border-2 px-3 py-1 text-xs font-medium"
