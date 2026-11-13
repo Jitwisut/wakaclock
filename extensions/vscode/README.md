@@ -3,7 +3,7 @@
 > **Invite-only Early Access.** This extension sends activity to the hosted AtoAxis
 > service and does nothing until you add an AtoAxis API key. Keys are issued to
 > Early Access members only. If you don't have one yet,
-> [join the Early Access list](https://www.atoaxis.com/join) first; joining is free
+> [join the Early Access list](https://www.atoaxis.com/join?utm_source=vscode_listing&utm_medium=extension_gallery&utm_campaign=vscode_extension) first; joining is free
 > and takes no payment details.
 
 **See where your coding time goes, and how much of your code your AI agents wrote.**
@@ -31,7 +31,7 @@ plugin can report to the same dashboard.
 
 ## Quick start
 
-1. [Join Early Access](https://www.atoaxis.com/join). It is free and asks for no payment
+1. [Join Early Access](https://www.atoaxis.com/join?utm_source=vscode_listing&utm_medium=extension_gallery&utm_campaign=vscode_extension). It is free and asks for no payment
    details; API keys are issued to people on the list.
 2. Install this extension. VS Code picks the build for your operating system.
 3. Create an API key in the AtoAxis dashboard (Settings → API key) and run
@@ -61,7 +61,7 @@ $12/month or $99/year, with no free tier at launch. Nothing is charged today. Se
 
 - VS Code 1.90 or newer
 - An AtoAxis API key from your account (Early Access members only;
-  [join the list](https://www.atoaxis.com/join))
+  [join the list](https://www.atoaxis.com/join?utm_source=vscode_listing&utm_medium=extension_gallery&utm_campaign=vscode_extension))
 
 ## Installation
 
@@ -213,7 +213,7 @@ imported. See [Migrate from WakaTime](https://www.atoaxis.com/docs/migrate-from-
 
 ## Links
 
-- [Join Early Access](https://www.atoaxis.com/join)
+- [Join Early Access](https://www.atoaxis.com/join?utm_source=vscode_listing&utm_medium=extension_gallery&utm_campaign=vscode_extension)
 - [Pricing](https://www.atoaxis.com/pricing)
 - [Getting started](https://www.atoaxis.com/docs/getting-started)
 - [How coding time is calculated](https://www.atoaxis.com/docs/how-coding-time-is-calculated)
