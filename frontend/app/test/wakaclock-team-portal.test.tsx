@@ -155,3 +155,15 @@ it('accepts both provider URL forms and rejects alternate origins and extra fiel
     expect(isTeamPortalUrl(url)).toBe(false);
   }
 });
+it('keeps the link visible on observation ticks inside the display window', async () => {
+  mount();
+  fireEvent.click(screen.getByText('Get billing portal link'));
+  await screen.findByRole('link');
+  const clock = vi.spyOn(Date, 'now');
+  await waitFor(() => expect(clock).toHaveBeenCalled(), { timeout: 2500 });
+  clock.mockRestore();
+  expect(screen.getByRole('link', { name: 'Open Stripe billing portal' })).toHaveAttribute(
+    'href',
+    'https://billing.stripe.com/p/session/fixture_token'
+  );
+});

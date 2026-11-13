@@ -53,7 +53,12 @@ export function FaqSection({
             style={{ borderColor: 'var(--mkt-border)' }}
           >
             <summary className="axis-faq-question">
-              <span>{entry.question}</span>
+              {/*
+                A heading, not a span: each question is an entry in the page outline, which
+                is what a screen-reader user jumps between and what an answer engine matches
+                a query against. HTML allows heading content inside <summary>.
+              */}
+              <h3 className="axis-faq-heading">{entry.question}</h3>
               <span aria-hidden="true" className="axis-faq-toggle">
                 +
               </span>

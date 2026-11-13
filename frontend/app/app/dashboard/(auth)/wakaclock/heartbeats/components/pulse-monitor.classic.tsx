@@ -317,6 +317,7 @@ export function PulseMonitor({
             </PopoverTrigger>
             <PopoverContent align="end" className="w-auto p-0">
               <Calendar
+                defaultMonth={parseISO(date)}
                 mode="single"
                 onSelect={(d) => onDateChange(format(d, 'yyyy-MM-dd'))}
                 required

@@ -1,7 +1,7 @@
 {
   "name": "atoaxis-vscode",
-  "displayName": "AtoAxis \u2014 Developer Time Tracking",
-  "description": "WakaTime-compatible coding time tracking with AI-agent attribution. Invite-only Early Access: requires an AtoAxis API key.",
+  "displayName": "AtoAxis \u2014 Coding Time Tracker & AI Attribution",
+  "description": "Track coding time per project, language and branch, and see lines written by AI agents (Claude Code, Codex CLI, Gemini CLI) apart from yours. Speaks the WakaTime API. Invite-only Early Access: requires an AtoAxis API key.",
   "version": "0.2.1",
   "publisher": "atoaxis",
   "icon": "images/icon.png",
@@ -19,23 +19,36 @@
     "time tracking",
     "time tracker",
     "coding time",
+    "coding stats",
+    "code stats",
+    "programming time",
+    "productivity",
+    "developer productivity",
     "wakatime",
     "wakatime alternative",
+    "wakatime compatible",
     "ai",
     "ai attribution",
+    "ai code tracking",
+    "ai vs human",
     "claude code",
     "codex",
+    "codex cli",
     "gemini cli",
-    "developer productivity",
+    "kilo code",
+    "kimi code",
     "analytics",
+    "dashboard",
     "activity tracking",
-    "metrics"
+    "metrics",
+    "statistics"
   ],
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
     "Visualization",
+    "AI",
     "Other"
   ],
   "main": "./out/src/extension.js",

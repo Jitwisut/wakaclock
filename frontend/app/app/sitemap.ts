@@ -10,16 +10,21 @@ import type { MetadataRoute } from 'next';
 export default function sitemap(): MetadataRoute.Sitemap {
   // Omit lastModified until each page has a real content timestamp. A generated
   // "now" value on every request falsely signals that every page changed.
-  return PUBLIC_ROUTE_DEFINITIONS.map((route) => ({
-    ...(route.lastModified ? { lastModified: route.lastModified } : {}),
-    url: absoluteUrl(route.path),
-    alternates: {
-      languages: {
-        en: absoluteUrl(
-          route.locale === 'th' ? route.path.replace(/^\/th(?=\/|$)/, '') || '/' : route.path
-        ),
-        th: absoluteUrl(route.locale === 'th' ? route.path : localizedPath('th', route.path)),
+  return PUBLIC_ROUTE_DEFINITIONS.map((route) => {
+    const english = absoluteUrl(
+      route.locale === 'th' ? route.path.replace(/^\/th(?=\/|$)/, '') || '/' : route.path
+    );
+    return {
+      lastModified: route.lastModified,
+      url: absoluteUrl(route.path),
+      alternates: {
+        languages: {
+          en: english,
+          th: absoluteUrl(route.locale === 'th' ? route.path : localizedPath('th', route.path)),
+          // The same fallback each page declares in its own <link rel="alternate"> set.
+          'x-default': english,
+        },
       },
-    },
-  }));
+    };
+  });
 }

@@ -2039,7 +2039,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           : 'Extension นี้กำลังจะเปิดใน Marketplace แบบ Preview สมาชิก Early Access จะได้ใช้ก่อน ระหว่างนี้ editor ที่มี WakaTime plugin ส่งข้อมูลเข้า AtoAxis ได้เลยโดยแก้ ~/.wakatime.cfg'
       ),
       code(
-        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
+        'Extensions: install "AtoAxis — Coding Time Tracker & AI Attribution"\nCommand Palette: AtoAxis: Set API Key',
         'VS Code'
       ),
       p(
@@ -2062,13 +2062,13 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
         en
           ? [
               'VS Code 1.90 or newer for the first-party extension, or any editor that already has a WakaTime plugin',
-              'wakaclock-cli on your PATH, or an absolute path in the wakaclock.cliPath setting: the extension buffers activity but never contacts the server itself',
+              'A CLI to deliver heartbeats: the VS Code extension ships one for your operating system, and WakaTime plugins use the wakatime-cli they already install',
               'An AtoAxis account plus an API key generated from the dashboard',
               'Outbound HTTPS. Heartbeats that cannot be delivered are queued locally in ~/.wakaclock/queue.db and resent later, so a flight or a dropped VPN does not lose the day',
             ]
           : [
               'VS Code 1.90 ขึ้นไปสำหรับ extension ของเราเอง หรือ editor ใดก็ได้ที่มี WakaTime plugin อยู่แล้ว',
-              'มี wakaclock-cli ใน PATH หรือกำหนด path เต็มไว้ที่ setting wakaclock.cliPath เพราะ extension แค่เก็บ activity แต่ไม่ได้ติดต่อ server เอง',
+              'CLI สำหรับส่ง heartbeat: VS Code extension มีมาในตัวสำหรับระบบปฏิบัติการของคุณ ส่วน WakaTime plugin ใช้ wakatime-cli ที่ติดตั้งไว้อยู่แล้ว',
               'บัญชี AtoAxis และ API key ที่สร้างจาก dashboard',
               'การเชื่อมต่อ HTTPS ขาออก heartbeat ที่ส่งไม่สำเร็จจะถูกคิวไว้ที่ ~/.wakaclock/queue.db แล้วส่งใหม่ภายหลัง ข้อมูลของวันนั้นจึงไม่หาย',
             ]
@@ -2118,7 +2118,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           : 'Extension นี้กำลังจะเปิดใน Marketplace แบบ Preview สมาชิก Early Access จะได้ใช้ก่อน ระหว่างนี้ editor ที่มี WakaTime plugin ส่งข้อมูลเข้า AtoAxis ได้เลยโดยแก้ ~/.wakatime.cfg'
       ),
       code(
-        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
+        'Extensions: install "AtoAxis — Coding Time Tracker & AI Attribution"\nCommand Palette: AtoAxis: Set API Key',
         'VS Code'
       ),
       p(
@@ -2180,14 +2180,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
       bullets(
         en
           ? [
-              'No total in the status bar: the CLI cannot be found. Run AtoAxis: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary',
+              'No total in the status bar: read its state. Connect means no API key is set yet, so run AtoAxis: Set API Key; a CLI-unavailable status means your platform has no bundled build yet',
               'Reading code is not counted: only edits, saves and file switches produce heartbeats, and gaps at or beyond the idle timeout are excluded on purpose',
               'The total stopped rising: run wakaclock-cli status. Undelivered heartbeats sit in ~/.wakaclock/queue.db and are resent once the server is reachable again',
               'One project counted twice: two checkouts of the same repository are two project names until you merge them under Settings, with project rules or a manual merge',
               'AI work missing: run AtoAxis: Show AI Tracking Status, then AtoAxis: Set Up AI Tracking to register hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code or Kimi Code CLI. Cursor and Copilot have no adapter yet',
             ]
           : [
-              'status bar ไม่ขึ้นยอดเวลา แปลว่าหา CLI ไม่เจอ ให้รัน AtoAxis: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
+              'status bar ไม่ขึ้นยอดเวลา ให้ดูสถานะที่แสดง ถ้าเป็น Connect แปลว่ายังไม่ได้ใส่ API key ให้รัน AtoAxis: Set API Key ถ้าขึ้นว่าใช้ CLI ไม่ได้ แปลว่ายังไม่มี build สำหรับแพลตฟอร์มของคุณ',
               'อ่านโค้ดเฉย ๆ ไม่ถูกนับ เพราะ heartbeat เกิดจากการแก้ไข การ save และการสลับไฟล์เท่านั้น ช่วงที่ไม่มีกิจกรรมถึงเกณฑ์ idle จะไม่ถูกนับโดยตั้งใจ',
               'ยอดหยุดเพิ่ม ให้รัน wakaclock-cli status heartbeat ที่ยังส่งไม่สำเร็จจะค้างอยู่ใน ~/.wakaclock/queue.db และถูกส่งใหม่เมื่อกลับมาต่อ server ได้',
               'โปรเจกต์เดียวถูกนับสองชื่อ เกิดจาก checkout สองที่ของ repository เดียวกัน ให้รวมเข้าด้วยกันที่หน้า Settings ผ่าน project rules หรือการ merge เอง',
@@ -2661,12 +2661,12 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
         en
           ? [
               'VS Code 1.90 or newer',
-              'wakaclock-cli on PATH, or an absolute path in wakaclock.cliPath',
+              'Nothing else to install: the extension ships the CLI for your operating system and checks it against a SHA-256 manifest before it runs',
               'An API key, stored through AtoAxis: Set API Key rather than in settings.json',
             ]
           : [
               'VS Code 1.90 ขึ้นไป',
-              'มี wakaclock-cli ใน PATH หรือกำหนด path เต็มไว้ที่ wakaclock.cliPath',
+              'ไม่ต้องติดตั้งอะไรเพิ่ม extension มี CLI สำหรับระบบปฏิบัติการของคุณมาในตัว และตรวจกับ SHA-256 manifest ก่อนรันทุกครั้ง',
               'API key ที่บันทึกผ่านคำสั่ง AtoAxis: Set API Key ไม่ใช่เก็บใน settings.json',
             ]
       ),
@@ -2700,20 +2700,20 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
     '/integrations/vscode#4',
     (en) => [
       code(
-        '{\n  "wakaclock.cliPath": "/usr/local/bin/wakaclock-cli",\n  "wakaclock.statusBarEnabled": true,\n  "wakaclock.trackDebugSessions": true,\n  "wakaclock.trackBuildTasks": true\n}',
+        '{\n  "wakaclock.statusBarEnabled": true,\n  "wakaclock.trackDebugSessions": true,\n  "wakaclock.trackBuildTasks": true\n}',
         'settings.json'
       ),
       bullets(
         en
           ? [
-              'wakaclock.cliPath: absolute path to the binary; empty resolves it from PATH',
+              'wakaclock.cliPath: advanced development override only; leave it empty to use the bundled, verified CLI',
               'wakaclock.statusBarEnabled: show today’s total in the status bar',
               'wakaclock.trackDebugSessions: emit debugging heartbeats when a debug session starts and stops',
               'wakaclock.trackBuildTasks: emit building heartbeats when a task starts and stops',
               'wakaclock.debugLogging: verbose logging in the extension host console',
             ]
           : [
-              'wakaclock.cliPath: path เต็มของ binary ถ้าเว้นว่างจะหาใน PATH',
+              'wakaclock.cliPath: ใช้แทน CLI ตอนพัฒนาเท่านั้น ปล่อยว่างไว้เพื่อใช้ CLI ที่มากับ extension และผ่านการตรวจแล้ว',
               'wakaclock.statusBarEnabled: แสดงยอดรวมของวันนี้บน status bar',
               'wakaclock.trackDebugSessions: ส่ง heartbeat ประเภท debugging เมื่อเริ่มและจบ debug session',
               'wakaclock.trackBuildTasks: ส่ง heartbeat ประเภท building เมื่อเริ่มและจบ task',
@@ -2731,12 +2731,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           ? [
               'File activity only, with no app, domain or url heartbeats',
               'AI hooks cover Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI; Cursor and Copilot need provider-specific adapters',
-              'The extension requires wakaclock-cli and does not talk to the server directly',
+              'The extension delivers heartbeats through its bundled CLI rather than talking to the server directly',
+              'Native builds are per platform; an unsupported platform shows a clear CLI-unavailable status instead of running an unverified file',
             ]
           : [
               'ส่งเฉพาะกิจกรรมกับไฟล์ ไม่มี heartbeat ประเภท app, domain หรือ url',
               'AI hook ครอบคลุม Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI ส่วน Cursor และ Copilot ต้องมี adapter เฉพาะของผู้ให้บริการ',
-              'extension ต้องใช้ wakaclock-cli และไม่ได้ติดต่อ server โดยตรง',
+              'extension ส่ง heartbeat ผ่าน CLI ที่มาในตัว ไม่ได้ติดต่อ server โดยตรง',
+              'มี build แยกตามแพลตฟอร์ม ถ้าแพลตฟอร์มไม่รองรับจะแสดงสถานะว่าใช้ CLI ไม่ได้อย่างชัดเจน แทนการรันไฟล์ที่ไม่ได้ตรวจสอบ',
             ]
       ),
     ],
@@ -3035,7 +3037,7 @@ generic(
     title: 'VS Code time tracker extension',
     description:
       'A coding time tracker for VS Code, coming to the Marketplace as a Preview. Use your WakaTime plugin today or join Early Access to get the extension first.',
-    lead: 'The first-party extension buffers metadata-only editor activity and sends heartbeats through wakaclock-cli.',
+    lead: `The ${SITE_NAME} extension tracks coding time in VS Code from metadata only: file, project, branch, language and editor, plus save, debug and build activity and keystroke counts. It never sends file contents. It buffers that activity and sends heartbeats through wakaclock-cli, and it needs VS Code 1.90 or newer and an API key from the dashboard.`,
     headings: [
       'What it tracks',
       'Requirements',
@@ -3053,7 +3055,7 @@ generic(
       {
         question: 'What do I need before installing it?',
         answer:
-          'VS Code 1.90 or newer, wakaclock-cli on PATH (or a configured wakaclock.cliPath), and an API key generated from the dashboard.',
+          'VS Code 1.90 or newer and an API key generated from the dashboard. The CLI ships inside the extension, so there is nothing else to install.',
       },
       {
         question: 'Where is my API key stored?',
@@ -3063,7 +3065,7 @@ generic(
       {
         question: 'Why does the status bar show zero?',
         answer:
-          'The extension cannot find wakaclock-cli. Run AtoAxis: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary.',
+          'Read the status bar state. Connect means no API key is set yet, so run AtoAxis: Set API Key. Offline queued means activity is kept locally and sent once the server is reachable.',
       },
       {
         question: 'Does it track other apps or browser tabs?',
@@ -3080,8 +3082,8 @@ generic(
   {
     title: 'โปรแกรมจับเวลาเขียนโค้ดสำหรับ VS Code',
     description:
-      'ส่วนขยาย AtoAxis สำหรับ VS Code ช่วยวัดเวลาเขียนโปรแกรม กำลังจะเปิดใน Marketplace แบบ Preview ระหว่างนี้ใช้ WakaTime plugin ได้เลย หรือสมัคร Early Access เพื่อใช้ก่อน',
-    lead: 'extension ของเราจะ buffer editor activity แบบ metadata แล้วส่ง heartbeat ผ่าน wakaclock-cli',
+      'ส่วนขยาย AtoAxis สำหรับ VS Code ช่วยวัดเวลาเขียนโปรแกรม จะเปิดใน Marketplace แบบ Preview ระหว่างนี้ใช้ WakaTime plugin ได้ หรือสมัคร Early Access เพื่อใช้ก่อน',
+    lead: `extension ของ ${SITE_NAME} จับเวลาเขียนโค้ดใน VS Code จาก metadata เท่านั้น ได้แก่ ไฟล์ โปรเจกต์ branch ภาษา และ editor รวมถึงกิจกรรม save, debug, build และจำนวน keystroke โดยไม่ส่งเนื้อหาไฟล์ ตัว extension จะ buffer กิจกรรมแล้วส่ง heartbeat ผ่าน wakaclock-cli และต้องใช้ VS Code 1.90 ขึ้นไปกับ API key จาก dashboard`,
     headings: [
       'ข้อมูลที่ติดตาม',
       'สิ่งที่ต้องมี',
@@ -3099,7 +3101,7 @@ generic(
       {
         question: 'ต้องมีอะไรก่อนติดตั้ง?',
         answer:
-          'VS Code 1.90 ขึ้นไป, wakaclock-cli ใน PATH (หรือกำหนด wakaclock.cliPath) และ API key ที่สร้างจาก dashboard',
+          'VS Code 1.90 ขึ้นไป และ API key ที่สร้างจาก dashboard ส่วน CLI มากับ extension แล้ว ไม่ต้องติดตั้งเพิ่ม',
       },
       {
         question: 'API key เก็บไว้ที่ไหน?',
@@ -3109,7 +3111,7 @@ generic(
       {
         question: 'ทำไม status bar ถึงขึ้นศูนย์?',
         answer:
-          'extension หา wakaclock-cli ไม่เจอ ให้รัน AtoAxis: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
+          'ให้ดูสถานะบน status bar ถ้าเป็น Connect แปลว่ายังไม่ได้ใส่ API key ให้รัน AtoAxis: Set API Key ถ้าเป็น Offline queued แปลว่าเก็บกิจกรรมไว้ในเครื่องแล้ว และจะส่งเมื่อติดต่อ server ได้',
       },
       {
         question: 'ติดตามแอปอื่นหรือ browser tab ด้วยหรือไม่?',
@@ -3165,7 +3167,7 @@ generic(
   {
     title: 'ราคา AtoAxis: แผน hosted เดียว ประวัติครบถ้วน',
     description: `ตรวจราคาเป้าหมายของ AtoAxis: $${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี พร้อมสิ่งที่รวมในแผนและสถานะ Early Access ซึ่งยังไม่เปิด checkout หรือเก็บเงิน`,
-    lead: 'ช่วง Early Access ยังไม่เปิด checkout และยังไม่มีการเรียกเก็บเงิน',
+    lead: `${SITE_NAME} วางแผนเปิดแผน hosted เพียงแผนเดียวสำหรับติดตามเวลาเขียนโค้ด ราคา $${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี ช่วง Early Access ยังไม่เปิด checkout การลงชื่อจึงเป็นเพียงการแสดงความสนใจ ไม่เริ่มแผนแบบชำระเงินและไม่เก็บข้อมูลการชำระเงิน`,
     headings: ['สิ่งที่รวมในแผน', 'การเรียกเก็บเงินและสถานะ'],
     faqEntries: [
       {
@@ -3205,7 +3207,7 @@ generic(
     title: 'Privacy and data collection',
     description:
       'See every field an AtoAxis heartbeat stores, what never leaves your machine, how long data is kept and how to delete your account history.',
-    lead: 'Heartbeats carry metadata and counts, never source code, prompts, responses or transcript bodies.',
+    lead: `An ${SITE_NAME} heartbeat carries activity metadata and counts: file path, project and Git branch, language, editor, OS and machine, keystroke and line counts, AI fields and timestamps. It never carries source code, diffs, prompts, AI responses or transcript bodies. This page lists every stored field, how data travels, how long it is kept and how to delete it.`,
     headings: [
       'What is collected',
       'What is never collected',
@@ -3261,7 +3263,7 @@ generic(
     title: 'Privacy และข้อมูลที่เก็บ',
     description:
       'ดูทุก field ที่ heartbeat ของ AtoAxis เก็บ สิ่งที่ไม่เคยออกจากเครื่องของคุณ เช่น source code ระยะเวลาเก็บข้อมูล และวิธีลบประวัติบัญชีของคุณ',
-    lead: 'Heartbeat มี metadata และ counts ไม่เก็บ source code, prompt, response หรือ transcript body',
+    lead: `heartbeat ของ ${SITE_NAME} มีเฉพาะ metadata และตัวเลขนับของกิจกรรม ได้แก่ file path โปรเจกต์และ Git branch ภาษา editor ระบบปฏิบัติการและเครื่อง จำนวน keystroke และบรรทัด field ของ AI และ timestamp ระบบไม่เก็บ source code, diff, prompt, response ของ AI หรือ transcript body หน้านี้ระบุทุก field ที่เก็บ เส้นทางของข้อมูล ระยะเวลาเก็บรักษา และวิธีลบ`,
     headings: [
       'ข้อมูลที่เก็บ',
       'สิ่งที่ไม่เคยเก็บ',
@@ -3367,7 +3369,7 @@ generic(
     title: 'เอกสาร AtoAxis: คู่มือติดตามเวลาเขียนโค้ด',
     description:
       'เริ่มใช้ AtoAxis จากคู่มือเชื่อม editor และตรวจ heartbeat แรก อ่านวิธีคำนวณเวลา AI attribution การตั้งค่า integration และข้อมูลที่ส่งเพื่อใช้งานอย่างเข้าใจ',
-    lead: 'เชื่อม editor และทำความเข้าใจ hosted product ผ่านคู่มือนี้',
+    lead: `เอกสาร ${SITE_NAME} อธิบายวิธีเชื่อม editor ตรวจ heartbeat แรก และทำความเข้าใจ metadata ที่ใช้ติดตามเวลาเขียนโค้ด ผู้ใช้ใหม่ควรเริ่มที่คู่มือเริ่มต้นใช้งาน ซึ่งเรียงขั้นตอนตั้งแต่บัญชี API key การเชื่อม editor จนถึง heartbeat แรกที่ตรวจสอบแล้ว`,
     headings: [
       'เอกสารนี้มีอะไรบ้าง?',
       'เริ่มติดตามเวลาการเขียนโค้ดอย่างไร?',
@@ -3418,7 +3420,7 @@ generic(
     title: 'Getting started with AtoAxis time tracking',
     description:
       'Create an AtoAxis API key, connect VS Code or a WakaTime-compatible plugin, and confirm your first heartbeat appears in the dashboard.',
-    lead: 'Create an account, generate an API key and connect your editor when Early Access opens.',
+    lead: `To start tracking coding time with ${SITE_NAME}, generate an API key in the dashboard, connect VS Code or any editor that already has a WakaTime plugin, and confirm the first heartbeat arrived with wakaclock-cli status or the dashboard Overview page. During Early Access, keys are issued to people on the list rather than at signup.`,
     headings: [
       'Requirements',
       'Create an API key',
@@ -3440,7 +3442,7 @@ generic(
       {
         question: 'How do I connect VS Code?',
         answer:
-          'Install "AtoAxis — Developer Time Tracking", then run AtoAxis: Set API Key from the Command Palette.',
+          'Install "AtoAxis — Coding Time Tracker & AI Attribution", then run AtoAxis: Set API Key from the Command Palette.',
       },
       {
         question: 'How do I connect an editor that already has a WakaTime plugin?',
@@ -3455,7 +3457,7 @@ generic(
       {
         question: 'My total is not increasing — what should I check first?',
         answer:
-          'Confirm wakaclock-cli is on PATH or wakaclock.cliPath is set, then run wakaclock-cli status. Reading code without editing, saving or switching files produces no heartbeat by design.',
+          'In VS Code, read the status bar state first; for other editors, run wakaclock-cli status. Reading code without editing, saving or switching files produces no heartbeat by design.',
       },
     ],
   },
@@ -3463,7 +3465,7 @@ generic(
     title: 'เริ่มต้นใช้งาน AtoAxis: ติดตามเวลาเขียนโค้ด',
     description:
       'สร้าง API key ของ AtoAxis เชื่อม VS Code หรือ plugin ที่รองรับ WakaTime แล้วตรวจว่า heartbeat แรกขึ้นใน dashboard ก่อนเริ่มใช้งานจริง',
-    lead: 'สร้างบัญชี API key และเชื่อม editor เมื่อ Early Access เปิด',
+    lead: `เริ่มติดตามเวลาเขียนโค้ดกับ ${SITE_NAME} ได้ในสามขั้นตอน คือสร้าง API key ใน dashboard เชื่อม VS Code หรือ editor ที่มี WakaTime plugin อยู่แล้ว และตรวจว่า heartbeat แรกเข้าแล้วด้วยคำสั่ง wakaclock-cli status หรือหน้า Overview ใน dashboard ช่วง Early Access ระบบออก key ให้ผู้ที่อยู่ในรายชื่อ ไม่ได้ออกทันทีตอนลงทะเบียน`,
     headings: [
       'สิ่งที่ต้องเตรียม',
       'สร้าง API key',
@@ -3485,7 +3487,7 @@ generic(
       {
         question: 'เชื่อม VS Code อย่างไร?',
         answer:
-          'ติดตั้ง "AtoAxis — Developer Time Tracking" แล้วรัน AtoAxis: Set API Key จาก Command Palette',
+          'ติดตั้ง "AtoAxis — Coding Time Tracker & AI Attribution" แล้วรัน AtoAxis: Set API Key จาก Command Palette',
       },
       {
         question: 'เชื่อม editor ที่มี WakaTime plugin อยู่แล้วอย่างไร?',
@@ -3500,7 +3502,7 @@ generic(
       {
         question: 'ยอดไม่เพิ่มขึ้น ควรตรวจอะไรก่อน?',
         answer:
-          'ตรวจว่า wakaclock-cli อยู่ใน PATH หรือกำหนด wakaclock.cliPath แล้ว จากนั้นรัน wakaclock-cli status การอ่านโค้ดเฉย ๆ โดยไม่แก้ไข save หรือสลับไฟล์จะไม่เกิด heartbeat ตามการออกแบบ',
+          'ถ้าใช้ VS Code ให้ดูสถานะบน status bar ก่อน ถ้าใช้ editor อื่นให้รัน wakaclock-cli status การอ่านโค้ดเฉย ๆ โดยไม่แก้ไข save หรือสลับไฟล์จะไม่เกิด heartbeat ตามการออกแบบ',
       },
     ],
   }
@@ -3665,7 +3667,7 @@ generic(
     title: 'Contact AtoAxis about Early Access',
     description:
       'Ask AtoAxis about Early Access, editor compatibility, WakaTime migration, AI attribution or privacy. A real person on the team reads every message.',
-    lead: 'Ask about Early Access, hosted analytics, integrations or privacy.',
+    lead: `Use this page to ask the ${SITE_NAME} team about Early Access, editor compatibility, moving from WakaTime, AI attribution or privacy. A real person on the team building the product reads every message, not an automated support queue. Name the editor you use and whether it already has a WakaTime plugin to get the exact setting to change.`,
     headings: ['Topics we can help with'],
     form: 'contact',
     faqEntries: [
@@ -3694,7 +3696,7 @@ generic(
     title: 'ติดต่อ AtoAxis เรื่อง Early Access และการตั้งค่า',
     description:
       'สอบถาม AtoAxis เรื่อง Early Access การใช้กับ editor ของคุณ การย้ายจาก WakaTime, AI attribution หรือ privacy คนในทีมพัฒนาอ่านทุกข้อความด้วยตัวเอง',
-    lead: 'สอบถามเรื่อง Early Access, hosted analytics, integrations หรือ privacy',
+    lead: `ใช้หน้านี้สอบถามทีม ${SITE_NAME} เรื่อง Early Access การใช้กับ editor ของคุณ การย้ายจาก WakaTime, AI attribution หรือ privacy คนในทีมที่พัฒนาผลิตภัณฑ์อ่านทุกข้อความเอง ไม่ใช่คิวระบบอัตโนมัติ หากบอกชื่อ editor ที่ใช้และมี WakaTime plugin อยู่แล้วหรือไม่ คุณจะได้คำตอบพร้อมค่าที่ต้องแก้`,
     headings: ['หัวข้อที่สอบถามได้'],
     form: 'contact',
     faqEntries: [
@@ -3726,7 +3728,7 @@ generic(
     title: 'AtoAxis terms for Early Access and hosted use',
     description:
       'Read the preliminary AtoAxis terms: what joining Early Access means, who owns the activity data you send, acceptable use and how to ask questions.',
-    lead: `These preliminary terms describe the ${SITE_NAME} Early Access website.`,
+    lead: `These preliminary terms cover the ${SITE_NAME} website and Early Access list. Joining Early Access registers interest only: no account is created and no payment is taken. You own the activity data you send; it is not sold, shared with advertisers or used as training material. One API key identifies one account, and these terms will be replaced before the product becomes payable.`,
     headings: ['Early Access', 'Hosted service and data', 'Acceptable use', 'Questions'],
     faqEntries: [
       {
@@ -3753,7 +3755,7 @@ generic(
     title: 'ข้อกำหนดการใช้งาน AtoAxis ช่วง Early Access',
     description:
       'อ่านข้อกำหนดเบื้องต้นของ AtoAxis: การเข้าร่วม Early Access หมายถึงอะไร ใครเป็นเจ้าของข้อมูลกิจกรรมที่คุณส่ง การใช้งานที่ยอมรับได้ และช่องทางสอบถาม',
-    lead: `ข้อกำหนดเบื้องต้นนี้อธิบายเว็บไซต์ ${SITE_NAME} ในช่วง Early Access`,
+    lead: `ข้อกำหนดเบื้องต้นนี้ครอบคลุมเว็บไซต์ ${SITE_NAME} และรายชื่อ Early Access การเข้าร่วม Early Access เป็นเพียงการแสดงความสนใจ ไม่มีการสร้างบัญชีและไม่มีการเรียกเก็บเงิน ข้อมูลกิจกรรมที่คุณส่งเป็นของคุณ ไม่ถูกขาย ไม่ถูกแบ่งให้ผู้โฆษณา และไม่ถูกใช้ฝึกโมเดล API key หนึ่งดวงระบุถึงบัญชีเดียว`,
     headings: ['Early Access', 'Hosted service และข้อมูล', 'การใช้งานที่ยอมรับได้', 'คำถาม'],
     faqEntries: [
       {
@@ -3782,7 +3784,7 @@ generic(
     title: 'Join AtoAxis Early Access for time tracking',
     description:
       'Join the AtoAxis Early Access list for WakaTime-compatible developer time tracking. Joining records interest only; no account or payment is created.',
-    lead: 'Register interest in hosted developer time tracking and launch updates.',
+    lead: `Join the ${SITE_NAME} Early Access list to register interest in hosted, WakaTime-compatible developer time tracking. Joining creates no charge and collects no payment details. API keys are issued to people on the list as Early Access opens, and the planned price is $${PRICING.monthlyUsd} per month or $${PRICING.annualUsd} per year for one complete plan.`,
     headings: [],
     form: 'early-access',
     faqEntries: [
@@ -3805,7 +3807,7 @@ generic(
     title: 'เข้าร่วม AtoAxis Early Access ติดตามเวลาเขียนโค้ด',
     description:
       'ลงชื่อเข้าร่วม Early Access ของ AtoAxis เครื่องมือติดตามเวลาเขียนโค้ดที่รองรับ WakaTime API การลงชื่อคือการแสดงความสนใจ ไม่สร้างบัญชีและไม่เรียกเก็บเงิน',
-    lead: 'ลงทะเบียนความสนใจใน hosted developer time tracking และข่าวการเปิดตัว',
+    lead: `ลงชื่อในรายชื่อ Early Access ของ ${SITE_NAME} เพื่อแสดงความสนใจในบริการ hosted สำหรับติดตามเวลาเขียนโค้ดที่รองรับ WakaTime API การลงชื่อไม่มีค่าใช้จ่ายและไม่เก็บข้อมูลการชำระเงิน ระบบจะออก API key ให้ผู้ที่อยู่ในรายชื่อเมื่อ Early Access เปิด ราคาที่วางไว้คือ $${PRICING.monthlyUsd} ต่อเดือน หรือ $${PRICING.annualUsd} ต่อปี สำหรับแผนเดียวที่ครบทุกฟีเจอร์`,
     headings: [],
     form: 'early-access',
     faqEntries: [

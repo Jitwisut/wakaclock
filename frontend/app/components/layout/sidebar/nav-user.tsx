@@ -88,7 +88,7 @@ export type NavUserProps = {
  * }} />
  * ```
  */
-const NavUser = React.forwardRef<HTMLUListElement, NavUserProps>(function NavUser(
+const NavUser = React.forwardRef<HTMLUListElement, NavUserProps>(function NavUserRender(
   { labels, onLogout, testId = 'nav-user' },
   ref
 ) {

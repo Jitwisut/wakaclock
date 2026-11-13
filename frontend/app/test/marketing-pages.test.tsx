@@ -12,6 +12,34 @@ import { absoluteUrl, localizedPath } from '@/lib/seo/site';
 
 afterEach(cleanup);
 
+function graphTypes(container: HTMLElement): string[] {
+  const graph = JSON.parse(
+    container.querySelector('script[type="application/ld+json"]')?.textContent ?? '{}'
+  ) as { '@graph': { '@type': string }[] };
+  return graph['@graph'].map((node) => node['@type']);
+}
+
+it('types the documentation guides as TechArticle, and nothing else', () => {
+  for (const path of MARKETING_PAGE_KEYS) {
+    const { container, unmount } = render(<LocalizedMarketingPage locale="en" path={path} />);
+
+    // The /docs index is a hub, and product and policy pages are not articles.
+    expect(graphTypes(container).includes('TechArticle'), path).toBe(path.startsWith('/docs/'));
+    unmount();
+  }
+});
+
+it('puts every FAQ question in the page outline as a heading', () => {
+  const { container } = render(<LocalizedMarketingPage locale="th" path="/pricing" />);
+  const questions = PAGE_COPY['/pricing'].th.faq?.entries.map((entry) => entry.question) ?? [];
+  const headings = Array.from(container.querySelectorAll('#faq summary h3')).map(
+    (heading) => heading.textContent
+  );
+
+  expect(questions.length).toBeGreaterThan(2);
+  expect(headings).toEqual(questions);
+});
+
 for (const locale of ['en', 'th'] as const) {
   for (const path of MARKETING_PAGE_KEYS) {
     it(`${locale}${path}: exposes one title, working chapter links and matching page identity`, () => {

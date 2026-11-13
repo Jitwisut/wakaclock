@@ -540,10 +540,10 @@ export const TH_MORE_GUIDES: Record<string, Guide> = {
   '/docs/getting-started': {
     heading: 'ต้องมีอะไรบ้างก่อน heartbeat แรกของ AtoAxis?',
     answer:
-      'ต้องมีสามอย่าง คือ editor ที่ส่งข้อมูลมาได้, wakaclock-cli สำหรับส่ง heartbeat และ API key ที่ระบุบัญชีของคุณ',
+      'ต้องมีสามอย่าง คือ editor ที่ส่งข้อมูลมาได้, CLI สำหรับส่ง heartbeat และ API key ที่ระบุบัญชีของคุณ',
     facts: [
       ['Editor', 'VS Code 1.90 ขึ้นไปพร้อม extension ของเรา หรือ editor ที่รองรับ WakaTime'],
-      ['CLI', 'wakaclock-cli อยู่ใน PATH หรือกำหนด path เต็มใน setting wakaclock.cliPath'],
+      ['CLI', 'มากับ VS Code extension ส่วน WakaTime plugin ใช้ wakatime-cli ของตัวเอง'],
       ['API key', 'สร้างจาก dashboard เมื่อได้สิทธิ์ Early Access'],
       ['ตอนออฟไลน์', 'heartbeat ที่ยังส่งไม่ได้จะรอใน ~/.wakaclock/queue.db แล้วส่งใหม่ภายหลัง'],
     ],
@@ -556,18 +556,18 @@ export const TH_MORE_GUIDES: Record<string, Guide> = {
   '/integrations/vscode': {
     heading: 'extension ของ AtoAxis สำหรับ VS Code ส่งอะไรบ้าง?',
     answer:
-      'ส่ง metadata ของไฟล์ โปรเจกต์ branch ภาษา และ editor พร้อมกิจกรรมการ save, debug, build และจำนวน keystroke ผ่าน wakaclock-cli โดยไม่ส่งเนื้อหาไฟล์',
+      'ส่ง metadata ของไฟล์ โปรเจกต์ branch ภาษา และ editor พร้อมกิจกรรมการ save, debug, build และจำนวน keystroke ผ่าน CLI ที่มากับ extension โดยไม่ส่งเนื้อหาไฟล์',
     facts: [
-      ['ข้อกำหนด', 'VS Code 1.90 ขึ้นไป และ wakaclock-cli ใน PATH หรือ path ที่ตั้งไว้'],
+      ['ข้อกำหนด', 'VS Code 1.90 ขึ้นไป CLI มากับ extension แล้ว'],
       ['การเก็บ key', 'เก็บใน secret storage ของ VS Code ผ่านคำสั่ง ไม่อยู่ใน settings.json'],
       ['ข้อมูลที่ส่ง', 'metadata ของไฟล์ โปรเจกต์ branch ภาษา editor และตัวเลขนับกิจกรรม'],
       ['ข้อจำกัด', 'เฉพาะกิจกรรมในไฟล์ ไม่มี heartbeat ของแอป โดเมน หรือ URL'],
     ],
     question: 'จะตรวจได้อย่างไรว่า extension รายงานถูกต้องหลังติดตั้ง?',
     example:
-      'ตัวอย่างเช่น พิมพ์ในไฟล์ แล้วดู status bar ของ VS Code ซึ่งควรแสดงยอดวันนี้และรีเฟรชประมาณทุก 15 วินาที ถ้ายังเป็นศูนย์ แปลว่า extension หา wakaclock-cli ไม่เจอ ให้ใช้คำสั่ง AtoAxis: Configure CLI Path แทนการติดตั้ง extension ใหม่',
+      'ตัวอย่างเช่น พิมพ์ในไฟล์ แล้วดู status bar ของ VS Code ซึ่งควรแสดงยอดวันนี้และรีเฟรชประมาณทุก 15 วินาที ถ้ายังเป็นศูนย์ ให้ดูสถานะบน status bar: Connect แปลว่ายังไม่ได้ใส่ API key ส่วน Offline queued แปลว่าเก็บกิจกรรมไว้ในเครื่องแล้ว และจะส่งเมื่อติดต่อ server ได้',
     recommendation:
-      'ตั้ง wakaclock.cliPath ให้ชัดเจนถ้า binary ไม่อยู่ใน PATH ก่อนสรุปว่า extension เสีย และใช้คำสั่ง AtoAxis: Send Heartbeat Now เพื่อส่งกิจกรรมที่รอไว้ทันทีเมื่อต้องการตรวจผล',
+      'ปล่อย wakaclock.cliPath ว่างไว้ เพราะเป็นตัวเลือกสำหรับตอนพัฒนา และ CLI ที่มากับ extension ถูกตรวจกับ SHA-256 manifest ก่อนรัน ใช้คำสั่ง AtoAxis: Send Heartbeat Now เพื่อส่งกิจกรรมที่รอไว้ทันทีเมื่อต้องการตรวจผล',
   },
   '/ai-cost-tracking': {
     heading: 'การติดตามค่าใช้จ่าย AI บอกอะไรได้ และบอกอะไรไม่ได้?',

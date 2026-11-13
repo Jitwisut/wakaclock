@@ -11,6 +11,7 @@ import { getTeamCheckout, recoverTeamCheckout } from '@/lib/wakaclock/team-billi
 import {
   reportTeamBillingAccessFailure,
   teamBillingRecoveryGuidance,
+  useTeamBillingAccessLossReport,
 } from '@/lib/wakaclock/team-billing-recovery';
 
 import { TeamHostedCheckoutLink } from './team-hosted-checkout-link';
@@ -36,14 +37,14 @@ function CheckoutScope({ authority, onAccessLost, organizationId, userId }: Prop
   const active = Boolean(userId) && (authority?.available ?? true);
   const status = useQuery({
     queryKey: key,
-    queryFn: ({ signal }) =>
-      reportTeamBillingAccessFailure(getTeamCheckout(organizationId, signal), onAccessLost),
+    queryFn: ({ signal }) => getTeamCheckout(organizationId, signal),
     enabled: open && active,
     retry: false,
     staleTime: 0,
     gcTime: 0,
     refetchInterval: open && active ? 15_000 : false,
   });
+  useTeamBillingAccessLossReport(status.error, onAccessLost);
   const recovery = useMutation({
     mutationFn: (input: { operation: string; revision: number }) =>
       reportTeamBillingAccessFailure(

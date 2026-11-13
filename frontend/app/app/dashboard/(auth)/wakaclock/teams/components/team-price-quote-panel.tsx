@@ -10,7 +10,10 @@ import { WakaclockError } from '@/lib/wakaclock/client';
 import { wakaclockKeys } from '@/lib/wakaclock/query-keys';
 import { createTeamPriceQuote, getTeamPriceQuote } from '@/lib/wakaclock/team-billing-endpoints';
 import { formatStripePrice } from '@/lib/wakaclock/team-billing-money';
-import { reportTeamBillingAccessFailure } from '@/lib/wakaclock/team-billing-recovery';
+import {
+  reportTeamBillingAccessFailure,
+  useTeamBillingAccessLossReport,
+} from '@/lib/wakaclock/team-billing-recovery';
 
 import { TeamTestCheckoutConfirmation } from './team-test-checkout-confirmation';
 
@@ -41,14 +44,14 @@ export function TeamPriceQuotePanel({
   const id = matches && create.isSuccess && create.variables === intent ? create.data.id : '';
   const quote = useQuery({
     queryKey: wakaclockKeys.teamPriceQuote(userId, organizationId, id),
-    queryFn: ({ signal }) =>
-      reportTeamBillingAccessFailure(getTeamPriceQuote(organizationId, id, signal), onAccessLost),
+    queryFn: ({ signal }) => getTeamPriceQuote(organizationId, id, signal),
     enabled: Boolean(customer && id),
     retry: false,
     staleTime: 0,
     gcTime: 0,
     refetchInterval: customer && id ? 15_000 : false,
   });
+  useTeamBillingAccessLossReport(quote.error, onAccessLost);
   useEffect(() => {
     if (!id) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);

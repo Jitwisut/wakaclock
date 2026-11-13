@@ -352,6 +352,15 @@ def scenario_cursor_shell_scaffold(server_url: str) -> None:
         init_git_repo(repo, "app.py", "value = 1\n")
         env = base_env(Path(home_dir), server_url)
 
+        # The boundary producer only reads an owner binding that explicit setup wrote;
+        # without one it parks the evidence as `unconfirmed`, which is never drained.
+        # `ai setup` reports the scaffold adapter's hook install as unsupported, but it
+        # still records consent and binds the producer to this account.
+        setup = run_cli(["ai", "setup", "cursor", "--yes", "--json"], cwd=repo, env=env)
+        check(setup.returncode == 0, f"[cursor scaffold] ai setup failed: {setup.stderr}")
+        binding = Path(home_dir) / ".wakaclock" / "native-producer-bindings" / "cursor-cli.json"
+        check(binding.is_file(), f"[cursor scaffold] ai setup did not bind the cursor producer: {setup.stdout}")
+
         before_stdin = json.dumps(
             {
                 "workspace_roots": [str(repo)],
@@ -390,8 +399,21 @@ def scenario_cursor_shell_scaffold(server_url: str) -> None:
         )
         check(after.returncode == 0, f"[cursor scaffold] git-sweep-after.sh failed: {after.stderr}")
 
-        heartbeats = drain_heartbeats()
-        matching = [h for h in heartbeats if h.get("actor_type") == "ai_inferred"]
+        # The hooks only retain the two boundaries durably. The capture collector pairs
+        # them into one file event and a bounded sync delivers it; neither runs in the
+        # background. One pass is normally enough; the retries cover a slow runner
+        # whose collector pass ran out of its time budget.
+        heartbeats: list[dict] = []
+        matching: list[dict] = []
+        for _attempt in range(3):
+            capture = run_cli(["capture", "run", "--once"], cwd=repo, env=env)
+            check(capture.returncode == 0, f"[cursor scaffold] capture run failed: {capture.stderr}")
+            sync = run_cli(["sync"], cwd=repo, env=env)
+            check(sync.returncode == 0, f"[cursor scaffold] sync failed: {sync.stderr}")
+            heartbeats.extend(drain_heartbeats())
+            matching = [h for h in heartbeats if h.get("actor_type") == "ai_inferred"]
+            if matching:
+                break
         check(len(matching) >= 1, f"[cursor scaffold] expected a heartbeat, got {len(heartbeats)}: {heartbeats}")
         heartbeat = matching[0]
         check(
@@ -409,7 +431,7 @@ def scenario_cursor_after_file_edit_scaffold(server_url: str) -> None:
     themselves are unverified — see `extensions/ai-agents/cursor/README.md`.
     """
     with tempfile.TemporaryDirectory() as repo_dir, tempfile.TemporaryDirectory() as home_dir:
-        repo = Path(repo_dir)
+        repo = Path(repo_dir).resolve()
         (repo / "app.py").write_text("value = 1\n")
         env = base_env(Path(home_dir), server_url)
 
@@ -438,7 +460,12 @@ def scenario_cursor_after_file_edit_scaffold(server_url: str) -> None:
         )
         check(result.returncode == 0, f"[cursor afterFileEdit scaffold] script failed: {result.stderr}")
 
-        heartbeats = drain_heartbeats()
+        # The hook hands the event to the local inbox; delivery is the next bounded
+        # sync, which the emitter does not start for this adapter.
+        sync = run_cli(["sync"], cwd=repo, env=env)
+        check(sync.returncode == 0, f"[cursor afterFileEdit scaffold] sync failed: {sync.stderr}")
+        # The same sync also posts a queue-health receipt, so select by entity.
+        heartbeats = [hb for hb in drain_heartbeats() if hb.get("entity") == str(repo / "app.py")]
         check(len(heartbeats) >= 1, f"[cursor afterFileEdit scaffold] expected a heartbeat, got none")
         heartbeat = heartbeats[0]
         check(heartbeat.get("ai_agent") == "cursor", f"[cursor afterFileEdit scaffold] ai_agent was {heartbeat.get('ai_agent')!r}")

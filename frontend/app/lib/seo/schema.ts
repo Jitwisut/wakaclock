@@ -1,6 +1,7 @@
 import {
   absoluteUrl,
   contentModified,
+  contentPublished,
   FOUNDER,
   localizedPath,
   ORGANIZATION,
@@ -10,6 +11,7 @@ import {
   SITE_TAGLINE,
   SITE_URL,
   type SiteLocale,
+  SOCIAL_IMAGE_PATH,
 } from './site';
 
 /**
@@ -23,6 +25,35 @@ import {
 type JsonLdValue = Record<string, unknown>;
 const ORGANIZATION_ID = absoluteUrl('/#organization');
 const FOUNDER_ID = absoluteUrl('/about#founder');
+const SOFTWARE_ID = absoluteUrl('/#software');
+const WEBSITE_ID = absoluteUrl('/#website');
+
+/**
+ * Selectors for the passages written to be quoted or read aloud: the page title and the
+ * opening answer. Each page family names its lead differently — content pages
+ * (`.axis-page-lead`), the homepage hero (`.tx-lead`) and the campaign page
+ * (`.mkt-campaign-lead`) — and a selector that matches nothing on a page is simply ignored.
+ */
+const SPEAKABLE_SELECTORS = ['h1', '.axis-page-lead', '.tx-lead', '.mkt-campaign-lead'];
+
+function socialImage(): JsonLdValue {
+  return {
+    '@type': 'ImageObject',
+    url: absoluteUrl(SOCIAL_IMAGE_PATH),
+    width: 1200,
+    height: 630,
+  };
+}
+
+/** `datePublished` / `dateModified`, each emitted only when the repository records it. */
+function contentDates(path: string, locale: SiteLocale): JsonLdValue {
+  const published = contentPublished(path, locale);
+  const modified = contentModified(path, locale);
+  return {
+    ...(published ? { datePublished: published } : {}),
+    ...(modified ? { dateModified: modified } : {}),
+  };
+}
 
 export interface FaqEntry {
   answer: string;
@@ -92,7 +123,7 @@ function founderReference(): JsonLdValue {
 export function websiteSchema(): JsonLdValue {
   return {
     '@type': 'WebSite',
-    '@id': absoluteUrl('/#website'),
+    '@id': WEBSITE_ID,
     name: SITE_NAME,
     url: SITE_URL,
     inLanguage: ['en', 'th'],
@@ -117,7 +148,7 @@ export function websiteSchema(): JsonLdValue {
 export function softwareApplicationSchema(): JsonLdValue {
   return {
     '@type': 'SoftwareApplication',
-    '@id': absoluteUrl('/#software'),
+    '@id': SOFTWARE_ID,
     name: SITE_NAME,
     alternateName: `${SITE_NAME} developer time tracking`,
     url: SITE_URL,
@@ -233,20 +264,61 @@ export function webPageSchema({
     name,
     description,
     inLanguage: locale === 'th' ? 'th-TH' : 'en',
-    ...(contentModified(path, locale) ? { dateModified: contentModified(path, locale) } : {}),
+    ...contentDates(path, locale),
+    // Every public page is about the one product. Saying so by @id lets a reader that
+    // builds an entity graph attach this page's claims to the product rather than
+    // treating each URL as a separate, unnamed subject.
+    about: { '@id': SOFTWARE_ID },
+    primaryImageOfPage: socialImage(),
     // Inline rather than an @id reference: readers that do not resolve the site graph
     // (most answer engines) still see who wrote the page and in what role.
     author: founderReference(),
     reviewedBy: founderReference(),
-    isPartOf: { '@id': absoluteUrl('/#website') },
+    isPartOf: { '@id': WEBSITE_ID },
     publisher: { '@id': ORGANIZATION_ID },
-    // The page title and the opening answer are the passages written to be read aloud.
-    speakable: { '@type': 'SpeakableSpecification', cssSelector: ['h1', '.axis-page-lead'] },
+    speakable: { '@type': 'SpeakableSpecification', cssSelector: SPEAKABLE_SELECTORS },
     hasPart: sections.map((section) => ({
       '@type': 'WebPageElement',
       '@id': `${url}#${section.id}`,
       url: `${url}#${section.id}`,
       name: section.name,
     })),
+  };
+}
+
+/**
+ * A documentation guide as a TechArticle, alongside its WebPage node.
+ *
+ * WebPage says a URL exists; TechArticle says it is a dated, authored piece of technical
+ * writing with a headline — the shape search and answer engines expect before they treat
+ * a page as a citable how-it-works source. It is emitted only for the `/docs/*` guides:
+ * product and policy pages are not articles and are not typed as one.
+ */
+export function techArticleSchema({
+  path,
+  locale,
+  headline,
+  description,
+}: {
+  description: string;
+  headline: string;
+  locale: SiteLocale;
+  path: string;
+}): JsonLdValue {
+  const url = absoluteUrl(localizedPath(locale, path));
+  return {
+    '@type': 'TechArticle',
+    '@id': `${url}#article`,
+    headline,
+    description,
+    url,
+    inLanguage: locale === 'th' ? 'th-TH' : 'en',
+    ...contentDates(path, locale),
+    image: socialImage(),
+    author: founderReference(),
+    publisher: { '@id': ORGANIZATION_ID },
+    about: { '@id': SOFTWARE_ID },
+    isPartOf: { '@id': WEBSITE_ID },
+    mainEntityOfPage: { '@id': `${url}#webpage` },
   };
 }

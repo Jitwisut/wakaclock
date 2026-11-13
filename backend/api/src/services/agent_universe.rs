@@ -637,7 +637,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires isolated CLICKHOUSE_TEST_URL with usage events"]
+    #[ignore = "requires isolated CLICKHOUSE_TEST_URL"]
     async fn agrees_with_a_direct_sum_of_usage_events() {
         #[derive(clickhouse::Row, serde::Deserialize, Debug)]
         struct Sum {
@@ -647,22 +647,69 @@ mod tests {
             tokens: u64,
         }
         let client = crate::test_support::clickhouse_client().await;
+        crate::repository::ai_usage::AiUsageRepository::new(client.clone())
+            .migrate()
+            .await
+            .unwrap();
         let (start, end) = (1_791_000_000u32, 1_794_000_000u32);
+        // Seed a fresh user so the comparison never depends on rows other tests left behind.
+        // Events straddle hours and sessions, with some outside the range on each side. No
+        // project is attached: project names come from a table whose migration also alters
+        // heartbeats, which this test must not touch.
+        let user = Uuid::new_v4();
+        let seeded = [
+            ("codex", "s1", start - 1, 10, 5),
+            ("codex", "s1", start, 120, 30),
+            ("codex", "s1", start + 59, 7, 3),
+            ("codex", "s2", start + 7_200, 40, 0),
+            ("claude-code", "s3", start + 3_600, 500, 250),
+            ("claude-code", "s3", end - 1, 1, 1),
+            ("claude-code", "s3", end, 9_000, 9_000),
+        ];
+        for (index, (agent, session, time, input, output)) in seeded.into_iter().enumerate() {
+            client
+                .get_client()
+                .query(
+                    "INSERT INTO wakaclock.ai_usage_events (user_id, date, usage_event_id, ai_session_id,
+                        event_time, ai_agent, prompt_count, input_tokens, output_tokens, token_source,
+                        version, received_at)
+                     VALUES (?, toDate(toDateTime(?)), ?, ?, ?, ?, 1, ?, ?, 'provider', 1, ?)",
+                )
+                .bind(user)
+                .bind(time)
+                .bind(format!("universe-{index}"))
+                .bind(session)
+                .bind(time)
+                .bind(agent)
+                .bind(input)
+                .bind(output)
+                .bind(time)
+                .execute()
+                .await
+                .unwrap();
+        }
         let direct = client
             .get_client()
             .query(
                 "SELECT ai_agent AS agent, user_id,
                         sum(toUInt64(ifNull(input_tokens, 0)) + toUInt64(ifNull(output_tokens, 0))) AS tokens
                  FROM wakaclock.ai_usage_events FINAL
-                 WHERE event_time >= ? AND event_time < ?
+                 WHERE user_id = ? AND event_time >= ? AND event_time < ?
                  GROUP BY agent, user_id ORDER BY tokens DESC",
             )
+            .bind(user)
             .bind(start)
             .bind(end)
             .fetch_all::<Sum>()
             .await
             .unwrap();
-        let user = direct[0].user_id;
+        assert_eq!(
+            direct
+                .iter()
+                .map(|row| (row.agent.as_str(), row.tokens))
+                .collect::<Vec<_>>(),
+            [("claude-code", 752), ("codex", 200)]
+        );
         let repository = AgentUniverseRepository::new(client);
         let started = std::time::Instant::now();
         let rows = repository

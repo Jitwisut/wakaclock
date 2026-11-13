@@ -232,6 +232,19 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 20
+      # The Team cost suite proxies ClickHouse and accepts only this dedicated instance.
+      clickhouse-team-cost:
+        image: clickhouse/clickhouse-server:24.10
+        env:
+          CLICKHOUSE_DB: wakaclock
+          CLICKHOUSE_SKIP_USER_SETUP: 1
+        ports:
+          - 58125:8123
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
       postgres:
         image: postgres:16
         env:
@@ -257,11 +270,58 @@ jobs:
     defaults:
       run:
         working-directory: backend/api
+    env:
+      # Some financial transaction tests hold very large async futures; unoptimized test
+      # builds overflow libtest's default 2 MiB thread stack.
+      RUST_MIN_STACK: 8388608
+      # Suites that refuse any PostgreSQL database except their own dedicated one. Each
+      # entry is a test-path prefix and ends in `::` so one module cannot match another.
+      # The shared run below skips all of them, so a new suite left out of every group
+      # fails its own database guard there instead of silently not running.
+      # scripts/ci-dedicated-db-tests.sh recreates the database before each suite.
+      POSTGRES_TEST_BASE_URL: postgres://atoaxis:atoaxis-test@127.0.0.1:5432
+      PGHOST: 127.0.0.1
+      PGUSER: atoaxis
+      PGPASSWORD: atoaxis-test
+      TEAM_DB_TESTS: >-
+        repository::copilot_daily::
+        repository::copilot_reports_tests::
+        repository::team_actions_tests::
+        repository::team_cost_equations_tests::
+        repository::team_financial_guard::
+        repository::team_github_tests::
+        repository::team_privacy_tests::
+        repository::team_readiness_tests::
+        repository::team_trust_tests::
+        services::organizations::owner_security_tests::
+      STRIPE_DB_TESTS: >-
+        repository::team_analytics_entitlement::
+        repository::team_financial_ingress::
+        repository::team_financial_inventory::
+        repository::team_financial_locks::
+        repository::team_financial_recovery::
+        repository::team_financial_transaction_tests::
+        repository::team_stripe_tests::
+        repository::team_subscription_cancellation::
+        repository::team_trial::
+        repository::team_usage_admissions::
+        repository::user_identity_sync::
+      # Also uses atoaxis_team_test, but against the dedicated ClickHouse service.
+      TEAM_COST_DB_TESTS: "repository::team_cost_tests::"
+      ONBOARDING_DB_TESTS: >-
+        repository::team_organization_birth::
+        repository::team_organization_recovery::
+        repository::team_pilot::
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install PostgreSQL test client
+        run: sudo apt-get install -y postgresql-client
+      - name: Create the application ClickHouse database
+        # Tests that build the full app state migrate into `wakaclock` and expect it to exist.
+        run: curl -fsS http://127.0.0.1:8123/ --data-binary 'CREATE DATABASE IF NOT EXISTS wakaclock'
       - name: Run ignored database tests against isolated ClickHouse
         env:
           CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
@@ -272,31 +332,64 @@ jobs:
           RABBITMQ_TEST_URL: amqp://guest:guest@127.0.0.1:5672/%2f
         # The broker-restart test runs `docker restart` on a named container; CI's
         # service container cannot be restarted from inside the job, so it is skipped.
-        # Team/Copilot tests refuse any database not named atoaxis_team_test; they run below.
-        run: >-
-          cargo test -p wakaclock-server -- --ignored --test-threads=1
-          --skip survive_a_broker_restart --skip repository::team_ --skip repository::copilot_
-      - name: Install PostgreSQL test client
-        run: sudo apt-get install -y postgresql-client
-      - name: Create isolated Team database
-        env:
-          PGPASSWORD: atoaxis-test
-        run: createdb -h 127.0.0.1 -U atoaxis atoaxis_team_test
+        # Suites with a dedicated database run in the steps below.
+        run: |
+          skips=()
+          for prefix in $TEAM_DB_TESTS $TEAM_COST_DB_TESTS $STRIPE_DB_TESTS $ONBOARDING_DB_TESTS; do
+            skips+=(--skip "$prefix")
+          done
+          cargo test -p wakaclock-server -- --ignored --test-threads=1 \
+            --skip survive_a_broker_restart "${skips[@]}"
+      - name: Build Team financial guard operator CLI for its database tests
+        # Each suite below is independent: run every one even after a failure, so one
+        # red suite cannot hide the state of the others.
+        if: ${{ !cancelled() }}
+        run: cargo build -p wakaclock-server --bin team-financial-guard
       - name: Run ignored Team and Copilot database tests
+        if: ${{ !cancelled() }}
         env:
           CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
           CLICKHOUSE_TEST_USER: default
           CLICKHOUSE_TEST_PASSWORD: ""
-          POSTGRES_TEST_URL: postgres://atoaxis:atoaxis-test@127.0.0.1:5432/atoaxis_team_test
+          TEAM_FINANCIAL_GUARD_TEST_BIN: ${{ github.workspace }}/backend/api/target/debug/team-financial-guard
         # The restore drill needs TEAM_DRILL_STAGE and is driven by scripts/team-restore-drill.py.
         run: >-
-          cargo test -p wakaclock-server -- --ignored --test-threads=1
-          repository::team_ repository::copilot_ --skip restore_drill_fixture_stages
+          ../../scripts/ci-dedicated-db-tests.sh atoaxis_team_test "$TEAM_DB_TESTS"
+          --skip restore_drill_fixture_stages
+      - name: Run ignored Team cost tests against the dedicated ClickHouse
+        if: ${{ !cancelled() }}
+        env:
+          CLICKHOUSE_TEST_URL: http://127.0.0.1:58125
+          CLICKHOUSE_TEST_DATABASE: wakaclock
+        run: ../../scripts/ci-dedicated-db-tests.sh atoaxis_team_test "$TEAM_COST_DB_TESTS"
+      - name: Run ignored Stripe and billing database tests
+        if: ${{ !cancelled() }}
+        env:
+          CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
+          CLICKHOUSE_TEST_USER: default
+          CLICKHOUSE_TEST_PASSWORD: ""
+          TEAM_FINANCIAL_GUARD_TEST_BIN: ${{ github.workspace }}/backend/api/target/debug/team-financial-guard
+          # Synthetic fixture paths only; the inventory test creates its ledger directory.
+          STRIPE_TEST_CREDENTIALS_PATH: ${{ runner.temp }}/stripe-test-credentials.encrypted
+          TEAM_FINANCIAL_INVENTORY_TEST_DIR: ${{ runner.temp }}/team-financial-inventory/ledger
+        run: >-
+          mkdir -p "$RUNNER_TEMP/team-financial-inventory" &&
+          ../../scripts/ci-dedicated-db-tests.sh atoaxis_stripe_test "$STRIPE_DB_TESTS"
+      - name: Run ignored Team onboarding database tests
+        if: ${{ !cancelled() }}
+        env:
+          CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
+          CLICKHOUSE_TEST_USER: default
+          CLICKHOUSE_TEST_PASSWORD: ""
+        run: ../../scripts/ci-dedicated-db-tests.sh atoaxis_team_onboarding_test "$ONBOARDING_DB_TESTS"
       - name: Run collector process and offline lifecycle tests
+        if: ${{ !cancelled() }}
         run: cargo test -p wakaclock-cli --tests -- --test-threads=1
       - name: Build API for cross-replica security regression tests
+        if: ${{ !cancelled() }}
         run: cargo build -p wakaclock-server --bin wakaclock-server
       - name: Run cross-replica security and import smoke tests
+        if: ${{ !cancelled() }}
         run: >-
           python3 ../../scripts/backend-security-smoke-runtime.py
           --binary target/debug/wakaclock-server

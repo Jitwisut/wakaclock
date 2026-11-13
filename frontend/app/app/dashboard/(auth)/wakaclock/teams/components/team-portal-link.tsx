@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
+
 import { useMutation } from '@tanstack/react-query';
+
 import { Button } from '@/components/ui/button';
 import { QueryState } from '@/components/wakaclock/query-state';
 import { WakaclockError } from '@/lib/wakaclock/client';
@@ -9,9 +11,9 @@ import { getTeamPortalDestination, isTeamPortalUrl } from '@/lib/wakaclock/team-
 
 interface Props {
   customer: string | undefined;
+  onAccessLost?: (error: unknown) => void;
   organizationId: string;
   userId: string;
-  onAccessLost?: (error: unknown) => void;
 }
 export function TeamPortalLink(props: Props) {
   return props.customer ? (
@@ -19,11 +21,11 @@ export function TeamPortalLink(props: Props) {
   ) : null;
 }
 function PortalScope({ organizationId, onAccessLost }: Props) {
-  const [intent, setIntent] = useState<{ id: string; at: number }>();
+  const [intent, setIntent] = useState<{ at: number; id: string }>();
   const [display, setDisplay] = useState({ from: 0, until: 0 });
   const [now, setNow] = useState(() => Date.now());
   const request = useMutation({
-    mutationFn: async (input: { id: string; at: number }) => {
+    mutationFn: async (input: { at: number; id: string }) => {
       const result = await reportTeamBillingAccessFailure(
         getTeamPortalDestination(organizationId, input.id),
         onAccessLost
@@ -34,7 +36,7 @@ function PortalScope({ organizationId, onAccessLost }: Props) {
         result.provider_expires_at !== null ||
         result.payment_or_access_confirmed !== false ||
         !Array.isArray(result.purposes) ||
-        !result.purposes.length ||
+        result.purposes.length === 0 ||
         result.purposes.some(
           (p) => !['customer_update', 'invoice_history', 'payment_method_update'].includes(p)
         ) ||
@@ -97,7 +99,7 @@ function PortalScope({ organizationId, onAccessLost }: Props) {
       </Button>
       <QueryState error={request.error} isLoading={request.isPending}>
         {link && (
-          <a href={link} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">
+          <a href={link} referrerPolicy="no-referrer" rel="noopener noreferrer" target="_blank">
             Open Stripe billing portal
           </a>
         )}
