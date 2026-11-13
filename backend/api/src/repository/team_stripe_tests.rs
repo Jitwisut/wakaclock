@@ -5,7 +5,7 @@ use crate::{
     infrastructure::postgres::PostgresClient,
     services::team_stripe::{self, Ingress, Snapshot},
 };
-use chrono::{Duration, Utc};
+use chrono::{Duration, SubsecRound, Utc};
 use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -1193,7 +1193,9 @@ async fn stripe_checkout_confirmation_durability_and_owner_fences() {
         .await
         .unwrap()
         .is_none());
-    let retry = Utc::now() + Duration::minutes(5);
+    // PostgreSQL stores microseconds; Linux clocks give nanoseconds. Truncate so the
+    // value read back is comparable to the one sent.
+    let retry = (Utc::now() + Duration::minutes(5)).trunc_subsecs(6);
     repo.fail(
         &claim,
         &crate::infrastructure::stripe::ProviderError {
