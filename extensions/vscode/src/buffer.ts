@@ -99,6 +99,7 @@ export class HeartbeatBufferManager {
   private authorship: AuthorshipObservation[] = [];
   private attributionScopes: readonly string[] = [];
   private authorshipInFlight?: Promise<void>;
+  private lastAuthorshipStatus?: string;
   private readonly states = new Map<string, BufferedFileState>();
   private readonly lineMeasurements = new DocumentLineMeasurements();
   private readonly lastLineMeasurements = new Map<string, LineMeasurement>();
@@ -751,6 +752,27 @@ export class HeartbeatBufferManager {
       );
       this.authorship = [...parked, ...reconcileAuthorship(eligible, events, now)];
       if (before !== JSON.stringify(this.authorship)) this.checkpoint();
+      const counts = {
+        waitingForEvidence: 0,
+        waitingForDelivery: 0,
+        awaitingLegacyReview: 0,
+        acknowledged: 0,
+        conflicted: 0,
+        parkedForOwner: parked.length,
+      };
+      for (const observation of this.authorship) {
+        if (!this.attributionScopes.includes(observation.scope)) continue;
+        if (observation.conflicted) counts.conflicted++;
+        if (observation.blockedReason) counts.awaitingLegacyReview++;
+        else if (observation.acknowledged) counts.acknowledged++;
+        else if (observation.request) counts.waitingForDelivery++;
+        else if (!observation.conflicted) counts.waitingForEvidence++;
+      }
+      const status = JSON.stringify(counts);
+      if (this.lastAuthorshipStatus !== status) {
+        this.lastAuthorshipStatus = status;
+        this.logger.debug("Claude authorship reconciliation status", counts);
+      }
       const pending = this.authorship.filter(o =>
         this.attributionScopes.includes(o.scope) && o.request && !o.acknowledged && !o.blockedReason
       ).sort((a, b) => (a.lastAttemptAt ?? -1) - (b.lastAttemptAt ?? -1));
@@ -764,13 +786,28 @@ export class HeartbeatBufferManager {
           this.checkpoint();
           const receipt = await this.cli.sendMatchedAuthorship(observation.scope, request);
           if (this.journal !== journal || this.capturePaused) break;
-          if (observation.request !== request || !this.attributionScopes.includes(observation.scope) ||
-              !isAuthorshipAcknowledgement(request, receipt)) continue;
+          if (observation.request !== request || !this.attributionScopes.includes(observation.scope)) continue;
+          if (receipt.status === "base_pending" && receipt.digest === request.digest) {
+            this.logger.debug("Claude authorship waiting for the source heartbeat");
+            continue;
+          }
+          if (!isAuthorshipAcknowledgement(request, receipt)) {
+            this.logger.debug("Claude authorship receipt did not confirm the request");
+            continue;
+          }
+          this.logger.debug("Claude authorship receipt accepted", {
+            status: receipt.status,
+            operation: request.operation ?? "match",
+          });
           observation.acknowledged = true;
           this.checkpoint();
-        } catch { /* Offline or uncertain receipts remain durable for retry. */ }
+        } catch {
+          this.logger.debug("Claude authorship delivery deferred");
+        }
       }
-    } catch { /* Display enrichment cannot interrupt original activity delivery. */ }
+    } catch {
+      this.logger.debug("Claude authorship reconciliation deferred");
+    }
   }
 
   public getBufferedSeconds(now = Date.now()): number {
