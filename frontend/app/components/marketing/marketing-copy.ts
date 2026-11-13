@@ -2039,7 +2039,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           : 'Extension นี้กำลังจะเปิดใน Marketplace แบบ Preview สมาชิก Early Access จะได้ใช้ก่อน ระหว่างนี้ editor ที่มี WakaTime plugin ส่งข้อมูลเข้า AtoAxis ได้เลยโดยแก้ ~/.wakatime.cfg'
       ),
       code(
-        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
+        'Extensions: install "AtoAxis — Coding Time Tracker & AI Attribution"\nCommand Palette: AtoAxis: Set API Key',
         'VS Code'
       ),
       p(
@@ -2062,13 +2062,13 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
         en
           ? [
               'VS Code 1.90 or newer for the first-party extension, or any editor that already has a WakaTime plugin',
-              'wakaclock-cli on your PATH, or an absolute path in the wakaclock.cliPath setting: the extension buffers activity but never contacts the server itself',
+              'A CLI to deliver heartbeats: the VS Code extension ships one for your operating system, and WakaTime plugins use the wakatime-cli they already install',
               'An AtoAxis account plus an API key generated from the dashboard',
               'Outbound HTTPS. Heartbeats that cannot be delivered are queued locally in ~/.wakaclock/queue.db and resent later, so a flight or a dropped VPN does not lose the day',
             ]
           : [
               'VS Code 1.90 ขึ้นไปสำหรับ extension ของเราเอง หรือ editor ใดก็ได้ที่มี WakaTime plugin อยู่แล้ว',
-              'มี wakaclock-cli ใน PATH หรือกำหนด path เต็มไว้ที่ setting wakaclock.cliPath เพราะ extension แค่เก็บ activity แต่ไม่ได้ติดต่อ server เอง',
+              'CLI สำหรับส่ง heartbeat: VS Code extension มีมาในตัวสำหรับระบบปฏิบัติการของคุณ ส่วน WakaTime plugin ใช้ wakatime-cli ที่ติดตั้งไว้อยู่แล้ว',
               'บัญชี AtoAxis และ API key ที่สร้างจาก dashboard',
               'การเชื่อมต่อ HTTPS ขาออก heartbeat ที่ส่งไม่สำเร็จจะถูกคิวไว้ที่ ~/.wakaclock/queue.db แล้วส่งใหม่ภายหลัง ข้อมูลของวันนั้นจึงไม่หาย',
             ]
@@ -2118,7 +2118,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           : 'Extension นี้กำลังจะเปิดใน Marketplace แบบ Preview สมาชิก Early Access จะได้ใช้ก่อน ระหว่างนี้ editor ที่มี WakaTime plugin ส่งข้อมูลเข้า AtoAxis ได้เลยโดยแก้ ~/.wakatime.cfg'
       ),
       code(
-        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
+        'Extensions: install "AtoAxis — Coding Time Tracker & AI Attribution"\nCommand Palette: AtoAxis: Set API Key',
         'VS Code'
       ),
       p(
@@ -2180,14 +2180,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
       bullets(
         en
           ? [
-              'No total in the status bar: the CLI cannot be found. Run AtoAxis: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary',
+              'No total in the status bar: read its state. Connect means no API key is set yet, so run AtoAxis: Set API Key; a CLI-unavailable status means your platform has no bundled build yet',
               'Reading code is not counted: only edits, saves and file switches produce heartbeats, and gaps at or beyond the idle timeout are excluded on purpose',
               'The total stopped rising: run wakaclock-cli status. Undelivered heartbeats sit in ~/.wakaclock/queue.db and are resent once the server is reachable again',
               'One project counted twice: two checkouts of the same repository are two project names until you merge them under Settings, with project rules or a manual merge',
               'AI work missing: run AtoAxis: Show AI Tracking Status, then AtoAxis: Set Up AI Tracking to register hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code or Kimi Code CLI. Cursor and Copilot have no adapter yet',
             ]
           : [
-              'status bar ไม่ขึ้นยอดเวลา แปลว่าหา CLI ไม่เจอ ให้รัน AtoAxis: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
+              'status bar ไม่ขึ้นยอดเวลา ให้ดูสถานะที่แสดง ถ้าเป็น Connect แปลว่ายังไม่ได้ใส่ API key ให้รัน AtoAxis: Set API Key ถ้าขึ้นว่าใช้ CLI ไม่ได้ แปลว่ายังไม่มี build สำหรับแพลตฟอร์มของคุณ',
               'อ่านโค้ดเฉย ๆ ไม่ถูกนับ เพราะ heartbeat เกิดจากการแก้ไข การ save และการสลับไฟล์เท่านั้น ช่วงที่ไม่มีกิจกรรมถึงเกณฑ์ idle จะไม่ถูกนับโดยตั้งใจ',
               'ยอดหยุดเพิ่ม ให้รัน wakaclock-cli status heartbeat ที่ยังส่งไม่สำเร็จจะค้างอยู่ใน ~/.wakaclock/queue.db และถูกส่งใหม่เมื่อกลับมาต่อ server ได้',
               'โปรเจกต์เดียวถูกนับสองชื่อ เกิดจาก checkout สองที่ของ repository เดียวกัน ให้รวมเข้าด้วยกันที่หน้า Settings ผ่าน project rules หรือการ merge เอง',
@@ -2661,12 +2661,12 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
         en
           ? [
               'VS Code 1.90 or newer',
-              'wakaclock-cli on PATH, or an absolute path in wakaclock.cliPath',
+              'Nothing else to install: the extension ships the CLI for your operating system and checks it against a SHA-256 manifest before it runs',
               'An API key, stored through AtoAxis: Set API Key rather than in settings.json',
             ]
           : [
               'VS Code 1.90 ขึ้นไป',
-              'มี wakaclock-cli ใน PATH หรือกำหนด path เต็มไว้ที่ wakaclock.cliPath',
+              'ไม่ต้องติดตั้งอะไรเพิ่ม extension มี CLI สำหรับระบบปฏิบัติการของคุณมาในตัว และตรวจกับ SHA-256 manifest ก่อนรันทุกครั้ง',
               'API key ที่บันทึกผ่านคำสั่ง AtoAxis: Set API Key ไม่ใช่เก็บใน settings.json',
             ]
       ),
@@ -2700,20 +2700,20 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
     '/integrations/vscode#4',
     (en) => [
       code(
-        '{\n  "wakaclock.cliPath": "/usr/local/bin/wakaclock-cli",\n  "wakaclock.statusBarEnabled": true,\n  "wakaclock.trackDebugSessions": true,\n  "wakaclock.trackBuildTasks": true\n}',
+        '{\n  "wakaclock.statusBarEnabled": true,\n  "wakaclock.trackDebugSessions": true,\n  "wakaclock.trackBuildTasks": true\n}',
         'settings.json'
       ),
       bullets(
         en
           ? [
-              'wakaclock.cliPath: absolute path to the binary; empty resolves it from PATH',
+              'wakaclock.cliPath: advanced development override only; leave it empty to use the bundled, verified CLI',
               'wakaclock.statusBarEnabled: show today’s total in the status bar',
               'wakaclock.trackDebugSessions: emit debugging heartbeats when a debug session starts and stops',
               'wakaclock.trackBuildTasks: emit building heartbeats when a task starts and stops',
               'wakaclock.debugLogging: verbose logging in the extension host console',
             ]
           : [
-              'wakaclock.cliPath: path เต็มของ binary ถ้าเว้นว่างจะหาใน PATH',
+              'wakaclock.cliPath: ใช้แทน CLI ตอนพัฒนาเท่านั้น ปล่อยว่างไว้เพื่อใช้ CLI ที่มากับ extension และผ่านการตรวจแล้ว',
               'wakaclock.statusBarEnabled: แสดงยอดรวมของวันนี้บน status bar',
               'wakaclock.trackDebugSessions: ส่ง heartbeat ประเภท debugging เมื่อเริ่มและจบ debug session',
               'wakaclock.trackBuildTasks: ส่ง heartbeat ประเภท building เมื่อเริ่มและจบ task',
@@ -2731,12 +2731,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           ? [
               'File activity only, with no app, domain or url heartbeats',
               'AI hooks cover Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI; Cursor and Copilot need provider-specific adapters',
-              'The extension requires wakaclock-cli and does not talk to the server directly',
+              'The extension delivers heartbeats through its bundled CLI rather than talking to the server directly',
+              'Native builds are per platform; an unsupported platform shows a clear CLI-unavailable status instead of running an unverified file',
             ]
           : [
               'ส่งเฉพาะกิจกรรมกับไฟล์ ไม่มี heartbeat ประเภท app, domain หรือ url',
               'AI hook ครอบคลุม Claude Code, Codex CLI, Gemini CLI, Kilo Code และ Kimi Code CLI ส่วน Cursor และ Copilot ต้องมี adapter เฉพาะของผู้ให้บริการ',
-              'extension ต้องใช้ wakaclock-cli และไม่ได้ติดต่อ server โดยตรง',
+              'extension ส่ง heartbeat ผ่าน CLI ที่มาในตัว ไม่ได้ติดต่อ server โดยตรง',
+              'มี build แยกตามแพลตฟอร์ม ถ้าแพลตฟอร์มไม่รองรับจะแสดงสถานะว่าใช้ CLI ไม่ได้อย่างชัดเจน แทนการรันไฟล์ที่ไม่ได้ตรวจสอบ',
             ]
       ),
     ],
@@ -3053,7 +3055,7 @@ generic(
       {
         question: 'What do I need before installing it?',
         answer:
-          'VS Code 1.90 or newer, wakaclock-cli on PATH (or a configured wakaclock.cliPath), and an API key generated from the dashboard.',
+          'VS Code 1.90 or newer and an API key generated from the dashboard. The CLI ships inside the extension, so there is nothing else to install.',
       },
       {
         question: 'Where is my API key stored?',
@@ -3063,7 +3065,7 @@ generic(
       {
         question: 'Why does the status bar show zero?',
         answer:
-          'The extension cannot find wakaclock-cli. Run AtoAxis: Configure CLI Path, or set wakaclock.cliPath to the absolute path of the binary.',
+          'Read the status bar state. Connect means no API key is set yet, so run AtoAxis: Set API Key. Offline queued means activity is kept locally and sent once the server is reachable.',
       },
       {
         question: 'Does it track other apps or browser tabs?',
@@ -3099,7 +3101,7 @@ generic(
       {
         question: 'ต้องมีอะไรก่อนติดตั้ง?',
         answer:
-          'VS Code 1.90 ขึ้นไป, wakaclock-cli ใน PATH (หรือกำหนด wakaclock.cliPath) และ API key ที่สร้างจาก dashboard',
+          'VS Code 1.90 ขึ้นไป และ API key ที่สร้างจาก dashboard ส่วน CLI มากับ extension แล้ว ไม่ต้องติดตั้งเพิ่ม',
       },
       {
         question: 'API key เก็บไว้ที่ไหน?',
@@ -3109,7 +3111,7 @@ generic(
       {
         question: 'ทำไม status bar ถึงขึ้นศูนย์?',
         answer:
-          'extension หา wakaclock-cli ไม่เจอ ให้รัน AtoAxis: Configure CLI Path หรือกำหนด wakaclock.cliPath เป็น path เต็มของ binary',
+          'ให้ดูสถานะบน status bar ถ้าเป็น Connect แปลว่ายังไม่ได้ใส่ API key ให้รัน AtoAxis: Set API Key ถ้าเป็น Offline queued แปลว่าเก็บกิจกรรมไว้ในเครื่องแล้ว และจะส่งเมื่อติดต่อ server ได้',
       },
       {
         question: 'ติดตามแอปอื่นหรือ browser tab ด้วยหรือไม่?',
@@ -3440,7 +3442,7 @@ generic(
       {
         question: 'How do I connect VS Code?',
         answer:
-          'Install "AtoAxis — Developer Time Tracking", then run AtoAxis: Set API Key from the Command Palette.',
+          'Install "AtoAxis — Coding Time Tracker & AI Attribution", then run AtoAxis: Set API Key from the Command Palette.',
       },
       {
         question: 'How do I connect an editor that already has a WakaTime plugin?',
@@ -3455,7 +3457,7 @@ generic(
       {
         question: 'My total is not increasing — what should I check first?',
         answer:
-          'Confirm wakaclock-cli is on PATH or wakaclock.cliPath is set, then run wakaclock-cli status. Reading code without editing, saving or switching files produces no heartbeat by design.',
+          'In VS Code, read the status bar state first; for other editors, run wakaclock-cli status. Reading code without editing, saving or switching files produces no heartbeat by design.',
       },
     ],
   },
@@ -3485,7 +3487,7 @@ generic(
       {
         question: 'เชื่อม VS Code อย่างไร?',
         answer:
-          'ติดตั้ง "AtoAxis — Developer Time Tracking" แล้วรัน AtoAxis: Set API Key จาก Command Palette',
+          'ติดตั้ง "AtoAxis — Coding Time Tracker & AI Attribution" แล้วรัน AtoAxis: Set API Key จาก Command Palette',
       },
       {
         question: 'เชื่อม editor ที่มี WakaTime plugin อยู่แล้วอย่างไร?',
@@ -3500,7 +3502,7 @@ generic(
       {
         question: 'ยอดไม่เพิ่มขึ้น ควรตรวจอะไรก่อน?',
         answer:
-          'ตรวจว่า wakaclock-cli อยู่ใน PATH หรือกำหนด wakaclock.cliPath แล้ว จากนั้นรัน wakaclock-cli status การอ่านโค้ดเฉย ๆ โดยไม่แก้ไข save หรือสลับไฟล์จะไม่เกิด heartbeat ตามการออกแบบ',
+          'ถ้าใช้ VS Code ให้ดูสถานะบน status bar ก่อน ถ้าใช้ editor อื่นให้รัน wakaclock-cli status การอ่านโค้ดเฉย ๆ โดยไม่แก้ไข save หรือสลับไฟล์จะไม่เกิด heartbeat ตามการออกแบบ',
       },
     ],
   }

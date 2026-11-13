@@ -533,13 +533,13 @@ const EN_GUIDES: Record<string, Guide> = {
   '/docs/getting-started': {
     heading: 'What do you need before your first AtoAxis heartbeat?',
     answer:
-      'Three things: an editor AtoAxis can hear from, wakaclock-cli to deliver heartbeats, and an API key that identifies your account.',
+      'Three things: an editor AtoAxis can hear from, a CLI to deliver heartbeats, and an API key that identifies your account.',
     facts: [
       [
         'Editor',
         'VS Code 1.90+ with the first-party extension, or any WakaTime-compatible editor.',
       ],
-      ['CLI', 'wakaclock-cli on PATH, or an absolute path in the wakaclock.cliPath setting.'],
+      ['CLI', 'Bundled with the VS Code extension; WakaTime plugins use their own wakatime-cli.'],
       ['API key', 'Generated from the dashboard once Early Access issues your account access.'],
       [
         'Offline handling',
@@ -580,9 +580,9 @@ const EN_GUIDES: Record<string, Guide> = {
   '/integrations/vscode': {
     heading: 'What does the AtoAxis VS Code extension actually send?',
     answer:
-      'File, project, branch, language and editor metadata plus save, debug and build activity and keystroke counts — routed through wakaclock-cli, never file contents.',
+      'File, project, branch, language and editor metadata plus save, debug and build activity and keystroke counts — routed through the bundled CLI, never file contents.',
     facts: [
-      ['Requirement', 'VS Code 1.90 or newer, plus wakaclock-cli on PATH or a configured path.'],
+      ['Requirement', 'VS Code 1.90 or newer; the CLI ships inside the extension.'],
       ['Key storage', 'Stored in VS Code secret storage via a command, never in settings.json.'],
       ['Data sent', 'File, project, branch, language and editor metadata, plus activity counts.'],
       [
@@ -592,9 +592,9 @@ const EN_GUIDES: Record<string, Guide> = {
     ],
     question: 'How do you confirm the extension is reporting correctly after installing it?',
     example:
-      "For example, type in a file, then check the VS Code status bar: it should show today's total and refresh roughly every 15 seconds. If it stays at zero, the extension cannot find wakaclock-cli, and the fix is AtoAxis: Configure CLI Path, not reinstalling the extension.",
+      "For example, type in a file, then check the VS Code status bar: it should show today's total and refresh roughly every 15 seconds. If it stays at zero, read the status bar state: Connect means no API key is set yet, and Offline queued means activity is kept locally and sent once the server is reachable.",
     recommendation:
-      'Set wakaclock.cliPath explicitly if the binary is not on your PATH before assuming the extension itself is broken. Use AtoAxis: Send Heartbeat Now to flush buffered activity immediately when you need to verify a change without waiting for the normal save-triggered cadence.',
+      'Leave wakaclock.cliPath empty: it is a development override, and the bundled CLI is checked against a SHA-256 manifest before it runs. Use AtoAxis: Send Heartbeat Now to flush buffered activity immediately when you need to verify a change without waiting for the normal save-triggered cadence.',
     sources: [
       {
         href: '/docs/getting-started',
@@ -616,7 +616,7 @@ const EN_GUIDES: Record<string, Guide> = {
       caption: 'AtoAxis VS Code extension settings',
       columns: ['Setting', 'Purpose', 'Default'],
       rows: [
-        ['wakaclock.cliPath', 'Absolute path to the CLI binary', 'Resolved from PATH'],
+        ['wakaclock.cliPath', 'Development override for the CLI binary', 'Empty: bundled CLI'],
         ['wakaclock.statusBarEnabled', "Show today's total in the status bar", 'Enabled'],
         ['wakaclock.trackDebugSessions', 'Emit heartbeats for debug sessions', 'Enabled'],
       ],
