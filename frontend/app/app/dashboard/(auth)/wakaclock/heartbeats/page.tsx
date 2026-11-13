@@ -130,7 +130,7 @@ function HeartbeatsWorkspace() {
       />
 
       <QueryState
-        emptyDescription="Send a test heartbeat above, or point wakaclock-cli at this backend."
+        emptyDescription="Send a test heartbeat above, or point the wakaclock CLI at this backend."
         emptyTitle="No heartbeats on this day"
         error={error}
         isEmpty={timezone !== null && !isLoading && !error && rows.length === 0}

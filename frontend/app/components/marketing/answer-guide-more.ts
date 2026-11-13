@@ -271,7 +271,7 @@ export const EN_MORE_GUIDES: Record<string, Guide> = {
     ],
     question: 'How do you get ready before your key arrives?',
     example:
-      'For example, note which editors you use and whether each already has a WakaTime plugin. When your key arrives, the setup is one changed line for those editors, or the VS Code extension for VS Code, and you can confirm the first heartbeat with wakaclock-cli status.',
+      'For example, note which editors you use and whether each already has a WakaTime plugin. When your key arrives, the setup is one changed line for those editors, or the VS Code extension for VS Code, and you can confirm the first heartbeat with wakaclock status.',
     recommendation:
       'Join the list if you want complete history and AI attribution in one tracker, then read the five-minute setup so you are ready when your key arrives. Check the pricing page before relying on the planned figures.',
     sources: [
@@ -322,7 +322,7 @@ export const EN_MORE_GUIDES: Record<string, Guide> = {
     example:
       'Illustrative example, not customer data: an interval ends at 09:00 and the next begins at 09:10. The 10-minute gap is bridged. If the next interval had begun at 09:30, the 20-minute gap would stay outside the total, because it is longer than the 15-minute timeout.',
     recommendation:
-      'Open the timeline for the day in question and read the interval evidence before assuming a total is wrong. Run wakaclock-cli status first if no heartbeat appears at all, then check the editor connection.',
+      'Open the timeline for the day in question and read the interval evidence before assuming a total is wrong. Run wakaclock status first if no heartbeat appears at all, then check the editor connection.',
   },
   '/docs/ai-attribution-and-coverage': {
     heading: 'How should you read AI attribution and coverage together?',
@@ -368,7 +368,7 @@ export const EN_MORE_GUIDES: Record<string, Guide> = {
     ],
     question: 'How do you validate the migration before relying on it?',
     example:
-      'For example, after changing the two lines, code for a few minutes and run wakaclock-cli status, then check that the day appears in the dashboard. Compare a handful of imported days with the same days in your WakaTime export before trusting long-range trends.',
+      'For example, after changing the two lines, code for a few minutes and run wakaclock status, then check that the day appears in the dashboard. Compare a handful of imported days with the same days in your WakaTime export before trusting long-range trends.',
     recommendation:
       'Keep your WakaTime export until you have checked the imported projects and dates. Migrate one machine first, and change the remaining machines once the first one reports as expected.',
   },
@@ -388,7 +388,7 @@ export const TH_MORE_GUIDES: Record<string, Guide> = {
     ],
     question: 'ควรเตรียมอะไรก่อนได้รับ key?',
     example:
-      'ตัวอย่างเช่น จดไว้ว่าคุณใช้ editor อะไรบ้าง และแต่ละตัวมี WakaTime plugin อยู่แล้วหรือไม่ เมื่อได้ key การตั้งค่าจะเป็นการแก้หนึ่งบรรทัดสำหรับ editor เหล่านั้น หรือใช้ extension สำหรับ VS Code แล้วตรวจ heartbeat แรกด้วย wakaclock-cli status',
+      'ตัวอย่างเช่น จดไว้ว่าคุณใช้ editor อะไรบ้าง และแต่ละตัวมี WakaTime plugin อยู่แล้วหรือไม่ เมื่อได้ key การตั้งค่าจะเป็นการแก้หนึ่งบรรทัดสำหรับ editor เหล่านั้น หรือใช้ extension สำหรับ VS Code แล้วตรวจ heartbeat แรกด้วย wakaclock status',
     recommendation:
       'ลงชื่อถ้าคุณต้องการประวัติครบและ AI attribution ในเครื่องมือเดียว แล้วอ่านวิธีติดตั้ง 5 นาทีไว้ก่อน จะได้พร้อมเมื่อได้รับ key ตรวจหน้าราคาก่อนอ้างอิงตัวเลขที่วางแผนไว้',
     sources: [
@@ -549,7 +549,7 @@ export const TH_MORE_GUIDES: Record<string, Guide> = {
     ],
     question: 'จะยืนยันได้อย่างไรว่า heartbeat แรกมาถึงจริง?',
     example:
-      'ตัวอย่างเช่น รัน wakaclock-cli status เพื่อตรวจว่าเข้าถึง server ได้และ key ถูกต้อง แล้วรัน wakaclock-cli today เพื่อดูยอดที่ server นับไว้ ทั้งสองคำสั่งไม่อ่านไฟล์ในเครื่อง แต่ถาม server ว่าบันทึกอะไรไว้จริง',
+      'ตัวอย่างเช่น รัน wakaclock status เพื่อตรวจว่าเข้าถึง server ได้และ key ถูกต้อง แล้วรัน wakaclock today เพื่อดูยอดที่ server นับไว้ ทั้งสองคำสั่งไม่อ่านไฟล์ในเครื่อง แต่ถาม server ว่าบันทึกอะไรไว้จริง',
     recommendation:
       'เวลาแก้ปัญหา ให้เปลี่ยนทีละ setting คือ ตรวจ URL ของ server ก่อน แล้วจึงตรวจ path ของ CLI และ key ถ้าใช้ VS Code ให้อ่านคู่มือ VS Code ต่อ หรืออ่านหน้า integrations สำหรับ client อื่นที่รองรับ WakaTime',
   },
@@ -599,7 +599,7 @@ export const TH_MORE_GUIDES: Record<string, Guide> = {
     example:
       'ตัวอย่างสมมติ ไม่ใช่ข้อมูลลูกค้า: ช่วงหนึ่งจบเวลา 09:00 และช่วงถัดไปเริ่ม 09:10 ช่วงว่าง 10 นาทีจะถูกเชื่อม แต่ถ้าช่วงถัดไปเริ่ม 09:30 ช่วงว่าง 20 นาทีจะไม่ถูกนับ เพราะยาวกว่า timeout 15 นาที',
     recommendation:
-      'เปิด timeline ของวันนั้นและอ่านหลักฐานของแต่ละช่วงก่อนสรุปว่ายอดผิด ถ้าไม่มี heartbeat เลย ให้รัน wakaclock-cli status ก่อน แล้วจึงตรวจการเชื่อม editor',
+      'เปิด timeline ของวันนั้นและอ่านหลักฐานของแต่ละช่วงก่อนสรุปว่ายอดผิด ถ้าไม่มี heartbeat เลย ให้รัน wakaclock status ก่อน แล้วจึงตรวจการเชื่อม editor',
   },
   '/docs/ai-attribution-and-coverage': {
     heading: 'ควรอ่าน AI attribution กับ coverage คู่กันอย่างไร?',
@@ -645,7 +645,7 @@ export const TH_MORE_GUIDES: Record<string, Guide> = {
     ],
     question: 'จะตรวจการย้ายระบบอย่างไรก่อนใช้งานจริง?',
     example:
-      'ตัวอย่างเช่น หลังแก้สองบรรทัด ให้เขียนโค้ดสักครู่แล้วรัน wakaclock-cli status จากนั้นดูว่าวันนั้นขึ้นใน dashboard แล้ว เทียบวันที่ import มาสักสองสามวันกับวันเดียวกันในไฟล์ export ของ WakaTime ก่อนเชื่อแนวโน้มระยะยาว',
+      'ตัวอย่างเช่น หลังแก้สองบรรทัด ให้เขียนโค้ดสักครู่แล้วรัน wakaclock status จากนั้นดูว่าวันนั้นขึ้นใน dashboard แล้ว เทียบวันที่ import มาสักสองสามวันกับวันเดียวกันในไฟล์ export ของ WakaTime ก่อนเชื่อแนวโน้มระยะยาว',
     recommendation:
       'เก็บไฟล์ export ของ WakaTime ไว้จนกว่าจะตรวจโปรเจกต์และวันที่ที่ import มาแล้ว ย้ายเครื่องแรกก่อน แล้วค่อยเปลี่ยนเครื่องที่เหลือเมื่อเครื่องแรกรายงานถูกต้อง',
   },

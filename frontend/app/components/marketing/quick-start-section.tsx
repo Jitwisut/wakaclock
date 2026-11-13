@@ -9,7 +9,7 @@ import { localizedPath, type SiteLocale } from '@/lib/seo/site';
  * Kept on the homepage rather than only in /docs because the most common reason a
  * developer does not adopt a tracker is not disagreeing with it — it is not knowing how
  * much setup it costs. Every command shown here is the real one, quoted from
- * `wakaclock-cli` and the VS Code extension, so the page and the docs cannot drift.
+ * the `wakaclock` CLI and the VS Code extension, so the page and the docs cannot drift.
  */
 const COPY = {
   en: {
@@ -21,7 +21,7 @@ const COPY = {
       {
         title: 'Generate an API key',
         body: 'Open Settings in the dashboard and choose Generate key. One key covers every editor and AI hook on the account.',
-        command: 'wakaclock-cli config set-key YOUR_API_KEY',
+        command: 'wakaclock config set-key YOUR_API_KEY',
       },
       {
         title: 'Point your editor at it',
@@ -31,7 +31,7 @@ const COPY = {
       {
         title: 'Watch it count',
         body: 'Edit a file. The status bar shows today’s total within seconds, and the dashboard Overview shows the same number the server counted.',
-        command: 'wakaclock-cli today',
+        command: 'wakaclock today',
       },
     ],
   },
@@ -44,7 +44,7 @@ const COPY = {
       {
         title: 'สร้าง API key',
         body: 'เปิดหน้า Settings ใน dashboard แล้วกด Generate key ใช้ key เดียวได้กับทุก editor และทุก AI hook ในบัญชีนั้น',
-        command: 'wakaclock-cli config set-key YOUR_API_KEY',
+        command: 'wakaclock config set-key YOUR_API_KEY',
       },
       {
         title: 'ชี้ editor มาที่ AtoAxis',
@@ -54,7 +54,7 @@ const COPY = {
       {
         title: 'ดูมันเริ่มนับ',
         body: 'ลองแก้ไฟล์สักไฟล์ status bar จะขึ้นยอดของวันนี้ภายในไม่กี่วินาที และหน้า Overview จะแสดงตัวเลขเดียวกับที่ server นับไว้',
-        command: 'wakaclock-cli today',
+        command: 'wakaclock today',
       },
     ],
   },

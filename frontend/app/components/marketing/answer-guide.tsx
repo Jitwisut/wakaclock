@@ -237,7 +237,10 @@ const EN_GUIDES: Record<string, Guide> = {
     answer:
       'AtoAxis connects through its first-party VS Code extension, WakaTime-compatible editor plugins and bundled hooks for supported AI coding agents.',
     facts: [
-      ['First-party editor', 'VS Code connects through the AtoAxis extension and wakaclock-cli.'],
+      [
+        'First-party editor',
+        'VS Code connects through the AtoAxis extension and its bundled wakaclock CLI.',
+      ],
       ['Compatible editors', 'Existing WakaTime plugins can point at the hosted heartbeat API.'],
       ['Bundled AI hooks', 'Claude Code, Codex CLI, Gemini CLI, Kilo Code and Kimi Code CLI.'],
       ['Data boundary', 'Clients send activity metadata and counts, not source-code contents.'],
@@ -548,7 +551,7 @@ const EN_GUIDES: Record<string, Guide> = {
     ],
     question: 'How do you confirm the first heartbeat actually arrived, rather than assume it did?',
     example:
-      'For example, run wakaclock-cli status to confirm the server is reachable and the key is accepted, then run wakaclock-cli today to read the total the server has counted. Neither command reads your local files; both ask the server for what it has actually recorded.',
+      'For example, run wakaclock status to confirm the server is reachable and the key is accepted, then run wakaclock today to read the total the server has counted. Neither command reads your local files; both ask the server for what it has actually recorded.',
     recommendation:
       'Change one setting at a time when troubleshooting: verify the server URL, then the CLI path, then the key, rather than editing all three before checking whether the first one fixed it. Read the VS Code integration guide next if you use that editor, or the integrations overview for any other WakaTime-compatible client.',
     sources: [
@@ -572,8 +575,8 @@ const EN_GUIDES: Record<string, Guide> = {
       caption: 'First-heartbeat verification commands',
       columns: ['Command', 'What it checks', 'Reads local files?'],
       rows: [
-        ['wakaclock-cli status', 'Server reachable, API key accepted', 'No'],
-        ['wakaclock-cli today', "Today's server-counted total", 'No'],
+        ['wakaclock status', 'Server reachable, API key accepted', 'No'],
+        ['wakaclock today', "Today's server-counted total", 'No'],
       ],
     },
   },
@@ -803,7 +806,7 @@ const TH_GUIDES: Record<string, Guide> = {
     answer:
       'เชื่อมผ่าน extension ของ AtoAxis สำหรับ VS Code, plugin ที่รองรับ WakaTime API หรือ hook ของ AI agent ที่รองรับ โดยแต่ละวิธีส่งข้อมูลและมีข้อจำกัดต่างกัน',
     facts: [
-      ['VS Code', 'ใช้ extension ของ AtoAxis ร่วมกับ wakaclock-cli'],
+      ['VS Code', 'ใช้ extension ของ AtoAxis ร่วมกับ CLI wakaclock ที่มากับ extension'],
       ['Editor อื่น', 'ใช้ WakaTime-compatible plugin และตั้งค่า API URL กับ key'],
       ['AI agent', 'ใช้ hook ที่รองรับเพื่อเก็บ attribution และตรวจ coverage'],
       ['ขอบเขตข้อมูล', 'ส่ง metadata และจำนวนกิจกรรม ไม่ส่งเนื้อหา source code'],

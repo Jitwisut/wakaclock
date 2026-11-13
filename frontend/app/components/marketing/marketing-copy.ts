@@ -1370,7 +1370,7 @@ dualPage(
         ),
         p('The same state is readable, and the same work is doable, from the terminal.'),
         code(
-          'wakaclock-cli ai status              # what each agent looks like right now\nwakaclock-cli ai sync --dry-run      # parse without sending or advancing anything\nwakaclock-cli agent status           # is the always-on transcript service running',
+          'wakaclock ai status              # what each agent looks like right now\nwakaclock ai sync --dry-run      # parse without sending or advancing anything\nwakaclock agent status           # is the always-on transcript service running',
           'Terminal'
         ),
       ]),
@@ -1532,7 +1532,7 @@ dualPage(
         ),
         p('สถานะเดียวกันนี้อ่านได้และสั่งงานได้จาก terminal เช่นกัน'),
         code(
-          'wakaclock-cli ai status              # ตอนนี้ agent แต่ละตัวอยู่ในสถานะใด\nwakaclock-cli ai sync --dry-run      # อ่านและแสดงผลโดยไม่ส่งและไม่เลื่อน cursor\nwakaclock-cli agent status           # service อ่าน transcript ทำงานอยู่หรือไม่',
+          'wakaclock ai status              # ตอนนี้ agent แต่ละตัวอยู่ในสถานะใด\nwakaclock ai sync --dry-run      # อ่านและแสดงผลโดยไม่ส่งและไม่เลื่อน cursor\nwakaclock agent status           # service อ่าน transcript ทำงานอยู่หรือไม่',
           'Terminal'
         ),
       ]),
@@ -1647,7 +1647,7 @@ emptyPagePair(
       section('First-party integrations', 'first-party', [
         sub('VS Code'),
         p(
-          'The AtoAxis extension buffers editor metadata, sends heartbeats through wakaclock-cli and shows today’s coding time in the status bar.'
+          'The AtoAxis extension buffers editor metadata, sends heartbeats through its bundled wakaclock CLI and shows today’s coding time in the status bar.'
         ),
         sub('AI hooks'),
         p(
@@ -1762,7 +1762,7 @@ emptyPagePair(
       section('การเชื่อมต่อที่เราดูแลเอง', 'first-party', [
         sub('VS Code'),
         p(
-          'AtoAxis extension buffer metadata จาก editor ส่ง heartbeat ผ่าน wakaclock-cli และแสดง coding time วันนี้ใน status bar'
+          'AtoAxis extension buffer metadata จาก editor ส่ง heartbeat ผ่าน CLI wakaclock ที่มากับ extension และแสดง coding time วันนี้ใน status bar'
         ),
         sub('AI hooks'),
         p(
@@ -1995,7 +1995,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           : 'ใช้คู่มือเริ่มต้นใช้งานเมื่อต้องการเชื่อมบริการเป็นครั้งแรก คู่มืออธิบายบัญชี API key และ client ที่ต้องมีก่อนแก้ settings ของ editor จากนั้นจะพาตรวจเส้นทางข้อมูลตั้งแต่ editor จนเห็น heartbeat แรกใน dashboard ทำให้ตรวจผลแต่ละขั้นตอนได้ก่อนทำขั้นตอนต่อไป'
       ),
       code(
-        'wakaclock-cli config set-key YOUR_API_KEY\nwakaclock-cli status',
+        'wakaclock config set-key YOUR_API_KEY\nwakaclock status',
         en ? 'First verification commands' : 'คำสั่งตรวจสอบเบื้องต้น'
       ),
       p(
@@ -2099,7 +2099,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
               'การ regenerate จะแทนที่ key เดิมทันที เครื่องที่ยังใช้ key เก่าจะถูกปฏิเสธ',
             ]
       ),
-      code('wakaclock-cli config set-key YOUR_API_KEY', en ? 'Terminal' : 'Terminal'),
+      code('wakaclock config set-key YOUR_API_KEY', en ? 'Terminal' : 'Terminal'),
       p(
         en
           ? 'That writes the key into ~/.wakaclock/config.toml, which is also where the CLI keeps user_id and server_url. The VS Code extension stores its own copy in VS Code secret storage instead of settings.json, so the key is never committed with your editor config.'
@@ -2150,7 +2150,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           : 'สองคำสั่งนี้ตอบคำถามว่า "ใช้งานได้จริงหรือยัง" คำสั่งแรกถาม server ส่วนคำสั่งที่สองถามยอดรวมของวันนี้ที่ server นับไว้ ทั้งคู่ไม่อ่านไฟล์ในเครื่อง'
       ),
       code(
-        'wakaclock-cli status   # server reachable, API key present\nwakaclock-cli today    # today’s total, as the server counts it',
+        'wakaclock status   # server reachable, API key present\nwakaclock today    # today’s total, as the server counts it',
         'Terminal'
       ),
       bullets(
@@ -2182,14 +2182,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           ? [
               'No total in the status bar: read its state. Connect means no API key is set yet, so run AtoAxis: Set API Key; a CLI-unavailable status means your platform has no bundled build yet',
               'Reading code is not counted: only edits, saves and file switches produce heartbeats, and gaps at or beyond the idle timeout are excluded on purpose',
-              'The total stopped rising: run wakaclock-cli status. Undelivered heartbeats sit in ~/.wakaclock/queue.db and are resent once the server is reachable again',
+              'The total stopped rising: run wakaclock status. Undelivered heartbeats sit in ~/.wakaclock/queue.db and are resent once the server is reachable again',
               'One project counted twice: two checkouts of the same repository are two project names until you merge them under Settings, with project rules or a manual merge',
               'AI work missing: run AtoAxis: Show AI Tracking Status, then AtoAxis: Set Up AI Tracking to register hooks for Claude Code, Codex CLI, Gemini CLI, Kilo Code or Kimi Code CLI. Cursor and Copilot have no adapter yet',
             ]
           : [
               'status bar ไม่ขึ้นยอดเวลา ให้ดูสถานะที่แสดง ถ้าเป็น Connect แปลว่ายังไม่ได้ใส่ API key ให้รัน AtoAxis: Set API Key ถ้าขึ้นว่าใช้ CLI ไม่ได้ แปลว่ายังไม่มี build สำหรับแพลตฟอร์มของคุณ',
               'อ่านโค้ดเฉย ๆ ไม่ถูกนับ เพราะ heartbeat เกิดจากการแก้ไข การ save และการสลับไฟล์เท่านั้น ช่วงที่ไม่มีกิจกรรมถึงเกณฑ์ idle จะไม่ถูกนับโดยตั้งใจ',
-              'ยอดหยุดเพิ่ม ให้รัน wakaclock-cli status heartbeat ที่ยังส่งไม่สำเร็จจะค้างอยู่ใน ~/.wakaclock/queue.db และถูกส่งใหม่เมื่อกลับมาต่อ server ได้',
+              'ยอดหยุดเพิ่ม ให้รัน wakaclock status heartbeat ที่ยังส่งไม่สำเร็จจะค้างอยู่ใน ~/.wakaclock/queue.db และถูกส่งใหม่เมื่อกลับมาต่อ server ได้',
               'โปรเจกต์เดียวถูกนับสองชื่อ เกิดจาก checkout สองที่ของ repository เดียวกัน ให้รวมเข้าด้วยกันที่หน้า Settings ผ่าน project rules หรือการ merge เอง',
               'ไม่เห็นงานฝั่ง AI ให้รัน AtoAxis: Show AI Tracking Status แล้วรัน AtoAxis: Set Up AI Tracking เพื่อติดตั้ง hook ของ Claude Code, Codex CLI, Gemini CLI, Kilo Code หรือ Kimi Code CLI ส่วน Cursor และ Copilot ยังไม่มี adapter',
             ]
@@ -2432,14 +2432,14 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
       bullets(
         en
           ? [
-              'Editor activity is buffered in memory, then handed to wakaclock-cli on the same machine',
+              'Editor activity is buffered in memory, then handed to the wakaclock CLI on the same machine',
               'The CLI sends it over HTTPS, authenticated with your API key',
               'If the request fails the heartbeat is queued in a local SQLite file and retried later',
               'Heartbeat data is not sent to any third-party analytics or advertising service',
               'Only this public website can load Google Analytics, and only if you allow it (see "Website analytics"); the dashboard and the heartbeat pipeline never do',
             ]
           : [
-              'กิจกรรมใน editor ถูกพักไว้ในหน่วยความจำ แล้วส่งต่อให้ wakaclock-cli บนเครื่องเดียวกัน',
+              'กิจกรรมใน editor ถูกพักไว้ในหน่วยความจำ แล้วส่งต่อให้ CLI wakaclock บนเครื่องเดียวกัน',
               'CLI ส่งข้อมูลผ่าน HTTPS โดยยืนยันตัวตนด้วย API key ของคุณ',
               'ถ้าส่งไม่สำเร็จ heartbeat จะถูกคิวไว้ในไฟล์ SQLite ในเครื่องแล้วลองใหม่ภายหลัง',
               'ข้อมูล heartbeat ไม่ถูกส่งไปยังบริการ analytics หรือโฆษณาของบุคคลที่สามใด ๆ',
@@ -3037,7 +3037,7 @@ generic(
     title: 'VS Code time tracker extension',
     description:
       'A coding time tracker for VS Code, coming to the Marketplace as a Preview. Use your WakaTime plugin today or join Early Access to get the extension first.',
-    lead: 'The first-party extension buffers metadata-only editor activity and sends heartbeats through wakaclock-cli.',
+    lead: 'The first-party extension buffers metadata-only editor activity and sends heartbeats through its bundled wakaclock CLI.',
     headings: [
       'What it tracks',
       'Requirements',
@@ -3083,7 +3083,7 @@ generic(
     title: 'โปรแกรมจับเวลาเขียนโค้ดสำหรับ VS Code',
     description:
       'ส่วนขยาย AtoAxis สำหรับ VS Code ช่วยวัดเวลาเขียนโปรแกรม กำลังจะเปิดใน Marketplace แบบ Preview ระหว่างนี้ใช้ WakaTime plugin ได้เลย หรือสมัคร Early Access เพื่อใช้ก่อน',
-    lead: 'extension ของเราจะ buffer editor activity แบบ metadata แล้วส่ง heartbeat ผ่าน wakaclock-cli',
+    lead: 'extension ของเราจะ buffer editor activity แบบ metadata แล้วส่ง heartbeat ผ่าน CLI wakaclock ที่มากับ extension',
     headings: [
       'ข้อมูลที่ติดตาม',
       'สิ่งที่ต้องมี',
@@ -3240,7 +3240,7 @@ generic(
       {
         question: 'How does data travel from my editor to the server?',
         answer:
-          'The editor hands buffered activity to the local wakaclock-cli, which sends it over HTTPS authenticated with your API key. Heartbeat data is not sent to third-party analytics or advertising services.',
+          'The editor hands buffered activity to the local wakaclock CLI, which sends it over HTTPS authenticated with your API key. Heartbeat data is not sent to third-party analytics or advertising services.',
       },
       {
         question: 'How long is my data retained?',
@@ -3296,7 +3296,7 @@ generic(
       {
         question: 'ข้อมูลเดินทางจาก editor ไปยัง server อย่างไร?',
         answer:
-          'editor ส่งกิจกรรมที่ buffer ไว้ให้ wakaclock-cli ในเครื่อง แล้ว CLI ส่งผ่าน HTTPS โดยยืนยันตัวตนด้วย API key ข้อมูล heartbeat ไม่ถูกส่งไปยัง analytics หรือโฆษณาของบุคคลที่สาม',
+          'editor ส่งกิจกรรมที่ buffer ไว้ให้ CLI wakaclock ในเครื่อง แล้ว CLI ส่งผ่าน HTTPS โดยยืนยันตัวตนด้วย API key ข้อมูล heartbeat ไม่ถูกส่งไปยัง analytics หรือโฆษณาของบุคคลที่สาม',
       },
       {
         question: 'เก็บข้อมูลไว้นานแค่ไหน?',
@@ -3432,7 +3432,7 @@ generic(
       {
         question: 'What do I need before the first heartbeat?',
         answer:
-          'An editor AtoAxis can hear from, wakaclock-cli on your machine, an API key and outbound HTTPS. Undelivered heartbeats queue locally and resend later.',
+          'An editor AtoAxis can hear from, a CLI on your machine (bundled with the VS Code extension), an API key and outbound HTTPS. Undelivered heartbeats queue locally and resend later.',
       },
       {
         question: 'How do I get an API key?',
@@ -3452,12 +3452,12 @@ generic(
       {
         question: 'How do I verify tracking worked?',
         answer:
-          'Run wakaclock-cli status and wakaclock-cli today, check the VS Code status bar, or open the dashboard Overview page once the first heartbeat has landed.',
+          'Run wakaclock status and wakaclock today, check the VS Code status bar, or open the dashboard Overview page once the first heartbeat has landed.',
       },
       {
         question: 'My total is not increasing — what should I check first?',
         answer:
-          'In VS Code, read the status bar state first; for other editors, run wakaclock-cli status. Reading code without editing, saving or switching files produces no heartbeat by design.',
+          'In VS Code, read the status bar state first; for other editors, run wakaclock status. Reading code without editing, saving or switching files produces no heartbeat by design.',
       },
     ],
   },
@@ -3477,7 +3477,7 @@ generic(
       {
         question: 'ต้องมีอะไรก่อนส่ง heartbeat แรก?',
         answer:
-          'editor ที่ AtoAxis รับข้อมูลได้, wakaclock-cli ในเครื่อง, API key และการเชื่อมต่อ HTTPS ขาออก heartbeat ที่ส่งไม่สำเร็จจะถูกคิวไว้แล้วส่งใหม่ภายหลัง',
+          'editor ที่ AtoAxis รับข้อมูลได้, CLI ในเครื่อง (มากับ VS Code extension), API key และการเชื่อมต่อ HTTPS ขาออก heartbeat ที่ส่งไม่สำเร็จจะถูกคิวไว้แล้วส่งใหม่ภายหลัง',
       },
       {
         question: 'สร้าง API key ได้อย่างไร?',
@@ -3497,12 +3497,12 @@ generic(
       {
         question: 'ตรวจสอบได้อย่างไรว่า tracking ทำงาน?',
         answer:
-          'รัน wakaclock-cli status และ wakaclock-cli today ดู status bar ของ VS Code หรือเปิดหน้า Overview ใน dashboard หลังมี heartbeat แรกแล้ว',
+          'รัน wakaclock status และ wakaclock today ดู status bar ของ VS Code หรือเปิดหน้า Overview ใน dashboard หลังมี heartbeat แรกแล้ว',
       },
       {
         question: 'ยอดไม่เพิ่มขึ้น ควรตรวจอะไรก่อน?',
         answer:
-          'ถ้าใช้ VS Code ให้ดูสถานะบน status bar ก่อน ถ้าใช้ editor อื่นให้รัน wakaclock-cli status การอ่านโค้ดเฉย ๆ โดยไม่แก้ไข save หรือสลับไฟล์จะไม่เกิด heartbeat ตามการออกแบบ',
+          'ถ้าใช้ VS Code ให้ดูสถานะบน status bar ก่อน ถ้าใช้ editor อื่นให้รัน wakaclock status การอ่านโค้ดเฉย ๆ โดยไม่แก้ไข save หรือสลับไฟล์จะไม่เกิด heartbeat ตามการออกแบบ',
       },
     ],
   }
@@ -4219,7 +4219,7 @@ dualPage(
       ]),
       section('Verify your first total', 'verify', [
         p(
-          'Connect one editor, run wakaclock-cli status, make a small change and wait for the first heartbeat. The dashboard timeline should show the event and the Overview page should use the same duration model. If it does not, check the API key, server URL and local queue before adding another client.'
+          'Connect one editor, run wakaclock status, make a small change and wait for the first heartbeat. The dashboard timeline should show the event and the Overview page should use the same duration model. If it does not, check the API key, server URL and local queue before adding another client.'
         ),
         p('Review owner: AtoAxis product team. Last reviewed: 20 September 2026.'),
       ]),
@@ -4334,7 +4334,7 @@ dualPage(
       ]),
       section('ตรวจสอบยอดแรก', 'verify', [
         p(
-          'เชื่อม editor หนึ่งตัว รัน wakaclock-cli status แก้ไฟล์เล็กน้อย และรอ heartbeat แรก หน้า timeline ควรเห็น event และหน้า Overview ควรใช้ duration model เดียวกัน หากไม่เห็น ให้ตรวจ API key, server URL และ local queue ก่อนเพิ่ม client ตัวอื่น'
+          'เชื่อม editor หนึ่งตัว รัน wakaclock status แก้ไฟล์เล็กน้อย และรอ heartbeat แรก หน้า timeline ควรเห็น event และหน้า Overview ควรใช้ duration model เดียวกัน หากไม่เห็น ให้ตรวจ API key, server URL และ local queue ก่อนเพิ่ม client ตัวอื่น'
         ),
         p('ผู้ทบทวน: ทีมผลิตภัณฑ์ AtoAxis อัปเดตล่าสุด: 20 กันยายน 2026'),
       ]),

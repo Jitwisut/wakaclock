@@ -109,7 +109,7 @@ describe('QuickStartSection', () => {
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
       'Three steps to your first heartbeat'
     );
-    expect(screen.getByText('wakaclock-cli config set-key YOUR_API_KEY')).toBeInTheDocument();
+    expect(screen.getByText('wakaclock config set-key YOUR_API_KEY')).toBeInTheDocument();
     expect(screen.getByText('01')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Read the full setup guide/ })).toHaveAttribute(
       'href',
