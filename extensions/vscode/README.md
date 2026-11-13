@@ -1,4 +1,4 @@
-# AtoAxis — Developer Time Tracking for VS Code
+# AtoAxis — Coding Time Tracker & AI Attribution for VS Code
 
 > **Invite-only Early Access.** This extension sends activity to the hosted AtoAxis
 > service and does nothing until you add an AtoAxis API key. Keys are issued to
@@ -6,18 +6,45 @@
 > [join the Early Access list](https://www.atoaxis.com/join) first; joining is free
 > and takes no payment details.
 
-AtoAxis records how long you spend coding in VS Code and breaks it down by project,
-programming language, branch and editor. This extension captures editor activity,
-buffers it in memory, and delegates heartbeat delivery to the `wakaclock` binary, which sends
-it to the hosted AtoAxis API. The Marketplace package contains the native CLI for
-your operating system, so no Rust toolchain, terminal process or manual binary path
-is required.
+**See where your coding time goes, and how much of your code your AI agents wrote.**
+AtoAxis tracks time per project, language, branch and editor, and reports the lines
+written by Claude Code, Codex CLI and Gemini CLI separately from the lines you write
+yourself. It speaks the WakaTime heartbeat API, so editors that already have a WakaTime
+plugin can report to the same dashboard.
 
-> **Naming:** the product is AtoAxis, but the CLI binary, config directory and setting
-> keys still ship under the original `wakaclock` name. Commands below are written
-> exactly as you must type them.
+## Why AtoAxis
 
-## Key features
+- **Your time, per project.** Coding time broken down by project, language, branch and
+  editor, with today's total in the status bar.
+- **AI lines kept apart from yours.** Opt-in, per-tool hooks for Claude Code, Codex CLI
+  and Gemini CLI (Kilo Code and Kimi Code CLI in Beta). An edit that cannot be tied to a
+  tool is labelled *Unattributed* instead of being guessed.
+- **Keep your WakaTime setup.** Any editor with a WakaTime plugin can point its
+  `api_url` at AtoAxis, and a WakaTime heartbeat export can be imported into the
+  dashboard. See [Migrate from WakaTime](https://www.atoaxis.com/docs/migrate-from-wakatime).
+- **Your complete history.** The single planned plan keeps your full coding history; there is
+  no cheaper tier that hides older data.
+- **Nothing extra to install.** The native CLI for your operating system ships inside the
+  extension and is checked against a SHA-256 manifest before it runs.
+- **Metadata only.** File contents, what you type, and AI prompts and responses are never
+  sent. Details are under [Privacy](#privacy).
+
+## Quick start
+
+1. [Join Early Access](https://www.atoaxis.com/join). It is free and asks for no payment
+   details; API keys are issued to people on the list.
+2. Install this extension. VS Code picks the build for your operating system.
+3. Create an API key in the AtoAxis dashboard (Settings → API key) and run
+   `AtoAxis: Set API Key` from the Command Palette.
+4. Optional: accept the AI tracking prompt, or run `AtoAxis: Set Up AI Tracking` later.
+
+## Pricing
+
+Joining Early Access is free. AtoAxis is planned as a paid hosted service: one plan at
+$12/month or $99/year, with no free tier at launch. Nothing is charged today. See
+[pricing](https://www.atoaxis.com/pricing).
+
+## What it tracks
 
 - Tracks coding time per file, project, branch and language
 - Records keystrokes and characters added or deleted
@@ -48,6 +75,19 @@ dashboard (Settings → API key) and set it from the command palette:
 The extension verifies the candidate key before replacing an existing one. If the
 server is temporarily offline, it keeps the key pending and queues activity locally.
 The status bar shows `AtoAxis: Connect`, `Connecting`, `Verified` or `Offline queued`.
+
+> **Naming:** the product is AtoAxis, but the CLI binary, config directory and setting
+> keys still ship under the original `wakaclock` name. Commands below are written
+> exactly as you must type them.
+
+## About the bundled CLI
+
+AtoAxis records how long you spend coding in VS Code and breaks it down by project,
+programming language, branch and editor. This extension captures editor activity,
+buffers it in memory, and delegates heartbeat delivery to the `wakaclock` binary, which sends
+it to the hosted AtoAxis API. The Marketplace package contains the native CLI for
+your operating system, so no Rust toolchain, terminal process or manual binary path
+is required.
 
 ## How it works
 
@@ -155,11 +195,29 @@ advertisers, or used to train models. See the
 - Native binaries are bundled per Marketplace target; unsupported platforms are
   rejected with a clear CLI-unavailable status rather than executing an unverified file
 
+## FAQ
+
+**Do I need an AtoAxis account?** Yes. The extension does nothing until you add an
+AtoAxis API key, and keys are currently issued to Early Access members.
+
+**Can I use it in Cursor, Windsurf or VSCodium?** These editors install extensions from
+Open VSX, where AtoAxis is listed too. Time tracking does not depend on the editor's AI
+features. AI written by Cursor's own agent or by GitHub Copilot is not attributed yet;
+see [Limitations](#limitations).
+
+**Does it send my code?** No. Heartbeats carry metadata only; see [Privacy](#privacy).
+
+**I already use WakaTime. Do I have to switch everything?** No. Other editors can keep
+their WakaTime plugin and change only its `api_url`, and your WakaTime history can be
+imported. See [Migrate from WakaTime](https://www.atoaxis.com/docs/migrate-from-wakatime).
+
 ## Links
 
 - [Join Early Access](https://www.atoaxis.com/join)
+- [Pricing](https://www.atoaxis.com/pricing)
 - [Getting started](https://www.atoaxis.com/docs/getting-started)
 - [How coding time is calculated](https://www.atoaxis.com/docs/how-coding-time-is-calculated)
 - [Migrate from WakaTime](https://www.atoaxis.com/docs/migrate-from-wakatime)
+- [AI attribution and coverage](https://www.atoaxis.com/docs/ai-attribution-and-coverage)
 - [Privacy](https://www.atoaxis.com/privacy) · [Terms](https://www.atoaxis.com/terms)
 - [Contact](https://www.atoaxis.com/contact)

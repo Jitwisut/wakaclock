@@ -38,6 +38,23 @@ tokens. Nobody else should publish on the owner's behalf.
       human lines, the AI-consent dialog), host them under `https://www.atoaxis.com/`,
       and reference them by full URL. Do not use the 3D marketing renders as
       "screenshots".
+      They can only be captured once `api.atoaxis.com` is live and a real account
+      has a few days of data; the dashboard shows empty states without a backend.
+      Shot list (PNG, 1600×1000 or wider, light and dark theme where it matters,
+      no personal project names or file paths you would not publish):
+      1. Status bar: `AtoAxis: Verified` with today's total, plus a crop of the
+         `Offline queued` state.
+      2. The first-run AI consent dialog listing detected tools (Claude Code,
+         Codex CLI, Gemini CLI).
+      3. Dashboard daily view: projects and languages for one real day.
+      4. Human vs AI vs Unattributed lines for one project, with coverage shown.
+      5. Optional: the `AtoAxis: Set API Key` input box, for the Quick start.
+      Suggested location: `frontend/app/public/images/vscode/<name>.png`, served at
+      `https://www.atoaxis.com/images/vscode/<name>.png`. Insert them into
+      `README.md` right after the "Why AtoAxis" list (shot 1 and 4 first: the
+      Marketplace page shows the top of the README above the fold).
+      An animated GIF of a short coding session (status bar ticking, then the
+      dashboard) also works, but keep it under ~5 MB.
 - [ ] **README timing copy.** The README says gaps over 120 seconds are never
       counted, while `package.json` describes a fixed 15-second Active lease. That
       text sits behind the heartbeat-safety approval gate. Confirm which wording is

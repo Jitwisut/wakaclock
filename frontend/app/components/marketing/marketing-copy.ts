@@ -2039,7 +2039,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           : 'Extension นี้กำลังจะเปิดใน Marketplace แบบ Preview สมาชิก Early Access จะได้ใช้ก่อน ระหว่างนี้ editor ที่มี WakaTime plugin ส่งข้อมูลเข้า AtoAxis ได้เลยโดยแก้ ~/.wakatime.cfg'
       ),
       code(
-        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
+        'Extensions: install "AtoAxis — Coding Time Tracker & AI Attribution"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
         'VS Code'
       ),
       p(
@@ -2118,7 +2118,7 @@ const DOC_BLOCKS = new Map<string, (en: boolean) => MarketingBlock[]>([
           : 'Extension นี้กำลังจะเปิดใน Marketplace แบบ Preview สมาชิก Early Access จะได้ใช้ก่อน ระหว่างนี้ editor ที่มี WakaTime plugin ส่งข้อมูลเข้า AtoAxis ได้เลยโดยแก้ ~/.wakatime.cfg'
       ),
       code(
-        'Extensions: install "AtoAxis — Developer Time Tracking"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
+        'Extensions: install "AtoAxis — Coding Time Tracker & AI Attribution"\nCommand Palette: AtoAxis: Set API Key\nCommand Palette: AtoAxis: Configure CLI Path   # only if the binary is not on PATH',
         'VS Code'
       ),
       p(
@@ -3440,7 +3440,7 @@ generic(
       {
         question: 'How do I connect VS Code?',
         answer:
-          'Install "AtoAxis — Developer Time Tracking", then run AtoAxis: Set API Key from the Command Palette.',
+          'Install "AtoAxis — Coding Time Tracker & AI Attribution", then run AtoAxis: Set API Key from the Command Palette.',
       },
       {
         question: 'How do I connect an editor that already has a WakaTime plugin?',
@@ -3485,7 +3485,7 @@ generic(
       {
         question: 'เชื่อม VS Code อย่างไร?',
         answer:
-          'ติดตั้ง "AtoAxis — Developer Time Tracking" แล้วรัน AtoAxis: Set API Key จาก Command Palette',
+          'ติดตั้ง "AtoAxis — Coding Time Tracker & AI Attribution" แล้วรัน AtoAxis: Set API Key จาก Command Palette',
       },
       {
         question: 'เชื่อม editor ที่มี WakaTime plugin อยู่แล้วอย่างไร?',
