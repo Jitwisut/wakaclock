@@ -48,3 +48,5 @@ pub mod team_replay;
 pub mod user;
 pub mod vcs;
 pub mod wakatime_import;
+
+pub mod matched_authorship;

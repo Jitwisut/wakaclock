@@ -322,6 +322,8 @@ mod tests {
             lines_added: Some(2),
             lines_deleted: Some(1),
             content_fingerprint: None,
+            authorship_fingerprint: None,
+            authorship_proof_version: None,
             active_seconds: Some(1.0),
             transport: transport.map(str::to_string),
             tool: Some("apply_patch".to_string()),

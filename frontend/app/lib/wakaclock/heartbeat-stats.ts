@@ -65,6 +65,11 @@ export function heartbeatAgentLabel(hb: Pick<HeartbeatItem, 'actor_type' | 'ai_a
   });
 }
 
+export function heartbeatMatchedAuthor(hb: Pick<HeartbeatItem, 'matched_authorship'>) {
+  const evidence = hb.matched_authorship;
+  return evidence?.status === 'matched' && evidence.agent === 'claude-code' ? 'Claude Code' : null;
+}
+
 function sortedCounts(counts: Map<string, number>): CountEntry[] {
   return [...counts]
     .map(([label, count]) => ({ count, label }))

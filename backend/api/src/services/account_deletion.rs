@@ -34,6 +34,7 @@ const ACCOUNT_DELETION_IDEMPOTENCY_KEY: &str = "request";
 /// deployment task instead of a silent privacy regression.
 const CLICKHOUSE_USER_TABLES: &[&str] = &[
     "heartbeats",
+    "heartbeat_matched_authorship",
     "heartbeats_incoming",
     "activity_intervals",
     "heartbeat_deletions",

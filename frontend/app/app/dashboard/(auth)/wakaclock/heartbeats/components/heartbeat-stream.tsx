@@ -23,6 +23,7 @@ import {
   heartbeatAgentLabel,
   type HeartbeatFilter,
   heartbeatHour,
+  heartbeatMatchedAuthor,
   isAiHeartbeat,
   isFilterActive,
   matchesHeartbeatFilter,
@@ -162,6 +163,11 @@ function StreamRow({
             <span className="inline-flex h-6 items-center gap-1 rounded-full bg-violet-500/12 px-2 text-[11px] font-medium text-violet-700 dark:text-violet-300">
               <SparklesIcon aria-hidden="true" className="size-3" />
               <span className="max-w-32 truncate">{heartbeatAgentLabel(hb)}</span>
+            </span>
+          )}
+          {heartbeatMatchedAuthor(hb) && (
+            <span className="text-muted-foreground text-xs">
+              Author: {heartbeatMatchedAuthor(hb)}
             </span>
           )}
           <ChevronRightIcon

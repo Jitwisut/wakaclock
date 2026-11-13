@@ -17,6 +17,7 @@ import { formatActorType, formatAiProviderModel } from '@/lib/wakaclock/ai-displ
 import {
   displayEditor,
   heartbeatAgentLabel,
+  heartbeatMatchedAuthor,
   splitEntityPath,
 } from '@/lib/wakaclock/heartbeat-stats';
 import {
@@ -170,6 +171,7 @@ export function HeartbeatInspector({
                   ['Actor', formatActorType(actor)],
                   ['Actor confidence', show(hb.actor_confidence)],
                   ['Agent', heartbeatAgentLabel(hb)],
+                  ['Matched author', show(heartbeatMatchedAuthor(hb))],
                   ['Provider / model', formatAiProviderModel(hb.ai_provider, hb.ai_model, actor)],
                   ['AI confidence', show(hb.ai_confidence)],
                   ['AI source', show(hb.ai_source)],

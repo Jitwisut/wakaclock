@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 spec = importlib.util.spec_from_file_location("activity_producer", Path(__file__).with_name("activity-producer.py"))
 common = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(common)
-FILE_FIELDS = {"schema_version", "producer_version", "event_type", "event_id", "occurred_at", "entity", "project_root", "change_kind", "previous_entity", "agent", "provider", "model", "session_id", "source", "confidence", "lines_added", "lines_deleted", "active_seconds", "transport", "tool", "tool_event_id", "editor", "producer_surface", "content_fingerprint"}
+FILE_FIELDS = {"schema_version", "producer_version", "event_type", "event_id", "occurred_at", "entity", "project_root", "change_kind", "previous_entity", "agent", "provider", "model", "session_id", "source", "confidence", "lines_added", "lines_deleted", "active_seconds", "transport", "tool", "tool_event_id", "editor", "producer_surface", "content_fingerprint", "authorship_fingerprint", "authorship_proof_version"}
 SESSION_FIELDS = {"session_id", "agent", "provider", "model", "cwd", "source", "occurred_at"}
 TOOL_FIELDS = {"tool_event_id", "agent", "provider", "model", "session_id", "tool", "transport", "workspace_root", "cwd"}
 KINDS = ("file_mutation", "session_start", "session_end", "tool_before", "tool_after", "tool_abort")

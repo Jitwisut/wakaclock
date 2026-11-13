@@ -12,7 +12,7 @@ CWD="$(jq -r '.cwd // .tool_input.dir_path // .tool_input.cwd // empty' <<<"$INP
 [ -n "$CWD" ] && [ -d "$CWD" ] || CWD="$PWD"
 TOOL_EVENT_ID="$EXPLICIT_TOOL_EVENT_ID"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
-COMMON_ID="${WAKACLOCK_AGENT_COMMON_TOOL_ID:-${SCRIPT_DIR}/../../../common/tool-event-id.sh}"
+COMMON_ID="${WAKACLOCK_AGENT_COMMON_TOOL_ID:-${SCRIPT_DIR}/../common/tool-event-id.sh}"
 if [ -r "$COMMON_ID" ]; then
   # shellcheck source=/dev/null
   . "$COMMON_ID"
@@ -33,7 +33,7 @@ fi
 CLI="${WAKACLOCK_CLI_PATH:-}"
 if [ -z "$CLI" ] && [ -f "${HOME}/.wakaclock/cli-path" ]; then CLI="$(tr -d '\r\n' < "${HOME}/.wakaclock/cli-path")"; fi
 CLI="${CLI:-wakaclock}"
-COMMON_DIR="${WAKACLOCK_AGENT_COMMON_DIR:-${SCRIPT_DIR}/../../../common}"
+COMMON_DIR="${WAKACLOCK_AGENT_COMMON_DIR:-${SCRIPT_DIR}/../common}"
 PRODUCER="${COMMON_DIR}/tool-boundary-producer.py"
 if ! command -v python3 >/dev/null 2>&1 || [ ! -r "$PRODUCER" ]; then
   printf '%s\n' 'AtoAxis: producer_capture_failure; durable boundary helper required' >&2

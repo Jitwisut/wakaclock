@@ -269,6 +269,8 @@ pub fn build_file_change_event(input: ProducerFileChange) -> Result<BrokerEventV
         lines_added: input.lines_added,
         lines_deleted: input.lines_deleted,
         content_fingerprint: None,
+        authorship_fingerprint: None,
+        authorship_proof_version: None,
         active_seconds: input.active_seconds,
         transport,
         tool,

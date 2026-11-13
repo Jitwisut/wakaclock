@@ -1,3 +1,4 @@
+import type { AuthorshipRequest } from "./matchedAuthorship";
 import { spawn } from "node:child_process";
 import { AiSourcesUnsupportedError, parseAiSources } from "./aiSources";
 import type { AiSourceSummary } from "./aiSources";
@@ -114,6 +115,13 @@ export class WakaclockCliService {
         const binary=this.managedCli ? await this.managedCli.ensureReady() : this.getConfig().cliPath;
         if(!binary) throw new Error("producer_binary_unavailable");
         return {scope_id:scope.scope_id,cli_path:binary};
+    }
+
+    public async sendMatchedAuthorship(scopeId: string, request: AuthorshipRequest): Promise<{status:string;digest:string}> {
+        const result = await this.runCli(["matched-authorship"], JSON.stringify({scope_id:scopeId,request}));
+        const receipt = JSON.parse(result.stdout);
+        if (receipt.digest !== request.digest || !["matched","conflict","revoked","base_pending"].includes(receipt.status)) throw new Error("authorship_receipt_invalid");
+        return receipt;
     }
 
     public async journalScope(): Promise<{ scope_id: string; owner_confirmed: boolean; capabilities: string[]; recoverable_scope_ids?: string[] }> {

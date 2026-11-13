@@ -2,7 +2,7 @@
   "name": "atoaxis-vscode",
   "displayName": "AtoAxis \u2014 Coding Time Tracker & AI Attribution",
   "description": "Track coding time per project, language and branch, and see lines written by AI agents (Claude Code, Codex CLI, Gemini CLI) apart from yours. Speaks the WakaTime API. Invite-only Early Access: requires an AtoAxis API key.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "atoaxis",
   "icon": "images/icon.png",
   "galleryBanner": {

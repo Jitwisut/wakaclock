@@ -149,6 +149,7 @@ enum Commands {
     /// Inspect existing handoff receipts without modifying the queue.
     JournalReceipts,
     JournalEvidence,
+    MatchedAuthorship,
     Heartbeat {
         #[arg(short, long)]
         entity: String,
@@ -1493,6 +1494,37 @@ async fn run_command(
                 "scope_id":journal_scope_id(&scope),"owner_confirmed":config.api_key.is_some(),"recoverable_scope_ids":recoverable_scope_ids,
                 "build":build_identity()})
             );
+        }
+        Commands::MatchedAuthorship => {
+            let mut bytes = Vec::new();
+            io::stdin().take(8193).read_to_end(&mut bytes)?;
+            if bytes.len() > 8192 || config.api_key.is_none() {
+                return Err("authorship_request_invalid".into());
+            }
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request {
+                scope_id: String,
+                request: serde_json::Value,
+            }
+            let input: Request = serde_json::from_slice(&bytes)?;
+            let id = input.request["heartbeat_id"]
+                .as_str()
+                .filter(|id| wakaclock_core::ai::is_safe_event_id(id))
+                .ok_or("authorship_request_invalid")?;
+            let receipts = Queue::inspect_verified_editor_receipts_at(
+                &Queue::db_path(),
+                &api_client.queue_scope(),
+                &input.scope_id,
+                &[id.to_string()],
+            )?;
+            if !receipts
+                .iter()
+                .any(|receipt| receipt["status"] == "accepted")
+            {
+                return Err("authorship_handoff_unconfirmed".into());
+            }
+            println!("{}", api_client.matched_authorship(&input.request).await?);
         }
         Commands::JournalEvidence => {
             let mut bytes = Vec::new();
@@ -7512,6 +7544,8 @@ fn broker_event_from_generic(input: &GenericAiEventInput) -> Result<BrokerEventV
         lines_added: event.lines_added,
         lines_deleted: event.lines_deleted,
         content_fingerprint: None,
+        authorship_fingerprint: None,
+        authorship_proof_version: None,
         active_seconds: input.active_seconds,
         transport: input.transport.clone(),
         tool: input.tool.clone(),
@@ -7610,6 +7644,8 @@ fn broker_event_from_heartbeat(heartbeat: &Heartbeat) -> Result<BrokerEventV1, B
         lines_added: heartbeat.ai_lines_added,
         lines_deleted: heartbeat.ai_lines_deleted,
         content_fingerprint: None,
+        authorship_fingerprint: None,
+        authorship_proof_version: None,
         active_seconds: heartbeat.active_seconds,
         transport: Some("cli_compat".to_string()),
         tool: None,

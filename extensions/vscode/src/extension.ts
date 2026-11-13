@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as vscode from "vscode";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -110,6 +111,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const workspaceId = createHash("sha256").update(context.storageUri?.fsPath ?? "no-workspace").digest("hex");
   bufferManager.setAttributionOwnerScopes(sidecarScopes);
   bufferManager.enableJournal(path.join(context.globalStorageUri.fsPath, "editor-journals", journalScope, workspaceId), journalScope, verifiedJournalScopes.filter(scope => scope !== journalScope).map(scope => path.join(context.globalStorageUri.fsPath, "editor-journals", scope, workspaceId)));
+  const reconcileAuthorship = () => { void bufferManager.reconcileMatchedAuthorship(); };
+  const authorshipTimer = setInterval(reconcileAuthorship, 15_000);
+  context.subscriptions.push({dispose:() => clearInterval(authorshipTimer)});
+  try {
+    const watcher = fs.watch(path.join(os.homedir(), ".wakaclock"), (_event, filename) => {
+      if (filename?.toString() === "ai-events.jsonl") reconcileAuthorship();
+    });
+    context.subscriptions.push({dispose:() => watcher.close()});
+  } catch { /* The periodic retry also handles sidecar directory creation. */ }
+  reconcileAuthorship();
   const journalCollectorId = randomUUID();
   let journalPublication: Promise<void> | undefined;
   let journalFault: string | undefined;

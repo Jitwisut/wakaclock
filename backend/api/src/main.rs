@@ -62,6 +62,7 @@ async fn metrics_endpoint() -> (StatusCode, [(header::HeaderName, HeaderValue); 
 async fn migrate_clickhouse(state: &AppState) -> Result<()> {
     info!("Running ClickHouse migrations...");
     state.heartbeat_repo.migrate().await?;
+    state.matched_authorship_repo.migrate().await?;
     state.project_merge_repo.migrate().await?;
     state.project_rule_repo.migrate().await?;
     state.analytics_repo.migrate().await?;

@@ -252,6 +252,8 @@ pub const ALLOWED_EVENT_FIELDS: &[&str] = &[
     "lines_added",
     "lines_deleted",
     "content_fingerprint",
+    "authorship_fingerprint",
+    "authorship_proof_version",
     "active_seconds",
     "transport",
     "tool",
@@ -412,6 +414,11 @@ pub struct BrokerEventV1 {
     /// only have a diff; if both sides provide one, correlation requires equality.
     #[serde(default)]
     pub content_fingerprint: Option<String>,
+    /// Post-tool content identity for Heartbeats display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorship_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorship_proof_version: Option<u8>,
     #[serde(default)]
     pub active_seconds: Option<f64>,
     #[serde(default)]
@@ -554,6 +561,20 @@ impl BrokerEventV1 {
         self.identity_message_id =
             normalize_identity_reference(self.identity_message_id.as_deref());
         self.tool_event_id = normalize_identity_reference(self.tool_event_id.as_deref());
+        self.authorship_fingerprint = if self.agent == "claude-code"
+            && self.source == AiEventSource::AgentHook
+            && self.confidence == AiConfidence::Verified
+            && self.tool_event_id.is_some()
+        {
+            self.authorship_fingerprint
+                .as_deref()
+                .and_then(|value| normalize_content_fingerprint(value).ok())
+        } else {
+            None
+        };
+        self.authorship_proof_version = self
+            .authorship_proof_version
+            .filter(|version| *version == 1 && self.authorship_fingerprint.is_some());
         self.producer_surface = self
             .producer_surface
             .as_deref()
@@ -2355,6 +2376,8 @@ mod tests {
             lines_added: Some(2),
             lines_deleted: Some(1),
             content_fingerprint: None,
+            authorship_fingerprint: None,
+            authorship_proof_version: None,
             active_seconds: Some(1.0),
             transport: Some("shell_hook".to_string()),
             tool: Some("apply_patch".to_string()),
@@ -2803,7 +2826,10 @@ mod tests {
     fn allow_list_matches_the_struct_fields() {
         // If a field is added to BrokerEventV1, ALLOWED_EVENT_FIELDS must gain it
         // too or the quarantine diagnostic will wrongly flag it as unknown.
-        let value = serde_json::to_value(sample_event("x")).unwrap();
+        let mut event = sample_event("x");
+        event.authorship_fingerprint = Some(format!("sha256:{}", "a".repeat(64)));
+        event.authorship_proof_version = Some(1);
+        let value = serde_json::to_value(event).unwrap();
         let keys: std::collections::BTreeSet<&str> = value
             .as_object()
             .unwrap()

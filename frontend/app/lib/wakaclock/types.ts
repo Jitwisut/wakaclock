@@ -1129,6 +1129,11 @@ export interface HeartbeatItem {
   line_number: null | number;
   lines: null | number;
   machine: string;
+  matched_authorship?: {
+    agent?: string;
+    digest?: string;
+    status: 'conflict' | 'matched' | 'revoked';
+  } | null;
   operating_system: string;
   project: null | string;
   session_id?: null | string;
