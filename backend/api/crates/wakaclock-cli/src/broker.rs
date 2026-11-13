@@ -404,8 +404,9 @@ async fn process_record(
         let state = AiAttributionState::open()?;
         if alias_delivered_counterpart(&state, event)? {
             if event.authorship_fingerprint.is_some() {
-                append_broker_sidecar(event, record.scope_id.as_deref(), true)
-                    .map_err(|_| AppError::Io(std::io::Error::other("broker_sidecar_unavailable")))?;
+                append_broker_sidecar(event, record.scope_id.as_deref(), true).map_err(|_| {
+                    AppError::Io(std::io::Error::other("broker_sidecar_unavailable"))
+                })?;
             }
             state.mark_delivered(&record.event_id, "broker_alias")?;
             return Ok(ProcessRecordOutcome::Processed);

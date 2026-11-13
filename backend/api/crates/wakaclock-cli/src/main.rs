@@ -1518,7 +1518,10 @@ async fn run_command(
                 &input.scope_id,
                 &[id.to_string()],
             )?;
-            if !receipts.iter().any(|receipt| receipt["status"] == "accepted") {
+            if !receipts
+                .iter()
+                .any(|receipt| receipt["status"] == "accepted")
+            {
                 return Err("authorship_handoff_unconfirmed".into());
             }
             println!("{}", api_client.matched_authorship(&input.request).await?);

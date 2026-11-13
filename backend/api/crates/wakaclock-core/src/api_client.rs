@@ -573,13 +573,32 @@ impl ApiClient {
     }
 
     /// Independent display reconciliation; never enters or mutates the heartbeat queue.
-    pub async fn matched_authorship(&self, body: &serde_json::Value) -> AppResult<serde_json::Value> {
-        if crate::runtime::paused("delivery") { return Err(AppError::RuntimePaused); }
-        let response = self.client.post(format!("{}/api/v1/heartbeats/matched-authorship", self.config.server_url.trim_end_matches('/')))
-            .timeout(Duration::from_secs(5)).json(body).send().await?;
-        if !response.status().is_success() { return Err(AppError::Protocol("authorship_unavailable".into())); }
+    pub async fn matched_authorship(
+        &self,
+        body: &serde_json::Value,
+    ) -> AppResult<serde_json::Value> {
+        if crate::runtime::paused("delivery") {
+            return Err(AppError::RuntimePaused);
+        }
+        let response = self
+            .client
+            .post(format!(
+                "{}/api/v1/heartbeats/matched-authorship",
+                self.config.server_url.trim_end_matches('/')
+            ))
+            .timeout(Duration::from_secs(5))
+            .json(body)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(AppError::Protocol("authorship_unavailable".into()));
+        }
         let receipt: serde_json::Value = response.json().await?;
-        if receipt["digest"] != body["digest"] || !receipt["status"].as_str().is_some_and(|s| ["matched", "conflict", "revoked", "base_pending"].contains(&s)) {
+        if receipt["digest"] != body["digest"]
+            || !receipt["status"]
+                .as_str()
+                .is_some_and(|s| ["matched", "conflict", "revoked", "base_pending"].contains(&s))
+        {
             return Err(AppError::Protocol("authorship_receipt_invalid".into()));
         }
         Ok(receipt)

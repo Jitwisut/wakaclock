@@ -566,12 +566,14 @@ impl BrokerEventV1 {
             && self.confidence == AiConfidence::Verified
             && self.tool_event_id.is_some()
         {
-            self.authorship_fingerprint.as_deref()
+            self.authorship_fingerprint
+                .as_deref()
                 .and_then(|value| normalize_content_fingerprint(value).ok())
         } else {
             None
         };
-        self.authorship_proof_version = self.authorship_proof_version
+        self.authorship_proof_version = self
+            .authorship_proof_version
             .filter(|version| *version == 1 && self.authorship_fingerprint.is_some());
         self.producer_surface = self
             .producer_surface

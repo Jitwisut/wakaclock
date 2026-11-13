@@ -94,8 +94,10 @@ pub struct AppState {
     pub follow_up_repo: Arc<FollowUpRepository>,
     pub account_analytics_repo: Arc<AccountAnalyticsRepository>,
     pub ai_usage_repo: Arc<AiUsageRepository>,
-    pub matched_authorship_repo: Arc<crate::repository::matched_authorship::MatchedAuthorshipRepository>,
-    pub matched_authorship_service: Arc<crate::services::matched_authorship::MatchedAuthorshipService>,
+    pub matched_authorship_repo:
+        Arc<crate::repository::matched_authorship::MatchedAuthorshipRepository>,
+    pub matched_authorship_service:
+        Arc<crate::services::matched_authorship::MatchedAuthorshipService>,
     pub heartbeat_repo: Arc<HeartbeatRepository>,
     pub project_identity_repo: Arc<ProjectIdentityRepository>,
     pub project_merge_repo: Arc<ProjectMergeRepository>,
@@ -434,8 +436,15 @@ pub async fn create_app_state() -> Result<AppState> {
         heartbeat_repo.clone(),
         project_identity_service.clone(),
     ));
-    let matched_authorship_repo = Arc::new(crate::repository::matched_authorship::MatchedAuthorshipRepository::new(clickhouse.clone()));
-    let matched_authorship_service = Arc::new(crate::services::matched_authorship::MatchedAuthorshipService::new(matched_authorship_repo.clone(), heartbeat_service.clone()));
+    let matched_authorship_repo = Arc::new(
+        crate::repository::matched_authorship::MatchedAuthorshipRepository::new(clickhouse.clone()),
+    );
+    let matched_authorship_service = Arc::new(
+        crate::services::matched_authorship::MatchedAuthorshipService::new(
+            matched_authorship_repo.clone(),
+            heartbeat_service.clone(),
+        ),
+    );
     let heartbeat_ingest_service = Arc::new(HeartbeatIngestService::new(
         config.clone(),
         heartbeat_service.clone(),

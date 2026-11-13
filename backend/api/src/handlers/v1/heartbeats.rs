@@ -574,7 +574,11 @@ pub async fn list(
                 }
             }
             HeartbeatItem {
-                matched_authorship: r.heartbeat_id.as_ref().and_then(|id| matched_authorship.get(id)).cloned(),
+                matched_authorship: r
+                    .heartbeat_id
+                    .as_ref()
+                    .and_then(|id| matched_authorship.get(id))
+                    .cloned(),
                 // History is still owner-scoped, but the response must not become a path
                 // exfiltration endpoint. Keep project-relative names where possible and reduce
                 // legacy absolute/traversal rows to a safe basename.
