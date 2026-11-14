@@ -16,7 +16,9 @@ import { Islands } from '../voyage/islands';
 import { ChipLog, Helm, Lanterns } from '../voyage/log-props';
 import { PlaceEffects } from '../voyage/place-fx';
 import { Ship } from '../voyage/ship';
+import { voyage } from '../voyage/state';
 import { Wake } from '../voyage/wake';
+import { Fleet, Weather } from '../voyage/weather';
 
 import { MidnightDirector } from './midnight-director';
 import { TimeRig } from './time-rig';
@@ -55,6 +57,7 @@ function useStagedScene() {
       if (shown.current === 1) {
         clock.elapsedTime += WARM_START_SECONDS;
         setTimeUi({ sceneStatus: 'ready' });
+        voyage.shown = true;
       }
       if (shown.current < 2) shown.current += 1;
       return;
@@ -125,22 +128,29 @@ function Scene({ quality, slices }: { quality: TimeSceneQuality; slices: Activit
       <VoyageLights shadows={quality.shadows} />
       <SkyDome />
       <Ocean segments={quality.oceanSegments} />
-      {stage >= 1 ? (
-        <>
-          <Wake />
-          <ChipLog slices={slices} />
-          <Ship>
-            <Helm slices={slices} />
-            <Lanterns />
-          </Ship>
-        </>
-      ) : null}
+      <Fleet>
+        {stage >= 1 ? (
+          <>
+            <Wake />
+            <ChipLog slices={slices} />
+            <Ship>
+              <Helm slices={slices} />
+              <Lanterns />
+            </Ship>
+          </>
+        ) : null}
+        {stage >= 3 ? (
+          <>
+            <Spray count={quality.spray} />
+            <AiWind count={quality.wind} />
+          </>
+        ) : null}
+      </Fleet>
       {stage >= 2 ? <Islands detail={quality.islandDetail} slices={slices} /> : null}
       {stage >= 3 ? (
         <>
           <PlaceEffects particles={quality.fxParticles} />
-          <Spray count={quality.spray} />
-          <AiWind count={quality.wind} />
+          <Weather drops={quality.fxParticles * 5} />
         </>
       ) : null}
       <HotspotProjector />

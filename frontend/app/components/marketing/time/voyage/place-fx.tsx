@@ -170,7 +170,7 @@ export function FxPoints({
     const live = material.current?.uniforms as typeof uniforms | undefined;
     if (!cloud || !live?.uTime) return;
     const { age, on } = placeFx(id);
-    cloud.visible = on > 0.004;
+    cloud.visible = on > 0.004 || !voyage.shown;
     if (!cloud.visible) return;
     live.uTime.value = voyage.time;
     live.uPixel.value = 110 * pixelRatio;
@@ -178,13 +178,7 @@ export function FxPoints({
     live.uLevel.value = on * (0.55 + 0.9 * fxBurst(age, 3.5));
   });
   return (
-    <points
-      frustumCulled={false}
-      geometry={geometry}
-      position={position}
-      ref={points}
-      visible={false}
-    >
+    <points frustumCulled={false} geometry={geometry} position={position} ref={points}>
       <shaderMaterial
         blending={AdditiveBlending}
         depthWrite={false}
@@ -234,7 +228,7 @@ export function FxRings({
     const rings = group.current;
     if (!rings) return;
     const { age, on } = placeFx(id);
-    rings.visible = on > 0.004;
+    rings.visible = on > 0.004 || !voyage.shown;
     if (!rings.visible) return;
     const level = on * (0.5 + 0.8 * fxBurst(age, 3));
     for (const [index, child] of rings.children.entries()) {
@@ -245,12 +239,7 @@ export function FxRings({
     }
   });
   return (
-    <group
-      position={position}
-      ref={group}
-      rotation={upright ? [0, 0, 0] : [-Math.PI / 2, 0, 0]}
-      visible={false}
-    >
+    <group position={position} ref={group} rotation={upright ? [0, 0, 0] : [-Math.PI / 2, 0, 0]}>
       {Array.from({ length: count }, (_, index) => (
         <mesh key={index}>
           <ringGeometry args={[0.93, 1, 72]} />
@@ -290,7 +279,7 @@ export function FxBeam({
     const beam = mesh.current;
     if (!beam || !material.current) return;
     const { age, on } = placeFx(id);
-    beam.visible = on > 0.004;
+    beam.visible = on > 0.004 || !voyage.shown;
     if (!beam.visible) return;
     // The column shoots up as the place opens and breathes while it is read.
     const grown = Math.min(1, age / 0.9);
@@ -300,7 +289,7 @@ export function FxBeam({
   });
   return (
     <group position={position}>
-      <mesh position={[0, 0, 0]} ref={mesh} visible={false}>
+      <mesh position={[0, 0, 0]} ref={mesh}>
         <cylinderGeometry args={[radius * 0.55, radius, height, 20, 1, true]} />
         <meshBasicMaterial
           blending={AdditiveBlending}
@@ -339,6 +328,9 @@ function OnIsland({ children, id }: { children: ReactNode; id: string }) {
 
 export function PlaceEffects({ particles }: { particles: number }) {
   const n = (share: number) => Math.max(12, Math.round(particles * share));
+  // The ship's effect rides with her, wherever the tour has taken her.
+  const berth = useRef<Group>(null);
+  useFrame(() => berth.current?.position.set(voyage.shipX, 0, voyage.shipZ));
   return (
     <group>
       {/* Lighthouse — heartbeats: pulses travel out across the sea. */}
@@ -445,7 +437,7 @@ export function PlaceEffects({ particles }: { particles: number }) {
       </OnIsland>
 
       {/* The ship — begin: she gathers way. */}
-      <group>
+      <group ref={berth}>
         <FxRings color={GOLD} count={3} id="ship" period={3} position={[0, 0.6, 0]} reach={40} />
         <FxRings color={TEAL} count={3} id="ship" period={3} position={[-4, 0.6, 0]} reach={26} />
         <FxPoints

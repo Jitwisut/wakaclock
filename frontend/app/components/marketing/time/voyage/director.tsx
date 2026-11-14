@@ -33,6 +33,7 @@ import {
   sunElevation,
 } from './time-of-day';
 import { GERSTNER_GLSL } from './waves';
+import { keepOffIslands, tourKeys } from './world-places';
 
 /** Emphasis per kind for each chapter-04 focus: the focused light rises, the rest dim. */
 export function focusTargets(focus: TimeFocus) {
@@ -52,12 +53,81 @@ export function windVisibility(g: number) {
 const HIGH_SUN = new Color('#ffd7a3');
 const LOW_SUN = new Color('#ff9150');
 const SKY_DAY = new Color('#b9b0d2');
-const SKY_NIGHT = new Color('#1b2340');
+const SKY_NIGHT = new Color('#4a5684');
 const SEA_BOUNCE = new Color('#2a6f78');
 const FOG_DAY = new Color('#e5b495');
 const FOG_NIGHT = new Color('#121726');
 /** Thin haze: the far islands stay crisp against the sky. */
 const FOG_DENSITY = 0.000_85;
+
+const TOUR_KEYS = tourKeys();
+const MOOR_X = TOUR_KEYS.map((key) => key.moor[0]);
+const MOOR_Z = TOUR_KEYS.map((key) => key.moor[1]);
+
+/** Catmull-Rom through evenly spaced values: the ship's course between moorings. */
+export function courseAt(values: readonly number[], at: number) {
+  const last = values.length - 1;
+  const clamped = Math.min(last, Math.max(0, at));
+  const index = Math.min(last - 1, Math.floor(clamped));
+  const t = clamped - index;
+  const p0 = values[Math.max(0, index - 1)] as number;
+  const p1 = values[index] as number;
+  const p2 = values[index + 1] as number;
+  const p3 = values[Math.min(last, index + 2)] as number;
+  return (
+    0.5 *
+    (2 * p1 +
+      (p2 - p0) * t +
+      (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t +
+      (3 * p1 - p0 - 3 * p2 + p3) * t * t * t)
+  );
+}
+
+/** How much of each weather the tour position sits under. */
+export function weatherAt(at: number) {
+  const last = TOUR_KEYS.length - 1;
+  const clamped = Math.min(last, Math.max(0, at));
+  const index = Math.min(last - 1, Math.floor(clamped));
+  const t = clamped - index;
+  const blend = t * t * (3 - 2 * t);
+  const sky = { aurora: 0, meteors: 0, mist: 0, rain: 0 };
+  const from = (TOUR_KEYS[index] as (typeof TOUR_KEYS)[number]).weather;
+  const to = (TOUR_KEYS[index + 1] as (typeof TOUR_KEYS)[number]).weather;
+  if (from !== 'clear') sky[from] += 1 - blend;
+  if (to !== 'clear') sky[to] += blend;
+  return sky;
+}
+
+/**
+ * World mode: the ship sails the tour with the visitor. Her berth follows the tour position
+ * along a course through every stop's mooring, kept out of the islands' shallows; she turns
+ * onto her course as she moves and holds her heading when she lies to.
+ */
+function sailTour(delta: number) {
+  const [x, z] = keepOffIslands(
+    courseAt(MOOR_X, timeMotion.tour),
+    courseAt(MOOR_Z, timeMotion.tour)
+  );
+  const dx = x - voyage.shipX;
+  const dz = z - voyage.shipZ;
+  const speed = delta > 0 ? Math.hypot(dx, dz) / delta : 0;
+  voyage.shipX = x;
+  voyage.shipZ = z;
+  voyage.way += (Math.min(9, speed) - voyage.way) * dampFactor(delta, 2);
+  if (speed > 0.4) {
+    // The bow points down local +X: a heading h turns it to (cos h, 0, -sin h).
+    const wanted = Math.atan2(-dz, dx);
+    let turn = wanted - voyage.shipHeading;
+    turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+    voyage.shipHeading += turn * dampFactor(delta, 1.6);
+  }
+  const sky = weatherAt(timeMotion.tour);
+  const ease = dampFactor(delta, 1.4);
+  voyage.mist += (sky.mist - voyage.mist) * ease;
+  voyage.rain += (sky.rain - voyage.rain) * ease;
+  voyage.aurora += (sky.aurora - voyage.aurora) * ease;
+  voyage.meteors += (sky.meteors - voyage.meteors) * ease;
+}
 
 /**
  * Runs after the camera rig, before anything draws: turns the clock hand into the sun, the
@@ -84,11 +154,12 @@ export function VoyageDirector({
     const delta = Math.min(rawDelta, 0.1);
     voyage.time += delta;
     // Sailing the story at full speed; drifting slowly among the islands in world mode.
-    // …and gathering way while the ship herself is being read.
-    let speedTarget = 4.2;
-    if (timeMotion.world) speedTarget = timeMotion.place === 'ship' ? 5.4 : 0.9;
+    // In world mode the ship really crosses the sea (below), so the water only drifts.
+    const speedTarget = timeMotion.world ? 0.6 : 4.2;
     voyage.speed += (speedTarget - voyage.speed) * dampFactor(delta, 0.8);
     voyage.sea += voyage.speed * delta;
+    if (timeMotion.world) sailTour(delta);
+    else voyage.way = voyage.speed;
     voyage.hand = timeMotion.hand;
     const elevation = sunElevation(dayProgress(timeMotion.hand));
     voyage.sunElev = elevation;
@@ -131,7 +202,7 @@ export function VoyageDirector({
 
     gl.toneMappingExposure = exposureFor(elevation) * (1 + timeMotion.flash * 0.35);
     fog.color.copy(FOG_NIGHT).lerp(FOG_DAY, voyage.daylight);
-    fog.density = FOG_DENSITY + voyage.fog * 0.012;
+    fog.density = FOG_DENSITY + voyage.fog * 0.012 + voyage.mist * 0.0075;
   }, -0.5);
   return null;
 }
@@ -146,7 +217,10 @@ export function VoyageLights({ shadows }: { shadows: boolean }) {
   useFrame(() => {
     const light = sun.current;
     if (light) {
-      light.position.copy(voyage.sunDir).multiplyScalar(60);
+      // The shadow frustum travels with the ship, the one thing close enough to need it.
+      light.target.position.set(voyage.shipX, 0, voyage.shipZ);
+      light.target.updateMatrixWorld();
+      light.position.copy(voyage.sunDir).multiplyScalar(60).add(light.target.position);
       light.color.copy(voyage.sunColor);
       const above = Math.min(1, Math.max(0, (voyage.sunElev + 0.03) / 0.08));
       light.intensity = 3.1 * above;
@@ -155,7 +229,8 @@ export function VoyageLights({ shadows }: { shadows: boolean }) {
     if (fill) {
       fill.color.copy(SKY_NIGHT).lerp(SKY_DAY, voyage.daylight);
       fill.groundColor.copy(SEA_BOUNCE).multiplyScalar(0.35 + 0.65 * voyage.daylight);
-      fill.intensity = 0.8 + 1.1 * voyage.daylight;
+      // Enough fill after sunset that the islands keep their colour, not just an outline.
+      fill.intensity = 1.7 + 0.2 * voyage.daylight;
     }
   });
   return (
@@ -192,11 +267,12 @@ void main() {
   float side = seed.z > 0.5 ? 1.0 : -1.0;
   vec3 start = vec3(${(BOW_X - 1.6).toFixed(2)} + seed.w * 2.4, 0.0, side * (0.4 + seed.w * 0.9));
   vec3 normal;
-  start.y = gerstner(start.xz, uTime, 30.0, normal).y + 0.2;
+  vec3 berth = (modelMatrix * vec4(start, 1.0)).xyz;
+  start.y = gerstner(berth.xz, uTime, 30.0, normal).y + 0.2;
   vec3 velocity = vec3(-1.2 - seed.y * 2.6, 2.2 + seed.x * 2.4, side * (1.4 + seed.y * 2.2));
   vec3 p = start + velocity * age * 1.1 + vec3(0.0, -4.9 * age * age * 1.2, 0.0);
   vAlpha = smoothstep(0.0, 0.12, age) * pow(1.0 - age, 1.6);
-  vec4 view = viewMatrix * vec4(p, 1.0);
+  vec4 view = modelViewMatrix * vec4(p, 1.0);
   gl_Position = projectionMatrix * view;
   gl_PointSize = (2.0 + seed.x * 4.0) * (1.0 - age * 0.5) * (60.0 / max(1.0, -view.z));
 }
@@ -236,7 +312,7 @@ export function Spray({ count }: { count: number }) {
     live.uSea.value = voyage.sea;
     live.uColor.value
       .set('#f3ece4')
-      .multiplyScalar((0.25 + 0.75 * voyage.daylight) * Math.min(1, voyage.speed / 3));
+      .multiplyScalar((0.25 + 0.75 * voyage.daylight) * Math.min(1, voyage.way / 3));
   });
   return (
     <points frustumCulled={false} geometry={geometry}>
@@ -265,7 +341,7 @@ void main() {
   float y = 4.0 + seed.z * 15.0 + sin(run * 6.28 + seed.w * 6.0) * 0.6;
   float z = (seed.w - 0.5) * 16.0 * (1.0 - run * 0.55);
   vFade = sin(run * 3.14159) * (1.0 - tail);
-  gl_Position = projectionMatrix * viewMatrix * vec4(x, y, z, 1.0);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(x, y, z, 1.0);
 }
 `;
 

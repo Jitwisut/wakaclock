@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { NAV_LINKS } from '../../nav-links.data';
 import { timeMotion } from '../time-store';
@@ -11,9 +11,10 @@ import { PLACE_ATTRIBUTE, PLACES, TOUR, tourIndex, tourStop } from './world-plac
  * World mode: the homepage as an archipelago (owner decision 2026-11-14). It only ever
  * enhances the server-rendered page — every section stays in the HTML, in order. With
  * WebGL available, this component tags each section with the place it belongs to, hides
- * the long scroll and turns it into a tour: scrolling flies the camera from place to place
- * along a route, locks onto the nearest one when the scroll rests and opens that place's
- * sections in a reading panel (clicking a place flies straight there). Without WebGL (or with reduced motion) it never
+ * the long scroll and turns it into a tour: scrolling sails from place to place along a
+ * route and, when the scroll rests, locks onto the nearest one and shows its title card —
+ * the place's own heading and a button that opens its sections in a reading panel. A compass
+ * shows the way and jumps to any place. Without WebGL (or with reduced motion) it never
  * mounts and the page reads top to bottom as before.
  *
  * Hotspot labels are the page's own headings and nav links, read at runtime.
@@ -21,34 +22,37 @@ import { PLACE_ATTRIBUTE, PLACES, TOUR, tourIndex, tourStop } from './world-plac
 
 /** UI chrome for the panel; rendered on the client only, never part of the page copy. */
 const CHROME = {
-  en: { close: 'Back to the map', places: 'Places' },
-  th: { close: 'กลับสู่แผนที่', places: 'สถานที่' },
+  en: {
+    close: 'Close the log',
+    compass: 'Voyage compass',
+    home: 'Back to the map',
+    hint: 'Scroll to sail on',
+    open: 'Open the log',
+    places: 'Places',
+    start: 'Scroll to set sail',
+  },
+  th: {
+    close: 'ปิดบันทึก',
+    compass: 'เข็มทิศการเดินทาง',
+    home: 'กลับสู่แผนที่',
+    hint: 'เลื่อนเพื่อเดินทางต่อ',
+    open: 'เปิดอ่าน',
+    places: 'สถานที่',
+    start: 'เลื่อนเพื่อออกเรือ',
+  },
 } as const;
 
 const HOME = '#tx-c0';
 /** Shown while the camera is between places: no section belongs to it. */
 const TRAVEL = 'travel';
 /** Wheel distance (px) from one stop to the next. */
-const STOP_PIXELS = 620;
+const STOP_PIXELS = 1500;
 /** How far the scroll must leave a stop before it commits to the next one. */
-const COMMIT = 0.14;
+const COMMIT = 0.18;
 /** Quiet time after the last scroll input before the tour locks onto a stop. */
-const SETTLE_MS = 170;
-/** Time the camera gets to arrive before the place opens, per stop crossed. */
-const ARRIVE_MS = 620;
-
-/** Whether `element` (or a scrollable ancestor inside the panel) can still scroll that way. */
-function canScroll(element: Element | null, direction: number) {
-  for (let node = element; node && node !== document.body; node = node.parentElement) {
-    const style = getComputedStyle(node);
-    if (!/auto|scroll/.test(style.overflowY) || node.scrollHeight <= node.clientHeight + 1) {
-      continue;
-    }
-    if (direction > 0 && node.scrollTop + node.clientHeight < node.scrollHeight - 1) return true;
-    if (direction < 0 && node.scrollTop > 0) return true;
-  }
-  return false;
-}
+const SETTLE_MS = 240;
+/** Time the camera gets to arrive before a linked-to place opens by itself. */
+const ARRIVE_MS = 1100;
 
 interface Hotspot {
   href?: string;
@@ -75,13 +79,16 @@ function localHref(locale: 'en' | 'th', href: string) {
 }
 
 export function WorldMode({ rootId }: { rootId: string }) {
+  /** The place whose panel is open ('' = none). */
   const [open, setOpen] = useState('');
+  /** The stop the tour is locked onto (0 = the map) and whether the scroll has left it. */
+  const [stop, setStop] = useState(0);
+  const [moving, setMoving] = useState(false);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
   const [locale, setLocale] = useState<'en' | 'th'>('en');
   const frame = useRef<HTMLElement | null>(null);
-  const closeButton = useRef<HTMLButtonElement>(null);
+  const openButton = useRef<HTMLButtonElement>(null);
   const lastOpen = useRef('');
-  /** The stop the tour last locked onto, and the timers that lock and open. */
   const base = useRef(0);
   /** An in-page link's destination, scrolled to when its place opens. */
   const pendingTarget = useRef<HTMLElement | null>(null);
@@ -116,9 +123,11 @@ export function WorldMode({ rootId }: { rootId: string }) {
     return () => {
       delete site.dataset.world;
       delete site.dataset.worldOpen;
+      delete site.dataset.worldAt;
       timeMotion.world = false;
       timeMotion.place = '';
       timeMotion.tour = 0;
+      timeMotion.tourTarget = 0;
       window.clearTimeout(settleTimer.current);
       window.clearTimeout(openTimer.current);
       for (const element of site.querySelectorAll<HTMLElement>(`[${PLACE_ATTRIBUTE}]`)) {
@@ -128,27 +137,27 @@ export function WorldMode({ rootId }: { rootId: string }) {
     };
   }, [rootId]);
 
-  // Open a place: show its sections in the panel and send the camera there.
+  const atHome = stop === 0 && !moving;
+  /** The place the tour rests at with its title card up (no panel open yet). */
+  const arrived = !moving && !open ? tourStop(stop) : '';
+
+  // Show what the tour is on: the hero on the map, a place's sections when its panel is
+  // open, nothing while sailing or while a title card is up.
   useEffect(() => {
     const site = frame.current;
     if (!site) return;
-    const target = open || 'home';
-    const reading = open && open !== TRAVEL ? open : '';
+    const shown = open || (atHome ? 'home' : TRAVEL);
     for (const element of site.querySelectorAll<HTMLElement>(`[${PLACE_ATTRIBUTE}]`)) {
-      if (element.getAttribute(PLACE_ATTRIBUTE) === target) {
-        element.dataset.worldOpen = '';
-      } else delete element.dataset.worldOpen;
+      if (element.getAttribute(PLACE_ATTRIBUTE) === shown) element.dataset.worldOpen = '';
+      else delete element.dataset.worldOpen;
     }
-    site.dataset.worldOpen = open;
-    timeMotion.place = reading;
-    if (open === TRAVEL) return;
+    site.dataset.worldOpen = open || (atHome ? '' : TRAVEL);
+    site.dataset.worldAt = arrived;
+    timeMotion.place = open;
     if (!open) {
-      // Back on the map: return keyboard focus to the place that was just read.
-      const previous = lastOpen.current;
+      // The panel closed: return keyboard focus to the button that opened it.
+      if (lastOpen.current) openButton.current?.focus({ preventScroll: true });
       lastOpen.current = '';
-      site
-        .querySelector<HTMLElement>(`[data-hotspot="${previous}"] button`)
-        ?.focus({ preventScroll: true });
       return;
     }
     lastOpen.current = open;
@@ -166,38 +175,29 @@ export function WorldMode({ rootId }: { rootId: string }) {
       if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
       heading.focus({ preventScroll: true });
     }
-  }, [open]);
+  }, [arrived, atHome, open]);
 
   /**
-   * Locks the tour onto a stop: the camera flies there and, once it has had time to arrive,
-   * the place opens (the map opens at once — the hero is already in view).
+   * Locks the tour onto a stop: the ship and the camera glide there and the place's title
+   * card comes up. `thenOpen` also opens its panel once the camera has had time to arrive
+   * (an in-page link asked for that content).
    */
-  const lockTo = useCallback((index: number) => {
-    const stop = Math.min(TOUR.length, Math.max(0, index));
-    const crossed = Math.abs(stop - base.current);
-    const moved = Math.abs(timeMotion.tour - stop) > 0.001;
-    base.current = stop;
-    timeMotion.tour = stop;
+  const lockTo = useCallback((index: number, thenOpen = false) => {
+    const next = Math.min(TOUR.length, Math.max(0, index));
+    base.current = next;
+    timeMotion.tourTarget = next;
     window.clearTimeout(settleTimer.current);
     window.clearTimeout(openTimer.current);
-    const id = tourStop(stop);
-    if (!id) {
-      setOpen('');
-      return;
-    }
-    if (!moved && crossed === 0) {
-      setOpen(id);
-      return;
-    }
-    setOpen((current) => (current === id ? current : TRAVEL));
-    openTimer.current = window.setTimeout(
-      () => setOpen(id),
-      Math.min(1500, ARRIVE_MS + crossed * 180)
-    );
+    setStop(next);
+    setMoving(false);
+    const id = tourStop(next);
+    setOpen((current) => (current === id ? current : ''));
+    if (thenOpen && id) openTimer.current = window.setTimeout(() => setOpen(id), ARRIVE_MS);
   }, []);
 
   const goTo = useCallback(
-    (id: string) => lockTo(id === 'home' ? 0 : Math.max(0, tourIndex(id))),
+    (id: string, thenOpen = false) =>
+      lockTo(id === 'home' ? 0 : Math.max(0, tourIndex(id)), thenOpen),
     [lockTo]
   );
 
@@ -206,49 +206,46 @@ export function WorldMode({ rootId }: { rootId: string }) {
   useEffect(() => {
     const site = frame.current;
     if (!site) return;
-    let edgeQuietSince = 0;
     let touchY: null | number = null;
     let touching = false;
 
     const settle = () => {
       const from = base.current;
-      const moved = timeMotion.tour - from;
-      let stop = from;
-      if (moved > COMMIT) stop = Math.ceil(timeMotion.tour);
-      else if (moved < -COMMIT) stop = Math.floor(timeMotion.tour);
-      lockTo(stop);
+      const moved = timeMotion.tourTarget - from;
+      let next = from;
+      if (moved > COMMIT) next = Math.ceil(timeMotion.tourTarget);
+      else if (moved < -COMMIT) next = Math.floor(timeMotion.tourTarget);
+      // Past the middle of a crossing the nearer shore wins.
+      if (Math.abs(moved) > 1) next = Math.round(timeMotion.tourTarget);
+      lockTo(next);
     };
     const advance = (amount: number) => {
-      const next = Math.min(TOUR.length, Math.max(0, timeMotion.tour + amount));
-      if (next === timeMotion.tour) return;
-      timeMotion.tour = next;
+      const next = Math.min(TOUR.length, Math.max(0, timeMotion.tourTarget + amount));
+      if (next === timeMotion.tourTarget) return;
+      timeMotion.tourTarget = next;
       window.clearTimeout(openTimer.current);
       // Leaving a place closes it; the map's hero goes the same way.
-      if (Math.abs(next - base.current) > COMMIT) setOpen(TRAVEL);
+      if (Math.abs(next - base.current) > COMMIT) {
+        setMoving(true);
+        setOpen('');
+      }
       window.clearTimeout(settleTimer.current);
       if (!touching) settleTimer.current = window.setTimeout(settle, SETTLE_MS);
     };
-    /** Input inside a panel that can still scroll belongs to the panel, not the tour. */
-    const heldByPanel = (target: EventTarget | null, direction: number) => {
+    /**
+     * Input over an open reading panel belongs to the panel, whether or not it has more to
+     * scroll: reading must never sail the visitor away. The voyage continues from the scene
+     * beside the panel, the compass, the keys or the close button.
+     */
+    const heldByPanel = (target: EventTarget | null) => {
       const element = target instanceof Element ? target : null;
-      if (!element?.closest(`[${PLACE_ATTRIBUTE}], .tx-chapters, .tx-day`)) return false;
-      const now = performance.now();
-      if (canScroll(element, direction)) {
-        edgeQuietSince = now;
-        return true;
-      }
-      // At the panel's end: the same gesture (and its inertia) must not carry the reader
-      // off the island. Only a fresh gesture, after a short rest, moves on.
-      if (now - edgeQuietSince < 320) {
-        edgeQuietSince = now;
-        return true;
-      }
-      return false;
+      const reading = site.dataset.worldOpen && site.dataset.worldOpen !== TRAVEL;
+      return Boolean(reading && element?.closest('.tx-chapters, .tx-day'));
     };
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
       const pixels = event.deltaMode === 1 ? event.deltaY * 32 : event.deltaY;
-      if (heldByPanel(event.target, Math.sign(pixels))) return;
+      if (heldByPanel(event.target)) return;
       advance(pixels / STOP_PIXELS);
     };
     const onTouchStart = (event: TouchEvent) => {
@@ -260,14 +257,14 @@ export function WorldMode({ rootId }: { rootId: string }) {
       if (y === undefined || touchY === null) return;
       const moved = touchY - y;
       touchY = y;
-      if (heldByPanel(event.target, Math.sign(moved))) return;
-      advance(moved / (window.innerHeight * 0.55));
+      if (heldByPanel(event.target)) return;
+      advance(moved / (window.innerHeight * 1.1));
     };
     const onTouchEnd = () => {
       touching = false;
       touchY = null;
       window.clearTimeout(settleTimer.current);
-      settleTimer.current = window.setTimeout(settle, 60);
+      settleTimer.current = window.setTimeout(settle, 80);
     };
     const onKey = (event: KeyboardEvent) => {
       const target = event.target instanceof Element ? event.target : null;
@@ -278,7 +275,8 @@ export function WorldMode({ rootId }: { rootId: string }) {
       if (event.key === 'Home') lockTo(0);
       else if (event.key === 'End') lockTo(TOUR.length);
       else if (forward || back) {
-        if (heldByPanel(document.activeElement, forward ? 1 : -1)) return;
+        // With the panel open the arrow keys read it; they do not leave the island.
+        if (heldByPanel(document.activeElement)) return;
         lockTo(base.current + (forward ? 1 : -1));
       } else return;
       event.preventDefault();
@@ -299,7 +297,8 @@ export function WorldMode({ rootId }: { rootId: string }) {
     };
   }, [lockTo]);
 
-  // In-page links (#features, #faq, the rail…) open the place that holds their target.
+  // In-page links (#features, #faq, the rail…) sail to the place that holds their target
+  // and open it there.
   useEffect(() => {
     const site = frame.current;
     if (!site) return;
@@ -312,9 +311,8 @@ export function WorldMode({ rootId }: { rootId: string }) {
           : null;
       const holder = target?.closest(`[${PLACE_ATTRIBUTE}]`);
       if (!target || !holder) return false;
-      goTo(holder.getAttribute(PLACE_ATTRIBUTE) ?? 'home');
-      // The panel opens once the camera arrives; the open effect scrolls to the target then.
       pendingTarget.current = target;
+      goTo(holder.getAttribute(PLACE_ATTRIBUTE) ?? 'home', true);
       return true;
     };
     const onClick = (event: MouseEvent) => {
@@ -325,7 +323,10 @@ export function WorldMode({ rootId }: { rootId: string }) {
       }
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && site.dataset.worldOpen) lockTo(0);
+      if (event.key !== 'Escape') return;
+      // Escape steps back one level: the panel, then the island.
+      if (site.dataset.worldOpen && site.dataset.worldOpen !== TRAVEL) setOpen('');
+      else if (base.current > 0) lockTo(0);
     };
     if (window.location.hash) reveal(window.location.hash);
     document.addEventListener('click', onClick, true);
@@ -337,18 +338,22 @@ export function WorldMode({ rootId }: { rootId: string }) {
   }, [goTo, lockTo]);
 
   const chrome = CHROME[locale];
-  const list = useMemo(() => hotspots, [hotspots]);
-  const reading = open && open !== TRAVEL ? open : '';
+  const stops = useMemo(
+    () => TOUR.map((id) => hotspots.find((spot) => spot.id === id)).filter(Boolean),
+    [hotspots]
+  );
+  const card = hotspots.find((spot) => spot.id === arrived);
+  const total = String(TOUR.length).padStart(2, '0');
   return (
     <>
-      <nav
-        aria-label={chrome.places}
-        className="tx-world-hotspots"
-        data-open={reading || undefined}
-      >
+      <nav aria-label={chrome.places} className="tx-world-hotspots" data-open={open || undefined}>
         <ul>
-          {list.map((spot) => (
-            <li data-hotspot={spot.id} key={spot.id}>
+          {hotspots.map((spot) => (
+            <li
+              data-current={spot.id === arrived || undefined}
+              data-hotspot={spot.id}
+              key={spot.id}
+            >
               {spot.href ? (
                 <a className="tx-world-spot" data-far href={spot.href}>
                   <span aria-hidden="true" className="tx-world-dot" />
@@ -356,7 +361,7 @@ export function WorldMode({ rootId }: { rootId: string }) {
                 </a>
               ) : (
                 <button
-                  aria-pressed={reading === spot.id}
+                  aria-pressed={open === spot.id}
                   className="tx-world-spot"
                   onClick={() => goTo(spot.id)}
                   type="button"
@@ -369,12 +374,74 @@ export function WorldMode({ rootId }: { rootId: string }) {
           ))}
         </ul>
       </nav>
-      {reading ? (
+
+      {/* Decoration the scene drives every frame: the spyglass iris and the tether that ties
+          a title card or a panel to its landmark. */}
+      <div aria-hidden="true" className="tx-world-spyglass" />
+      <div aria-hidden="true" className="tx-world-tether" />
+
+      {/* The title card: the place's own heading and the way in. */}
+      {card ? (
+        <div className="tx-world-card" data-tether key={card.id}>
+          <p className="tx-world-card-index">
+            <span>{String(stop).padStart(2, '0')}</span> / {total}
+          </p>
+          <p className="tx-world-card-title">{card.label}</p>
+          <button
+            className="tx-world-card-open"
+            onClick={() => setOpen(card.id)}
+            ref={openButton}
+            type="button"
+          >
+            {chrome.open}
+            <span aria-hidden="true">→</span>
+          </button>
+          <p aria-hidden="true" className="tx-world-card-hint">
+            {chrome.hint}
+          </p>
+        </div>
+      ) : null}
+
+      {/* The compass: where the voyage is, which way the next place lies, and a way to
+          jump to any of them. */}
+      <nav aria-label={chrome.compass} className="tx-world-compass" data-home={atHome || undefined}>
+        <div aria-hidden="true" className="tx-world-compass-ring" />
+        <div aria-hidden="true" className="tx-world-compass-needle" />
+        <ol>
+          {stops.map((spot, index) => (
+            <li key={spot.id} style={{ '--i': index + 1, '--n': TOUR.length + 1 } as CSSProperties}>
+              <button
+                aria-current={stop === index + 1 && !moving ? 'step' : undefined}
+                aria-label={spot.label}
+                onClick={() => goTo(spot.id)}
+                title={spot.label}
+                type="button"
+              />
+            </li>
+          ))}
+        </ol>
+        <button
+          aria-label={chrome.home}
+          className="tx-world-compass-home"
+          onClick={() => lockTo(0)}
+          title={chrome.home}
+          type="button"
+        >
+          {atHome ? 'N' : String(stop).padStart(2, '0')}
+        </button>
+        {atHome ? (
+          <p aria-hidden="true" className="tx-world-compass-hint">
+            {chrome.start}
+          </p>
+        ) : null}
+      </nav>
+
+      {open ? (
         <button
           aria-label={chrome.close}
           className="tx-world-close"
-          onClick={() => lockTo(0)}
-          ref={closeButton}
+          data-tether
+          onClick={() => setOpen('')}
           type="button"
         >
           <span aria-hidden="true">←</span>

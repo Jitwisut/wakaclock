@@ -20,6 +20,9 @@ export type Building =
 
 export type Vec3 = [number, number, number];
 
+/** The sky a place keeps: clear, sea mist, a drizzle, the aurora or shooting stars. */
+export type Weather = 'aurora' | 'clear' | 'meteors' | 'mist' | 'rain';
+
 /**
  * Islands are built at their plan size and drawn this much larger, so the landmarks read
  * clearly from the map. `radius` and `height` below are the plan size; use `placeRadius` and
@@ -61,6 +64,8 @@ export interface Place {
    * place so that no neighbouring island stands between the camera and its landmark.
    */
   swing?: number;
+  /** The weather over this place (clear when absent). */
+  weather?: Weather;
 }
 
 /** The view of the whole archipelago with the ship in front: the hero's composition. */
@@ -110,6 +115,7 @@ export const PLACES: readonly Place[] = [
     sections: ['#tx-c1'],
     labelFrom: '#tx-beat-title',
     swing: 0.9,
+    weather: 'mist',
     dusk: 0.52,
   },
   {
@@ -131,7 +137,8 @@ export const PLACES: readonly Place[] = [
     sections: ['#tx-c3'],
     labelFrom: '#tx-ai-title',
     swing: 1.3,
-    dusk: 0.5,
+    weather: 'aurora',
+    dusk: 0.6,
   },
   {
     id: 'market',
@@ -155,7 +162,8 @@ export const PLACES: readonly Place[] = [
     // Round to the slipway side, clear of the crane's mast.
     stand: 1.2,
     swing: -0.35,
-    dusk: 0.2,
+    weather: 'rain',
+    dusk: 0.42,
   },
   {
     id: 'library',
@@ -165,7 +173,8 @@ export const PLACES: readonly Place[] = [
     height: 22,
     sections: ['.axis-briefing', '.axis-evidence', '#answer-guide'],
     labelFrom: '#what-is-atoaxis h2',
-    dusk: 0.28,
+    weather: 'meteors',
+    dusk: 0.6,
   },
   {
     id: 'signal',
@@ -199,7 +208,8 @@ export const PLACES: readonly Place[] = [
     sections: ['#faq'],
     labelFrom: '#faq h2',
     swing: 1.1,
-    dusk: 0.6,
+    weather: 'meteors',
+    dusk: 0.58,
   },
   {
     id: 'far-ai',
@@ -286,14 +296,66 @@ export function tourStop(index: number) {
 }
 
 /** Camera pose and time of day at each tour stop, the map first. */
-export function tourKeys(): { center: Vec3; dusk: number; look: Vec3; pos: Vec3 }[] {
+export function tourKeys(): {
+  center: Vec3;
+  dusk: number;
+  look: Vec3;
+  /** Where the ship lies while this stop is visited (x, z). */
+  moor: [number, number];
+  pos: Vec3;
+  weather: Weather;
+}[] {
   return [
-    { ...HOME_POSE, center: HOME_POSE.look, dusk: HOME_DUSK },
+    { ...HOME_POSE, center: HOME_POSE.look, dusk: HOME_DUSK, moor: [0, 0], weather: 'clear' },
     ...TOUR.map((id) => {
       const place = placeById(id) as Place;
-      return { ...visitPose(place), dusk: place.dusk };
+      return {
+        ...visitPose(place),
+        dusk: place.dusk,
+        moor: mooring(place),
+        weather: place.weather ?? 'clear',
+      };
     }),
   ];
+}
+
+/**
+ * Where the ship lies off a place: beside the island as the visiting camera sees it, on the
+ * side the frame leaves open, a little beyond the landmark. The ship's own stop, and the
+ * map, are her starting berth at the origin.
+ */
+export function mooring(place: Place): [number, number] {
+  if (place.building === 'ship') return [0, 0];
+  const { center, pos } = visitPose(place);
+  const length = Math.hypot(center[0] - pos[0], center[2] - pos[2]) || 1;
+  const viewX = (center[0] - pos[0]) / length;
+  const viewZ = (center[2] - pos[2]) / length;
+  const out = placeRadius(place) + 24;
+  // Right of the view is (-viewZ, viewX); a few metres further from the camera.
+  return keepOffIslands(
+    place.at[0] - viewZ * out + viewX * 6,
+    place.at[1] + viewX * out + viewZ * 6
+  );
+}
+
+/** Pushes a point on the water out of every island's shallows (the ship never runs aground). */
+export function keepOffIslands(x: number, z: number): [number, number] {
+  let px = x;
+  let pz = z;
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const place of PLACES) {
+      if (place.building === 'ship') continue;
+      const clear = placeRadius(place) * 1.2 + 12;
+      const dx = px - place.at[0];
+      const dz = pz - place.at[1];
+      const distance = Math.hypot(dx, dz);
+      if (distance >= clear) continue;
+      const scale = clear / (distance || 1);
+      px = place.at[0] + (distance ? dx : 1) * scale;
+      pz = place.at[1] + dz * scale;
+    }
+  }
+  return [px, pz];
 }
 
 /** The landmark's top: where the hotspot floats and the camera aims. */

@@ -39,6 +39,16 @@ const TOUR_LIFT = TOUR_KEYS.slice(1).map((key, index) => {
   return Math.min(24, length * 0.1);
 });
 
+/**
+ * The scroll sets a target; the tour position glides after it, so a wheel's separate notches
+ * and a finger's small jitters become one continuous movement.
+ */
+function glideTour(delta: number) {
+  const gap = timeMotion.tourTarget - timeMotion.tour;
+  timeMotion.tour =
+    Math.abs(gap) < 1e-4 ? timeMotion.tourTarget : timeMotion.tour + gap * dampFactor(delta, 3);
+}
+
 /** Smooth step between stops, so the camera eases out of one place and into the next. */
 function easeStop(t: number) {
   return t * t * (3 - 2 * t);
@@ -169,6 +179,7 @@ export function TimeRig({ parallax }: { parallax: boolean }) {
       // point the scroll asks for, climbing between stops, so a slow scroll glides along the
       // route and a jump (a clicked place) becomes one direct flight.
       const last = TOUR_KEYS.length - 1;
+      glideTour(delta);
       const at = Math.min(last, Math.max(0, timeMotion.tour));
       const stop = Math.min(last - 1, Math.floor(at));
       const within = easeStop(at - stop);
@@ -195,8 +206,8 @@ export function TimeRig({ parallax }: { parallax: boolean }) {
       // Far from the goal (a jump across the map): rise first, settle as it nears.
       const remaining = worldPos.distanceTo(wantedPos);
       wantedPos.y += Math.min(26, Math.max(0, remaining - 30) * 0.16);
-      worldPos.lerp(wantedPos, dampFactor(delta, 2.1));
-      worldLook.lerp(wantedLook, dampFactor(delta, 2.6));
+      worldPos.lerp(wantedPos, dampFactor(delta, 3.4));
+      worldLook.lerp(wantedLook, dampFactor(delta, 3.8));
       world.dusk += (dusk - world.dusk) * dampFactor(delta, 1.2);
       timeMotion.hand = 480 + world.dusk * 960;
       position.copy(worldPos);

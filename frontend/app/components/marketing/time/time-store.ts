@@ -49,8 +49,12 @@ export const timeMotion = {
    */
   world: false,
   place: '',
-  /** Position along the world's scroll tour: 0 = the map, 1… = the stops (fractions between). */
+  /**
+   * Position along the world's scroll tour: 0 = the map, 1… = the stops (fractions between).
+   * `tourTarget` is where the scroll has asked to be; `tour` glides after it (camera rig).
+   */
   tour: 0,
+  tourTarget: 0,
 };
 
 const MOTION_DEFAULTS = { ...timeMotion };
