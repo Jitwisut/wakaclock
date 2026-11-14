@@ -68,7 +68,20 @@
     "workspaceContains:**/*"
   ],
   "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "wakaclock.projectIntelligence",
+          "name": "AtoAxis Project Intelligence",
+          "when": "config.wakaclock.projectIntelligence.enabled && isWorkspaceTrusted"
+        }
+      ]
+    },
     "commands": [
+      {
+        "command": "wakaclock.openProjectIntelligence",
+        "title": "AtoAxis: Open Project Intelligence"
+      },
       {
         "command": "wakaclock.configureCliPath",
         "title": "AtoAxis: Configure CLI Path"
@@ -185,6 +198,12 @@
     "configuration": {
       "title": "AtoAxis",
       "properties": {
+        "wakaclock.projectIntelligence.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "description": "Enable the local Git revision viewer for trusted VS Code workspaces on macOS."
+        },
         "wakaclock.cliPath": {
           "type": "string",
           "default": "",

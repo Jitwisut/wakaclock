@@ -1,3 +1,4 @@
+import { registerProjectIntelligence } from "../project-intelligence/viewer";
 import * as fs from "node:fs";
 import * as vscode from "vscode";
 import * as os from "node:os";
@@ -34,6 +35,7 @@ import { maybeOfferAiSetup } from "./aiSetupPrompt";
 let activeBufferManager: HeartbeatBufferManager | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  registerProjectIntelligence(context);
   console.log("[wakaclock] extension activated");
   const configService = new WakaclockConfigService();
   const logger = new Logger(() => configService.getSnapshot().debugLogging);
