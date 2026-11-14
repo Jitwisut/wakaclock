@@ -1,0 +1,1875 @@
+/* ─── AtoAxis — The Code Universe ──────────────────────────────────────────────────────
+   The marketing site's art direction (owner decisions 2026-11-14): a dark spatial void,
+   graphite and structural metal, with cyan and amber used as light sources rather than
+   fills. Space Grotesk for display, Geist for interface text, Geist Mono for technical
+   readouts, IBM Plex Sans Thai for Thai.
+
+   This layer is loaded after marketing.css and time.css by both marketing layouts. It
+   restyles; it never adds copy. Decorative numbering is CSS-generated and aria-free, so
+   the server HTML (headings, text, ids, links, JSON-LD) is unchanged by design. */
+
+.wakaclock-marketing {
+  /* Palette — the only raw colours in this layer. */
+  --cx-void: #0b0f19;
+  --cx-deep: #0e1320;
+  --cx-graphite: #151b2a;
+  --cx-metal: #2a3245;
+  --cx-ink: #f4ede3;
+  --cx-muted: #9ba3b3;
+  --cx-soft: #cbc4ba;
+  --cx-sun: #f2b35e;
+  --cx-sea: #4fc9bd;
+  --cx-line: rgb(238 241 244 / 0.08);
+  --cx-line-strong: rgb(238 241 244 / 0.16);
+  --cx-sun-glow: rgb(242 179 94 / 0.14);
+  --cx-sea-glow: rgb(79 201 189 / 0.12);
+  --cx-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Type */
+  --cx-display: var(--font-mkt-cosmos), var(--font-mkt-thai), ui-sans-serif, sans-serif;
+  --cx-text: var(--font-mkt-pixel), var(--font-mkt-thai), ui-sans-serif, sans-serif;
+  --cx-mono: var(--font-mkt-body), ui-monospace, 'SFMono-Regular', monospace;
+
+  /* The existing token contract, re-pointed, so every inline style follows. */
+  --font-mkt-display: var(--font-mkt-cosmos);
+  --mkt-bg: var(--cx-void);
+  --mkt-bg-elevated: var(--cx-graphite);
+  --mkt-bg-sunken: var(--cx-deep);
+  --mkt-fg: var(--cx-ink);
+  --mkt-fg-muted: var(--cx-muted);
+  --mkt-border: var(--cx-line-strong);
+  --mkt-border-soft: var(--cx-line);
+  --mkt-accent: var(--cx-sun);
+  --mkt-accent-fg: #1d1206;
+  --mkt-accent-soft: rgb(242 179 94 / 0.09);
+  --mkt-highlight-soft: rgb(242 179 94 / 0.09);
+  --mkt-code-bg: var(--cx-deep);
+  --mkt-code-fg: #ffe3b8;
+  --mkt-danger: #f19a8a;
+
+  --axis-gutter: clamp(20px, 5vw, 88px);
+
+  background: var(--cx-void);
+  color: var(--cx-ink);
+  color-scheme: dark;
+  font-feature-settings: 'ss01', 'cv11';
+  -webkit-font-smoothing: antialiased;
+
+  & :is(h1, h2, h3) {
+    font-family: var(--cx-display);
+    font-weight: 500;
+    letter-spacing: -0.035em;
+    color: var(--cx-ink);
+  }
+  & :is(h1, h2, h3):lang(th) {
+    letter-spacing: 0;
+    line-height: 1.3;
+  }
+  & ::selection {
+    background: rgb(242 179 94 / 0.28);
+    color: var(--cx-ink);
+  }
+  & :is(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--cx-sun);
+    outline-offset: 3px;
+  }
+  & a {
+    text-decoration-color: rgb(242 179 94 / 0.45);
+  }
+  & code,
+  & pre,
+  & kbd {
+    font-family: var(--cx-mono);
+  }
+  & .axis-skip {
+    background: var(--cx-sun);
+    color: var(--mkt-accent-fg);
+  }
+
+  /* The light theme's pixel shadows and scanlines read as noise on the void. */
+  & :is(.mkt-pixel-shadow, .mkt-pixel-shadow-sm) {
+    box-shadow: none;
+  }
+  & .mkt-scanlines {
+    background-image: none;
+  }
+
+  /* Buttons — one primary (lit), one ghost (hairline). */
+  & [data-slot='button'] {
+    border-radius: 2px;
+    font-family: var(--cx-mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+  & [data-slot='button']:lang(th) {
+    font-family: var(--cx-text);
+    letter-spacing: 0;
+    text-transform: none;
+    font-size: 14px;
+  }
+
+  & input:not([type='checkbox']),
+  & select,
+  & textarea {
+    border-radius: 2px;
+    background: var(--cx-deep) !important;
+    border: 1px solid var(--cx-line-strong) !important;
+    color: var(--cx-ink);
+  }
+  & input:not([type='checkbox']):focus,
+  & select:focus {
+    border-color: var(--cx-sun) !important;
+  }
+  & input[type='checkbox'] {
+    accent-color: var(--cx-sun);
+  }
+}
+
+/* ─── Navigation: a minimal command line across the top of the frame ──────────────────── */
+.wakaclock-marketing {
+  & .axis-nav {
+    background: rgb(11 15 25 / 0.72);
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    border-bottom: 1px solid var(--cx-line);
+  }
+  & .axis-nav-bar {
+    max-width: none;
+    min-height: 60px;
+    gap: 32px;
+  }
+  & .axis-wordmark {
+    font-family: var(--cx-display);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    gap: 12px;
+  }
+  & .axis-brand-mark {
+    width: 26px;
+    height: 26px;
+    filter: grayscale(1) brightness(1.9) contrast(1.1);
+  }
+  & .axis-nav-inline {
+    gap: 4px;
+    margin-left: auto;
+  }
+  & .axis-nav-inline a {
+    position: relative;
+    padding: 10px 12px;
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--cx-muted);
+    transition: color 200ms;
+  }
+  & .axis-nav-inline a:lang(th) {
+    font-family: var(--cx-text);
+    font-size: 13px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  & .axis-nav-inline a:hover {
+    color: var(--cx-ink);
+  }
+  & .axis-nav-inline a[aria-current] {
+    color: var(--cx-ink);
+  }
+  /* The active route carries a small lit marker: the "you are here" of the frame. */
+  & .axis-nav-inline a[aria-current]::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 2px;
+    width: 4px;
+    height: 4px;
+    margin-left: -2px;
+    border-radius: 50%;
+    background: var(--cx-sun);
+    box-shadow: 0 0 10px var(--cx-sun);
+  }
+  & .axis-nav-controls {
+    margin-left: 8px;
+    gap: 10px;
+  }
+  & .axis-nav-controls > a:first-child {
+    min-height: 34px;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--cx-line-strong) !important;
+    background: transparent !important;
+    border-radius: 2px;
+    font-size: 11px;
+  }
+  & .axis-nav-login {
+    min-height: 34px !important;
+    padding: 0 16px;
+    border: 1px solid rgb(242 179 94 / 0.5);
+    border-radius: 2px;
+    color: var(--cx-ink);
+    font-family: var(--cx-mono);
+    font-size: 11px !important;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    transition:
+      background 200ms,
+      border-color 200ms;
+  }
+  & .axis-nav-login:lang(th) {
+    font-family: var(--cx-text);
+    letter-spacing: 0;
+    text-transform: none;
+    font-size: 13px !important;
+  }
+  & .axis-nav-login:hover {
+    background: var(--cx-sun-glow);
+    border-color: var(--cx-sun);
+  }
+  & .axis-menu-toggle span {
+    width: 20px;
+  }
+  /* The full-screen index: a star chart of the site, numbered like scenes. */
+  & .axis-nav-expanded {
+    background: var(--cx-void);
+    border-top: 1px solid var(--cx-line);
+    min-height: calc(100dvh - 60px);
+    align-content: center;
+  }
+  & .axis-nav-expanded li {
+    border-bottom: 1px solid var(--cx-line);
+  }
+  & .axis-nav-expanded li a {
+    font-family: var(--cx-display);
+    font-size: clamp(26px, 3.4vw, 44px);
+    font-weight: 400;
+    letter-spacing: -0.03em;
+    padding: 14px 0;
+    transition:
+      color 200ms,
+      padding 300ms var(--cx-ease);
+  }
+  & .axis-nav-expanded li a:lang(th) {
+    letter-spacing: 0;
+  }
+  & .axis-nav-expanded li a:hover,
+  & .axis-nav-expanded li a[aria-current] {
+    color: var(--cx-sun);
+    padding-left: 10px;
+  }
+  & .axis-nav-expanded li a > span:first-child {
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    color: var(--cx-sea);
+    min-width: 2.4em;
+  }
+  & .axis-menu-brand {
+    font-family: var(--cx-display);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    font-size: 22px;
+    color: var(--cx-muted);
+  }
+  & .axis-action {
+    border-radius: 2px;
+    background: var(--cx-sun);
+    color: var(--mkt-accent-fg);
+    font-weight: 600;
+  }
+}
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .wakaclock-marketing .axis-nav::after {
+      background: linear-gradient(90deg, var(--cx-sun), var(--cx-sea));
+      height: 1px;
+      opacity: 0.8;
+    }
+  }
+}
+
+/* ─── Content pages: title block, star-chart index rail, ruled chapters ───────────────── */
+.wakaclock-marketing {
+  & .mkt-page-shell {
+    position: relative;
+    max-width: 1520px;
+    padding: 28px var(--axis-gutter) 96px;
+  }
+  /* A distant structure on the horizon: concentric orbits and a lit core, drawn in CSS so
+     content pages stay light — the real-time world lives on the homepage. */
+  & .mkt-page-shell::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    pointer-events: none;
+    top: -60px;
+    right: -12vw;
+    width: min(82vw, 1100px);
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 50% 50%, rgb(242 179 94 / 0.22) 0 0.6%, transparent 1.4%),
+      radial-gradient(circle at 50% 50%, rgb(242 179 94 / 0.08), transparent 18%),
+      repeating-radial-gradient(
+        circle at 50% 50%,
+        transparent 0 13.6%,
+        rgb(238 241 244 / 0.06) 13.6% 13.75%,
+        transparent 13.75% 19%
+      ),
+      radial-gradient(circle at 70% 30%, rgb(79 201 189 / 0.08), transparent 42%);
+    mask-image: radial-gradient(circle at 50% 50%, #000 20%, transparent 62%);
+    transform: perspective(1200px) rotateX(64deg) rotateZ(-18deg);
+    opacity: 0.9;
+  }
+  & .mkt-page-shell > nav:first-child {
+    margin-bottom: 40px;
+  }
+  & .mkt-page-shell > nav:first-child ol {
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cx-muted);
+  }
+  & .mkt-page-shell > nav:first-child ol:lang(th) {
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: var(--cx-text);
+    font-size: 12px;
+  }
+  & .mkt-page-shell > nav:first-child a {
+    text-decoration: none;
+    color: var(--cx-soft);
+  }
+
+  /* Title block: asymmetric, a huge display line hung from the left edge. */
+  & .mkt-page-intro,
+  & .mkt-page-editorial .mkt-page-intro,
+  & .mkt-illustrated-intro .mkt-page-intro {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.62fr);
+    grid-template-areas:
+      'badge badge'
+      'title title'
+      'rule rule'
+      'lead byline';
+    column-gap: clamp(32px, 6vw, 120px);
+    max-width: none;
+    margin: 0;
+    padding: clamp(32px, 7vh, 96px) 0 clamp(48px, 9vh, 120px);
+    text-align: left;
+    background: none;
+  }
+  & .mkt-page-intro::after {
+    content: '';
+    grid-area: rule;
+    height: 1px;
+    margin: clamp(28px, 4vh, 48px) 0;
+    background: linear-gradient(90deg, var(--cx-sun) 0 64px, var(--cx-line-strong) 64px);
+  }
+  & .mkt-page-intro > p:first-child:not(.axis-page-lead) {
+    grid-area: badge;
+    justify-self: start;
+    margin-bottom: 28px;
+    padding: 6px 10px;
+    border: 1px solid var(--cx-line-strong) !important;
+    color: var(--cx-sea) !important;
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  & .mkt-page-intro > p:first-child:not(.axis-page-lead):lang(th) {
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: var(--cx-text);
+    font-size: 12px;
+  }
+  & .axis-page-title,
+  & .mkt-illustrated-intro .axis-page-title {
+    grid-area: title;
+    max-width: 17ch;
+    font-family: var(--cx-display) !important;
+    font-size: clamp(42px, 7.2vw, 112px);
+    font-weight: 400;
+    line-height: 0.98;
+    letter-spacing: -0.05em;
+  }
+  & .axis-page-title:lang(th) {
+    max-width: 22ch;
+    line-height: 1.18;
+    letter-spacing: 0;
+    font-size: clamp(34px, 5.4vw, 80px);
+  }
+  & .axis-page-lead,
+  & .mkt-page-editorial .axis-page-lead {
+    grid-area: lead;
+    margin: 0;
+    max-width: 58ch;
+    font-size: clamp(17px, 1.45vw, 21px);
+    line-height: 1.6;
+    color: var(--cx-soft) !important;
+  }
+  & .mkt-byline,
+  & .mkt-page-editorial .mkt-byline {
+    grid-area: byline;
+    align-self: end;
+    margin: 0;
+    max-width: 38ch;
+    padding-left: 20px;
+    border-left: 1px solid var(--cx-line-strong);
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    line-height: 1.9;
+    color: var(--cx-muted);
+  }
+  & .mkt-byline:lang(th) {
+    font-family: var(--cx-text);
+    font-size: 12px;
+  }
+  & .mkt-byline strong {
+    color: var(--cx-soft);
+    font-weight: 500;
+  }
+  & .mkt-hero-atmosphere {
+    display: none;
+  }
+
+  /* Pages with an illustration: the specimen sits beside the title block. */
+  & .mkt-illustrated-intro {
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+    gap: clamp(32px, 5vw, 80px);
+    align-items: end;
+  }
+  & .mkt-illustrated-intro .mkt-page-intro {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'badge' 'title' 'rule' 'lead' 'byline';
+  }
+  & .mkt-illustrated-intro .mkt-byline {
+    margin-top: 28px;
+  }
+
+  /* Illustrations become specimens: a dark frame, a hairline, a mono caption. */
+  & .mkt-page-art img {
+    border-radius: 2px;
+    outline: 1px solid var(--cx-line-strong);
+    outline-offset: 10px;
+    filter: saturate(0.85) brightness(0.92);
+  }
+  & .mkt-page-art figcaption {
+    margin-top: 22px;
+    color: var(--cx-muted);
+    font-size: 12px;
+  }
+  & .mkt-page-art figcaption > span {
+    color: var(--cx-sea);
+    font-family: var(--cx-mono);
+    letter-spacing: 0.1em;
+  }
+  & .mkt-page-art figcaption > span:lang(th) {
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: var(--cx-text);
+  }
+
+  /* Reading layout: a sticky star-chart rail beside ruled chapters. */
+  & .mkt-reading-layout {
+    display: grid;
+    grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
+    gap: clamp(32px, 5vw, 96px);
+    align-items: start;
+  }
+  & .mkt-page-index {
+    position: sticky;
+    top: 92px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    max-height: calc(100svh - 120px);
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  & .mkt-page-index nav {
+    display: block;
+  }
+  & .mkt-index-label {
+    margin-bottom: 16px;
+    font-family: var(--cx-mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--cx-sea);
+  }
+  & .mkt-index-label:lang(th) {
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: var(--cx-text);
+    font-size: 12px;
+  }
+  & .mkt-page-index ol {
+    display: block;
+    border-left: 1px solid var(--cx-line-strong);
+  }
+  & .mkt-page-index a {
+    position: relative;
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    min-height: 0;
+    padding: 8px 0 8px 18px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--cx-muted);
+    transition: color 200ms;
+  }
+  & .mkt-page-index a::before {
+    content: '';
+    position: absolute;
+    left: -3px;
+    top: 15px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--cx-void);
+    border: 1px solid var(--cx-line-strong);
+    transition:
+      background 200ms,
+      border-color 200ms,
+      box-shadow 200ms;
+  }
+  & .mkt-page-index a:hover {
+    color: var(--cx-ink);
+  }
+  & .mkt-page-index a:hover::before {
+    background: var(--cx-sun);
+    border-color: var(--cx-sun);
+    box-shadow: 0 0 10px var(--cx-sun);
+  }
+  & .mkt-page-index a span {
+    font-family: var(--cx-mono);
+    font-size: 10px;
+    color: var(--cx-sun);
+  }
+  & .mkt-page-content {
+    max-width: 920px;
+    margin: 0;
+    counter-reset: cx-chapter;
+  }
+  /* Ruled chapters: a numbered heading column, then the copy. */
+  & .mkt-content-section {
+    counter-increment: cx-chapter;
+    display: grid;
+    grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
+    gap: clamp(24px, 4vw, 64px);
+    margin: 0;
+    padding: clamp(40px, 6vh, 72px) 0;
+    border-top: 1px solid var(--cx-line);
+  }
+  & .mkt-page-content > .mkt-content-section:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+  & .mkt-page-content .mkt-content-section h2 {
+    font-size: clamp(22px, 2vw, 30px);
+    font-weight: 450;
+    line-height: 1.2;
+  }
+  & .mkt-page-content .mkt-content-section h2::before {
+    content: counter(cx-chapter, decimal-leading-zero);
+    content: counter(cx-chapter, decimal-leading-zero) / '';
+    display: block;
+    margin-bottom: 14px;
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0.1em;
+    color: var(--cx-sun);
+  }
+  & .axis-chapter-copy {
+    font-size: 15.5px;
+    line-height: 1.75;
+    color: var(--cx-soft);
+  }
+  & .axis-chapter-copy h3 {
+    font-size: 17px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: var(--cx-ink);
+  }
+  & .axis-chapter-copy strong {
+    color: var(--cx-ink);
+    font-weight: 500;
+  }
+  & .axis-chapter-copy ul {
+    list-style: none;
+    padding-left: 0;
+  }
+  & .axis-chapter-copy ul > li {
+    position: relative;
+    padding-left: 22px;
+  }
+  & .axis-chapter-copy ul > li::before {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: 0.72em;
+    width: 8px;
+    height: 1px;
+    background: var(--cx-sun);
+  }
+  & .axis-chapter-copy figure {
+    border: 1px solid var(--cx-line-strong) !important;
+    border-radius: 2px;
+    background: var(--cx-deep) !important;
+  }
+  & .axis-chapter-copy figcaption {
+    border-color: var(--cx-line) !important;
+    color: var(--cx-muted) !important;
+    font-family: var(--cx-mono);
+  }
+
+  /* Related pages: a list of destinations, each a lit line on hover. */
+  & .mkt-related {
+    grid-template-columns: minmax(200px, 260px) minmax(0, 920px);
+    gap: clamp(32px, 5vw, 96px);
+    margin-top: 80px;
+    padding-top: 40px;
+    border-color: var(--cx-line) !important;
+  }
+  & .mkt-related h2 {
+    font-size: 13px;
+    font-family: var(--cx-mono);
+    font-weight: 400;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--cx-sea);
+  }
+  & .mkt-related h2:lang(th) {
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: var(--cx-text);
+    font-size: 15px;
+  }
+  & .axis-related-link {
+    border-color: var(--cx-line) !important;
+    padding: 22px 40px 22px 0;
+  }
+  & .axis-related-link > span:first-child {
+    font-family: var(--cx-display);
+    font-size: 19px;
+    font-weight: 400;
+    text-decoration: none;
+    letter-spacing: -0.01em;
+  }
+  & .axis-related-link::before {
+    background: linear-gradient(90deg, var(--cx-sun), transparent);
+  }
+  & .axis-related-link::after {
+    content: '→';
+    content: '→' / '';
+    font-size: 18px;
+    top: 26px;
+    color: var(--cx-sun);
+  }
+  & .mkt-page-provenance {
+    border-color: var(--cx-line);
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    color: var(--cx-muted);
+  }
+  & .mkt-page-provenance:lang(th) {
+    font-family: var(--cx-text);
+    font-size: 12px;
+  }
+  & .mkt-page-provenance a {
+    color: var(--cx-soft);
+  }
+}
+
+/* ─── Shared sections: setup, comparison, pricing, FAQ, sign-up, CTA, answer guide ────── */
+.wakaclock-marketing {
+  & .axis-section-heading h2,
+  & #compare h2,
+  & .axis-pricing-intro h2,
+  & .mkt-faq-section h2,
+  & .axis-signup-layout h2,
+  & .axis-cta h2 {
+    font-weight: 400;
+    letter-spacing: -0.045em;
+    line-height: 1.02;
+  }
+  &
+    :is(
+      .axis-section-heading h2,
+      #compare h2,
+      .axis-pricing-intro h2,
+      .mkt-faq-section h2,
+      .axis-signup-layout h2,
+      .axis-cta h2
+    ):lang(th) {
+    letter-spacing: 0;
+    line-height: 1.25;
+  }
+
+  /* Quick start: three stations on one track. */
+  & .axis-setup {
+    max-width: 1440px;
+  }
+  & .axis-setup-steps {
+    counter-reset: none;
+    border-top: 1px solid var(--cx-line-strong);
+  }
+  & .axis-setup-step {
+    background: transparent !important;
+    border: 0 !important;
+    border-right: 1px solid var(--cx-line) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 32px 28px 8px 0 !important;
+  }
+  & .axis-setup-step:last-child {
+    border-right: 0 !important;
+  }
+  & .axis-step-number {
+    font-family: var(--cx-mono) !important;
+    font-size: 12px !important;
+    letter-spacing: 0.1em;
+    color: var(--cx-sun) !important;
+    background: transparent !important;
+    border: 0 !important;
+  }
+  & .axis-step-detail code {
+    background: var(--cx-deep) !important;
+    border: 1px solid var(--cx-line) !important;
+    color: var(--mkt-code-fg) !important;
+    border-radius: 2px;
+  }
+
+  /* The briefing and evidence blocks: plain dark plates with hairline rules. */
+  & .axis-briefing {
+    background: transparent;
+    border-radius: 0;
+    border-block: 1px solid var(--cx-line);
+    max-width: 1280px;
+  }
+  & :is(.axis-briefing, .axis-evidence) .mkt-content-section h2 {
+    font-size: clamp(22px, 2.2vw, 32px);
+    font-weight: 450;
+  }
+  & :is(.axis-briefing, .axis-evidence) dl {
+    border: 1px solid var(--cx-line-strong) !important;
+    background: var(--cx-deep);
+    border-radius: 2px;
+  }
+  & :is(.axis-briefing, .axis-evidence) dt strong {
+    font-family: var(--cx-mono);
+    font-weight: 400;
+    font-size: 12px;
+    color: var(--cx-sun);
+  }
+  & :is(.axis-briefing, .axis-evidence) dt strong:lang(th) {
+    font-family: var(--cx-text);
+    font-size: 13px;
+  }
+  & :is(.axis-briefing, .axis-evidence) ul.list-disc {
+    list-style: none;
+    padding-left: 0;
+  }
+  & :is(.axis-briefing, .axis-evidence) ul.list-disc > li {
+    position: relative;
+    padding-left: 22px;
+  }
+  & :is(.axis-briefing, .axis-evidence) ul.list-disc > li::before {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: 0.72em;
+    width: 8px;
+    height: 1px;
+    background: var(--cx-sun);
+  }
+
+  /* Comparison: a readout table, AtoAxis column lit from within. */
+  & #compare > div:nth-child(2) {
+    border: 1px solid var(--cx-line-strong) !important;
+    background: var(--cx-deep) !important;
+    border-radius: 2px;
+  }
+  & #compare thead th {
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  & #compare thead th:lang(th) {
+    font-family: var(--cx-text);
+    font-size: 13px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  & #compare :is(tr) {
+    border-color: var(--cx-line) !important;
+  }
+  & #compare td[style] {
+    box-shadow:
+      inset 1px 0 0 rgb(242 179 94 / 0.25),
+      inset -1px 0 0 rgb(242 179 94 / 0.25);
+  }
+
+  /* Pricing: the number is the hero; the offer is an instrument panel. */
+  & .axis-pricing {
+    background: transparent;
+    border-block: 1px solid var(--cx-line);
+    max-width: 1440px;
+    margin: auto;
+  }
+  & .mkt-page-content > .axis-pricing {
+    border: 0;
+  }
+  & .axis-pricing-offer {
+    position: relative;
+    background: linear-gradient(180deg, var(--cx-graphite), var(--cx-deep));
+    border: 1px solid var(--cx-line-strong);
+    border-radius: 2px;
+    box-shadow:
+      0 0 0 1px rgb(0 0 0 / 0.4),
+      0 40px 80px -40px rgb(242 179 94 / 0.18);
+  }
+  & .axis-pricing-offer::before {
+    content: '';
+    position: absolute;
+    left: 24px;
+    right: 24px;
+    top: -1px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--cx-sun), transparent);
+  }
+  & .axis-billing button {
+    border-radius: 2px !important;
+    font-family: var(--cx-mono);
+    font-size: 11px !important;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  & .axis-billing button:lang(th) {
+    font-family: var(--cx-text);
+    font-size: 13px !important;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  & .mkt-price-change {
+    font-family: var(--cx-display) !important;
+    font-weight: 300 !important;
+    font-size: clamp(72px, 8vw, 112px) !important;
+    letter-spacing: -0.06em !important;
+    font-variant-numeric: tabular-nums;
+  }
+  & .axis-pricing-detail li {
+    border-color: var(--cx-line);
+    color: var(--cx-soft);
+  }
+
+  /* FAQ: questions on a ruled ledger; the toggle is a small instrument dial. */
+  & .axis-faq-row {
+    border-color: var(--cx-line) !important;
+  }
+  & .axis-faq-row:last-child {
+    border-bottom: 1px solid var(--cx-line);
+  }
+  & .axis-faq-question {
+    font-weight: 400;
+    color: var(--cx-ink);
+  }
+  & .axis-faq-toggle {
+    background: transparent;
+    border: 1px solid var(--cx-line-strong);
+    color: var(--cx-sun);
+    font-size: 18px;
+  }
+  & .axis-faq-row[open] .axis-faq-toggle {
+    border-color: var(--cx-sun);
+    box-shadow: 0 0 14px rgb(242 179 94 / 0.25);
+  }
+
+  /* Sign-up */
+  & .axis-signup-layout button[type='submit'] {
+    border-radius: 2px;
+    background: var(--cx-sun) !important;
+    color: var(--mkt-accent-fg) !important;
+    border: 0 !important;
+  }
+
+  /* Closing call: a horizon with the core rising. */
+  & .axis-cta {
+    background:
+      radial-gradient(ellipse 60% 70% at 50% 120%, rgb(242 179 94 / 0.16), transparent 70%),
+      radial-gradient(ellipse 40% 50% at 85% 0%, rgb(79 201 189 / 0.08), transparent 70%),
+      var(--cx-void);
+    border-top: 1px solid var(--cx-line);
+    padding-block: clamp(96px, 16vh, 180px);
+  }
+  & .axis-cta::before {
+    inset: auto -10% -60% -10%;
+    height: 120%;
+    border: 1px solid rgb(242 179 94 / 0.14);
+    border-bottom: 0;
+    border-radius: 50% 50% 0 0;
+    transform: none;
+  }
+  & .axis-cta h2 {
+    font-size: clamp(40px, 6vw, 88px);
+  }
+  & .axis-cta-link {
+    border-radius: 2px;
+    background: var(--cx-sun);
+    color: var(--mkt-accent-fg);
+    font-family: var(--cx-mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    box-shadow:
+      0 0 0 1px rgb(242 179 94 / 0.4),
+      0 16px 40px -12px rgb(242 179 94 / 0.45);
+  }
+  & .axis-cta-link:lang(th) {
+    font-family: var(--cx-text);
+    font-size: 14px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  /* Answer guide: a technical appendix. */
+  & #answer-guide {
+    max-width: 920px;
+    border-top: 1px solid var(--cx-line);
+    padding-top: 56px;
+    color: var(--cx-soft);
+  }
+  & #answer-guide h2 {
+    color: var(--cx-ink);
+  }
+  & #answer-guide table {
+    border: 1px solid var(--cx-line);
+  }
+  & #answer-guide :is(tr, dl, dl > div) {
+    border-color: var(--cx-line);
+  }
+  & #answer-guide thead th,
+  & #answer-guide dt {
+    color: var(--cx-sun);
+    font-family: var(--cx-mono);
+    font-size: 12px;
+    font-weight: 400;
+  }
+  & #answer-guide :is(thead th, dt):lang(th) {
+    font-family: var(--cx-text);
+    font-size: 13px;
+  }
+  & #answer-guide figure.border-l-2 {
+    border-color: var(--cx-sea);
+  }
+
+  /* Campaign (/join) and success pages share the title block's voice. */
+  & .mkt-campaign-intro h1 {
+    font-family: var(--cx-display);
+    font-weight: 400;
+    letter-spacing: -0.05em;
+  }
+  & .mkt-campaign-intro h1:lang(th) {
+    letter-spacing: 0;
+  }
+  & .axis-campaign-value {
+    border-color: var(--cx-line);
+  }
+  & .axis-campaign-value > span {
+    color: var(--cx-sun);
+    font-family: var(--cx-mono);
+    font-size: 14px;
+  }
+  & .axis-campaign-price > div {
+    background: var(--cx-graphite) !important;
+    border: 1px solid var(--cx-line-strong) !important;
+    border-radius: 2px;
+  }
+  & .mkt-success-mark {
+    color: var(--cx-sun);
+    text-shadow: 0 0 24px rgb(242 179 94 / 0.6);
+  }
+}
+
+/* ─── Floating index and footer ───────────────────────────────────────────────────────── */
+.wakaclock-marketing {
+  & .axis-scroll-index {
+    color: var(--cx-ink);
+  }
+  & .axis-scroll-index details {
+    background: rgb(21 27 42 / 0.9);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--cx-line-strong);
+    border-radius: 2px;
+    box-shadow: 0 16px 40px -16px rgb(0 0 0 / 0.8);
+  }
+  & .axis-scroll-index details::after {
+    left: 0;
+    right: 0;
+    background: var(--cx-sun);
+    height: 1px;
+  }
+  & .axis-index-label {
+    font-family: var(--cx-mono);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  & .axis-index-label:lang(th) {
+    font-family: var(--cx-text);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  & .axis-index-orbit {
+    color: var(--cx-sun);
+  }
+  & .axis-scroll-index nav {
+    background: var(--cx-graphite);
+    border: 1px solid var(--cx-line-strong);
+    border-radius: 2px;
+    box-shadow: 0 24px 60px -20px rgb(0 0 0 / 0.9);
+  }
+  & .axis-scroll-index nav a {
+    border-radius: 0;
+    color: var(--cx-soft);
+  }
+  & .axis-scroll-index nav a[aria-current] {
+    background: rgb(242 179 94 / 0.08);
+    color: var(--cx-ink);
+    box-shadow: inset 2px 0 0 var(--cx-sun);
+  }
+
+  & .axis-footer {
+    position: relative;
+    background: var(--cx-void);
+    border-top: 1px solid var(--cx-line);
+    padding-bottom: 40px;
+    overflow: clip;
+  }
+  /* The wordmark set as a horizon line across the base of the site. */
+  & .axis-footer::after {
+    content: 'ATOAXIS';
+    content: 'ATOAXIS' / '';
+    display: block;
+    margin-top: 48px;
+    padding: 0 var(--axis-gutter);
+    font-family: var(--cx-display);
+    font-size: clamp(64px, 17vw, 300px);
+    font-weight: 600;
+    line-height: 0.8;
+    letter-spacing: -0.06em;
+    color: transparent;
+    -webkit-text-stroke: 1px rgb(238 241 244 / 0.09);
+    background: linear-gradient(180deg, rgb(242 179 94 / 0.12), transparent 70%);
+    background-clip: text;
+    -webkit-background-clip: text;
+    white-space: nowrap;
+    pointer-events: none;
+    user-select: none;
+  }
+  & .axis-footer-inner {
+    max-width: none;
+    padding-top: 56px;
+  }
+  & .axis-footer-grid {
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr);
+  }
+  & .axis-footer-name {
+    font-family: var(--cx-display) !important;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+  }
+  & .axis-footer-grid nav h2 {
+    font-family: var(--cx-mono);
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--cx-sea);
+  }
+  & .axis-footer-grid nav h2:lang(th) {
+    font-family: var(--cx-text);
+    font-size: 12px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  & .axis-footer-grid nav a {
+    font-size: 13px;
+  }
+  & .axis-footer .border-t {
+    border-color: var(--cx-line) !important;
+    font-family: var(--cx-mono);
+    font-size: 11px;
+  }
+  & .axis-footer .border-t:lang(th) {
+    font-family: var(--cx-text);
+    font-size: 12px;
+  }
+}
+
+/* ─── Motion ──────────────────────────────────────────────────────────────────────────── */
+@keyframes cx-orbit-drift {
+  from {
+    transform: perspective(1200px) rotateX(64deg) rotateZ(-18deg);
+  }
+  to {
+    transform: perspective(1200px) rotateX(64deg) rotateZ(-6deg);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: scroll()) {
+    /* The horizon structure turns slowly as the page is read — scroll-linked, so an idle
+       page is perfectly still. */
+    .wakaclock-marketing .mkt-page-shell::before {
+      animation: cx-orbit-drift linear both;
+      animation-timeline: scroll(root);
+    }
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .wakaclock-marketing {
+      & :is(.mkt-page-art img, [data-tilt])[data-pointer-active] {
+        box-shadow: 0 28px 56px -28px rgb(242 179 94 / 0.3);
+      }
+      & :is(.axis-pricing-offer, [data-glow])[data-pointer-active] {
+        background-image:
+          radial-gradient(
+            circle at var(--mx, 50%) var(--my, 50%),
+            rgb(242 179 94 / 0.12),
+            transparent 46%
+          ),
+          linear-gradient(180deg, var(--cx-graphite), var(--cx-deep));
+      }
+      & .axis-cta-link:hover {
+        box-shadow:
+          0 0 0 1px var(--cx-sun),
+          0 20px 48px -12px rgb(242 179 94 / 0.6);
+      }
+    }
+  }
+}
+
+/* ─── Layout breakpoints ─────────────────────────────────────────────────────────────── */
+@media (max-width: 1023px) {
+  .wakaclock-marketing {
+    & .axis-nav {
+      background: rgb(11 15 25 / 0.94);
+    }
+    & .mkt-page-intro,
+    & .mkt-page-editorial .mkt-page-intro {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: 'badge' 'title' 'rule' 'lead' 'byline';
+    }
+    & .mkt-byline {
+      margin-top: 28px;
+    }
+    & .mkt-reading-layout {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    /* Below desktop the rail becomes a compact contents block above the chapters; the
+       floating index takes over the "where am I" job. */
+    & .mkt-page-index {
+      position: static;
+      max-height: none;
+      padding: 20px 0;
+      border-block: 1px solid var(--cx-line);
+    }
+    & .mkt-related {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    & .axis-setup-step {
+      border-right: 0 !important;
+      border-bottom: 1px solid var(--cx-line) !important;
+      padding: 28px 0 !important;
+    }
+  }
+}
+@media (max-width: 767px) {
+  .wakaclock-marketing {
+    & .mkt-page-shell::before {
+      top: -20px;
+      right: -50vw;
+      width: 140vw;
+    }
+    & .mkt-illustrated-intro {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    & .mkt-content-section {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 16px;
+    }
+    & .axis-footer-grid {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 32px;
+    }
+    & .axis-nav-expanded {
+      min-height: calc(100dvh - 60px);
+      align-content: start;
+    }
+  }
+}
+@media print {
+  .wakaclock-marketing {
+    --cx-void: #fff;
+    --cx-ink: #000;
+    --cx-soft: #222;
+    --cx-muted: #444;
+    color-scheme: light;
+    & .mkt-page-shell::before,
+    & .axis-footer::after {
+      display: none;
+    }
+  }
+}
+
+/* ─── Homepage: the Code Universe story over the real-time scene ───────────────────────
+   time.css lays out the chapters; these rules give them the universe's type and light,
+   and keep the whole page in the void (the old dusk-to-daylight hand-off is retired —
+   the scroll hook still reports dawn, the layers simply no longer lighten). */
+.wakaclock-marketing .tx-root {
+  --tx-bg: var(--cx-void);
+  --tx-bg-raised: var(--cx-graphite);
+  --tx-panel: rgb(14 19 32 / 0.72);
+  --tx-ink: var(--cx-ink);
+  --tx-muted: var(--cx-soft);
+  --tx-dim: var(--cx-muted);
+  --tx-line: var(--cx-line-strong);
+  --tx-line-strong: rgb(238 241 244 / 0.26);
+  --tx-lime: var(--cx-sun);
+  --tx-font: var(--cx-text);
+  --tx-mono: var(--cx-mono);
+
+  & .tx-stage {
+    background:
+      radial-gradient(ellipse 60% 55% at 66% 46%, rgb(242 179 94 / 0.06), transparent 70%),
+      var(--cx-void);
+  }
+  & .tx-dayfill {
+    background: var(--cx-void);
+  }
+  /* Under the lower page a dark wash keeps the scene present but quiet behind reading. */
+  & .tx-veil[data-veil='day'] {
+    background: linear-gradient(
+      90deg,
+      rgb(11 15 25 / 0.9),
+      rgb(11 15 25 / 0.7) 60%,
+      rgb(11 15 25 / 0.55)
+    );
+  }
+  & .tx-daybadge {
+    border-color: var(--cx-line-strong);
+    background: rgb(11 15 25 / 0.8);
+    color: var(--cx-muted);
+  }
+
+  /* Type: cinematic display lines, technical labels, readable body. */
+  & :is(.tx-h1, .tx-h2, .tx-track-title, .tx-h3) {
+    font-family: var(--cx-display);
+  }
+  & .tx-h1 {
+    font-size: clamp(3rem, 7vw, 6.6rem);
+    font-weight: 500;
+    line-height: 0.94;
+    letter-spacing: -0.055em;
+  }
+  & .tx-h2 {
+    font-weight: 450;
+    letter-spacing: -0.045em;
+  }
+  & .tx-h3 {
+    font-weight: 500;
+    letter-spacing: -0.015em;
+  }
+  & :is(.tx-h1, .tx-h2, .tx-h3):lang(th) {
+    letter-spacing: 0;
+    line-height: 1.2;
+  }
+  & .tx-accent {
+    color: transparent;
+    background: linear-gradient(100deg, var(--cx-ink) 0%, var(--cx-sun) 55%, #ffd99a 100%);
+    background-clip: text;
+    -webkit-background-clip: text;
+  }
+  & .tx-sub {
+    font-family: var(--cx-display);
+    font-weight: 400;
+    color: var(--cx-ink);
+  }
+  & .tx-sub::before {
+    content: '';
+    display: block;
+    width: 48px;
+    height: 1px;
+    margin-bottom: 18px;
+    background: var(--cx-sun);
+    box-shadow: 0 0 12px var(--cx-sun);
+  }
+  & .tx-eyebrow {
+    font-family: var(--cx-mono);
+    letter-spacing: 0.16em;
+    color: var(--cx-soft);
+  }
+  & .tx-kicker {
+    color: var(--cx-sea);
+    letter-spacing: 0.18em;
+  }
+  & :is(.tx-eyebrow, .tx-kicker):lang(th) {
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: var(--cx-text);
+  }
+  & .tx-pulse {
+    background: var(--cx-sun);
+    box-shadow: 0 0 10px var(--cx-sun);
+  }
+  & .tx-numeral {
+    font-family: var(--cx-display);
+    font-weight: 300;
+    -webkit-text-stroke: 1px rgb(238 241 244 / 0.08);
+  }
+
+  /* Controls: lit primary, hairline ghost, 2px corners like machined parts. */
+  & .tx-btn {
+    border-radius: 2px;
+    font-family: var(--cx-mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  & .tx-btn:lang(th) {
+    font-family: var(--cx-text);
+    font-size: 15px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  & .tx-btn--primary {
+    background: var(--cx-sun);
+    color: #1d1206;
+    box-shadow:
+      0 0 0 1px rgb(242 179 94 / 0.5),
+      0 18px 44px -14px rgb(242 179 94 / 0.55);
+  }
+  & .tx-btn--ghost {
+    border-color: var(--cx-line-strong);
+    background: rgb(11 15 25 / 0.5);
+  }
+  & .tx-chips li {
+    border-radius: 2px !important;
+    border-color: var(--cx-line) !important;
+    background: rgb(11 15 25 / 0.55) !important;
+    font-family: var(--cx-mono);
+    font-size: 11px !important;
+    letter-spacing: 0.04em;
+  }
+  & .tx-chips li:lang(th) {
+    font-family: var(--cx-text);
+    letter-spacing: 0;
+  }
+
+  /* Panels are instrument plates: square, hairline, a lit tick on top. */
+  & :is(.tx-card, .tx-panel, .tx-example, .tx-track-card, .tx-tools, .tx-kinds > li) {
+    position: relative;
+    border-radius: 2px !important;
+    border-color: var(--cx-line) !important;
+    background: rgb(14 19 32 / 0.74);
+  }
+  & :is(.tx-card, .tx-track-card, .tx-example)::before {
+    content: '';
+    position: absolute;
+    top: -1px;
+    left: 0;
+    width: 40px;
+    height: 1px;
+    background: var(--cx-sun);
+  }
+  & .tx-panel,
+  & .tx-example {
+    border-left: 1px solid var(--cx-line) !important;
+  }
+  & .tx-card-tag,
+  & .tx-track-index {
+    font-family: var(--cx-mono);
+    color: var(--cx-sea) !important;
+  }
+  & .tx-track-index {
+    color: var(--cx-sun) !important;
+  }
+
+  /* HUD: rail, clock and demo badge as quiet technical readouts. */
+  & .tx-rail a {
+    font-family: var(--cx-mono);
+  }
+  & .tx-rail a[aria-current] {
+    color: var(--cx-sun);
+  }
+  & .tx-badge {
+    border-radius: 2px;
+    border-color: var(--cx-line-strong);
+  }
+
+  /* The opening count: thin mono numerals, a cyan hairline track. */
+  & .tx-intro-count {
+    font-weight: 200;
+    color: var(--cx-ink);
+    text-shadow: 0 0 40px rgb(242 179 94 / 0.25);
+  }
+  & .tx-intro {
+    cursor: pointer;
+  }
+}
+
+/* The lower page reads on dark plates over the dimmed scene. */
+.wakaclock-marketing:has(.tx-root) {
+  & .axis-briefing {
+    background: rgb(11 15 25 / 0.78);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  & .axis-pricing {
+    background: rgb(11 15 25 / 0.72);
+  }
+  & .tx-day > section,
+  & .tx-day > .axis-evidence {
+    position: relative;
+  }
+}
+
+/* The still drawing of the voyage (reduced motion, no WebGL, and the first frame): the
+   sky is a CSS gradient on the stage, so the SVG carries no gradient ids. */
+.wakaclock-marketing .tx-root {
+  & .tx-night {
+    background:
+      radial-gradient(circle at 70% 47%, rgb(255 210 150 / 0.55), transparent 22%),
+      linear-gradient(
+        180deg,
+        #3b4a72 0%,
+        #8a86a8 26%,
+        #d6948a 44%,
+        #f2b27a 55%,
+        #2b4a55 56%,
+        #0f2a33 78%,
+        #0b0f19 100%
+      );
+  }
+  & .tx-still {
+    overflow: visible;
+  }
+  & .tx-still-sun circle {
+    fill: #ffd79a;
+  }
+  & .tx-still-horizon {
+    stroke: rgb(255 220 170 / 0.5);
+    stroke-width: 1.5;
+  }
+  & .tx-still-glint {
+    stroke: #ffe2b0;
+    stroke-width: 3;
+    stroke-linecap: round;
+    opacity: 0.75;
+  }
+  & .tx-still-ship path {
+    fill: #120c09;
+  }
+  & .tx-still-ship .tx-still-spar {
+    fill: none;
+    stroke: #120c09;
+    stroke-width: 7;
+  }
+  & .tx-still-wheel .tx-still-hour {
+    font-size: 44px;
+  }
+}
+
+/* ─── World mode: the homepage as an archipelago ───────────────────────────────────────
+   Set by voyage/world-mode.tsx only when the 3D world runs. The page stops scrolling;
+   every section stays in the document, tagged with its place, and only the open place's
+   sections show — in a reading panel on the right (a sheet on phones). */
+html:has(.wakaclock-marketing[data-world='on']) {
+  overflow: hidden;
+}
+.wakaclock-marketing[data-world='on'] {
+  height: 100svh;
+  overflow: hidden;
+
+  & .axis-footer,
+  & .axis-scroll-index,
+  & .tx-handoff,
+  & .tx-rail,
+  & .tx-veil:not([data-veil='left']) {
+    display: none !important;
+  }
+  /* The tour is driven by the wheel and by touch: the page itself never pans. */
+  touch-action: none;
+  & :is(.tx-chapters, .tx-day):has([data-world-open]) {
+    touch-action: pan-y;
+  }
+  & [data-world-place]:not([data-world-open]) {
+    display: none !important;
+  }
+  & .tx-day:not(:has([data-world-open])) {
+    display: none;
+  }
+  /* The map view: only the hero shows, over a left veil, with the places around it. */
+  &:not([data-world-open]) .tx-veil[data-veil='left'],
+  &[data-world-open=''] .tx-veil[data-veil='left'] {
+    --veil-on: 1;
+  }
+  &[data-world-open]:not([data-world-open='']) .tx-veil[data-veil='left'] {
+    --veil-on: 0;
+  }
+
+  /* The reading panel: whichever container holds the open place. */
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)),
+  & .tx-day:has([data-world-open]) {
+    position: fixed;
+    z-index: 40;
+    top: 60px;
+    right: 0;
+    bottom: 0;
+    width: min(640px, 50vw);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(242 179 94 / 0.35) transparent;
+    padding: 72px clamp(24px, 3vw, 48px) 96px;
+    background: linear-gradient(180deg, rgb(11 15 25 / 0.94), rgb(11 15 25 / 0.97));
+    backdrop-filter: blur(18px) saturate(1.1);
+    -webkit-backdrop-filter: blur(18px) saturate(1.1);
+    border-left: 1px solid var(--cx-line-strong);
+    box-shadow: -40px 0 80px -40px rgb(0 0 0 / 0.7);
+    animation: cx-panel-in 520ms var(--cx-ease) both;
+  }
+  & .tx-day:has([data-world-open]) > * {
+    max-width: none;
+    margin: 0;
+    padding-inline: 0;
+    background: none;
+    border: 0;
+  }
+  & .tx-day:has([data-world-open]) .mkt-content-section,
+  &
+    .tx-day:has([data-world-open])
+    :is(.axis-pricing, .mkt-faq-section, .axis-signup-layout, .mkt-related) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  & .tx-day:has([data-world-open]) .axis-setup-steps {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  & .tx-day:has([data-world-open]) .axis-setup-step {
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--cx-line) !important;
+  }
+  & .tx-day:has([data-world-open]) .axis-pricing-intro {
+    justify-self: start;
+  }
+  & .tx-day:has([data-world-open]) .axis-cta {
+    margin-top: 48px;
+    padding: 64px 0;
+    border-top: 1px solid var(--cx-line);
+    background: none;
+  }
+  & .tx-day:has([data-world-open]) .axis-cta::before {
+    display: none;
+  }
+
+  /* Story chapters read as plain columns inside the panel. */
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-chapter {
+    display: block;
+    min-height: 0;
+    padding: 0;
+  }
+  &
+    .tx-chapters:has([data-world-open]:not(#tx-c0))
+    :is(.tx-col, .tx-wide, .tx-tools, .tx-track-head) {
+    max-width: none;
+    padding-inline: 0;
+    text-align: left;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-actions--center {
+    justify-content: flex-start;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-numeral {
+    display: none;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-h2 {
+    font-size: clamp(2rem, 3vw, 3rem);
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-cards--row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-pin {
+    position: static;
+    height: auto;
+    padding: 0;
+    overflow: visible;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-track {
+    flex-direction: column;
+    width: auto;
+    padding-inline: 0;
+    transform: none;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-track-card {
+    width: auto;
+    min-height: 0;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-chapter--right {
+    gap: 32px;
+  }
+
+  /* Hotspots: a lit marker and the place's own heading, pinned to its landmark. */
+  & .tx-world-hotspots {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    pointer-events: none;
+  }
+  /* Markers wait for the scene: there is nothing to point at over the still drawing. */
+  & .tx-root:not([data-scene='ready']) .tx-world-hotspots {
+    opacity: 0;
+  }
+  /* The map view (the hero) shows the scene alone: markers appear once the tour has left it
+     (owner decision 2026-11-14). Scrolling is the way in. */
+  &:is(:not([data-world-open]), [data-world-open='']) .tx-world-hotspots {
+    opacity: 0;
+    visibility: hidden;
+  }
+  & .tx-world-hotspots {
+    transition:
+      opacity 600ms,
+      visibility 600ms;
+  }
+  & .tx-world-hotspots ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  & .tx-world-hotspots li {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transition: opacity 300ms;
+    will-change: transform;
+  }
+  & .tx-world-hotspots li[data-visible='false'] {
+    opacity: 0;
+    visibility: hidden;
+  }
+  /* A place out of frame waits at the screen edge; its label unfolds inward. */
+  & .tx-world-hotspots li[data-edge='right'] .tx-world-spot {
+    flex-direction: row-reverse;
+    padding: 0 10px 0 0;
+    transform: translate(calc(-100% + 15px), -50%);
+  }
+  &
+    .tx-world-hotspots
+    li[data-edge='right']
+    .tx-world-spot:is(:hover, :focus-visible, [aria-pressed='true']) {
+    padding: 0 10px 0 14px;
+  }
+  & .tx-world-hotspots li:is([data-edge='left'], [data-edge='right']) .tx-world-dot {
+    background: var(--cx-ink);
+  }
+  /* A lit marker per place; its label (the place's own heading) unfolds on hover or
+     keyboard focus, so the sky stays clear but every place is reachable. */
+  & .tx-world-spot {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    max-width: 30px;
+    height: 30px;
+    padding: 0 0 0 10px;
+    border: 1px solid rgb(244 237 227 / 0.28);
+    border-radius: 999px;
+    background: rgb(11 15 25 / 0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: var(--cx-ink);
+    font-family: var(--cx-text);
+    font-size: 12.5px;
+    line-height: 1.3;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    transform: translate(-15px, -50%);
+    pointer-events: auto;
+    cursor: pointer;
+    transition:
+      max-width 380ms var(--cx-ease),
+      padding 380ms var(--cx-ease),
+      gap 380ms var(--cx-ease),
+      background 200ms,
+      border-color 200ms,
+      color 200ms;
+  }
+  & .tx-world-spot:hover,
+  & .tx-world-spot:focus-visible,
+  & .tx-world-spot[aria-pressed='true'] {
+    max-width: 280px;
+    gap: 10px;
+    padding: 0 14px 0 10px;
+    background: rgb(242 179 94 / 0.94);
+    border-color: var(--cx-sun);
+    color: #1d1206;
+    z-index: 2;
+  }
+  & .tx-world-label {
+    opacity: 0;
+    transition: opacity 200ms;
+  }
+  & .tx-world-spot:is(:hover, :focus-visible, [aria-pressed='true']) .tx-world-label {
+    opacity: 1;
+    transition-delay: 120ms;
+  }
+  & .tx-world-hotspots li:has(.tx-world-spot:is(:hover, :focus-visible)) {
+    z-index: 5;
+  }
+  & .tx-world-spot[data-far] {
+    font-size: 11.5px;
+  }
+  & .tx-world-dot {
+    width: 8px;
+    height: 8px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--cx-sun);
+    box-shadow:
+      0 0 0 4px rgb(242 179 94 / 0.18),
+      0 0 14px var(--cx-sun);
+  }
+  & .tx-world-spot:not(:hover, :focus-visible) .tx-world-dot {
+    animation: cx-beacon 2.6s ease-in-out infinite;
+  }
+  & .tx-world-spot[data-far] .tx-world-dot {
+    background: var(--cx-sea);
+    box-shadow:
+      0 0 0 4px rgb(79 201 189 / 0.18),
+      0 0 14px var(--cx-sea);
+  }
+  /* While reading, the other places stay reachable but recede. */
+  &[data-world-open]:not([data-world-open=''], [data-world-open='travel'])
+    .tx-world-spot:not([aria-pressed='true'], :hover, :focus-visible) {
+    opacity: 0.55;
+  }
+
+  & .tx-world-close {
+    position: fixed;
+    z-index: 45;
+    top: 76px;
+    right: calc(min(640px, 50vw) - 64px);
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 1px solid rgb(242 179 94 / 0.55);
+    border-radius: 50%;
+    background: rgb(21 27 42 / 0.92);
+    color: var(--cx-sun);
+    font-family: var(--cx-mono);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  /* Headings receive focus when a place opens, for screen readers; no ring for that. */
+  & [data-world-place] :is(h2, h3)[tabindex='-1']:focus {
+    outline: none;
+  }
+  & .tx-world-close:hover {
+    border-color: var(--cx-sun);
+    color: var(--cx-sun);
+  }
+}
+@keyframes cx-beacon {
+  50% {
+    box-shadow:
+      0 0 0 7px rgb(242 179 94 / 0.08),
+      0 0 18px var(--cx-sun);
+  }
+}
+@keyframes cx-panel-in {
+  from {
+    opacity: 0;
+    translate: 40px 0;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wakaclock-marketing[data-world='on'] :is(.tx-chapters, .tx-day, .tx-world-dot) {
+    animation: none !important;
+  }
+}
+@media (max-width: 767px) {
+  .wakaclock-marketing[data-world='on'] {
+    & .tx-chapters:has([data-world-open]:not(#tx-c0)),
+    & .tx-day:has([data-world-open]) {
+      top: auto;
+      left: 0;
+      width: auto;
+      height: 72svh;
+      padding: 64px 20px 72px;
+      border-left: 0;
+      border-top: 1px solid var(--cx-line-strong);
+      border-radius: 18px 18px 0 0;
+    }
+    & .tx-world-close {
+      top: auto;
+      right: 16px;
+      bottom: calc(72svh - 54px);
+    }
+    & .tx-world-spot:is(:hover, :focus-visible, [aria-pressed='true']) {
+      max-width: 200px;
+    }
+  }
+}
+/* A touch more colour and contrast over the dusk scene; the GPU composites it for free. */
+.wakaclock-marketing[data-world='on'] .tx-canvas canvas {
+  filter: saturate(1.14) contrast(1.06);
+}
+/* World mode has no dusk-to-day hand-off: keep the overlay and veils at full strength
+   (the scroll hook still writes --tx-day inline; this wins). */
+.wakaclock-marketing[data-world='on'] .tx-root {
+  --tx-day: 0 !important;
+}
+/* On the map view the hero reads over a soft dusk gradient from the left edge. */
+.wakaclock-marketing[data-world='on']:is(:not([data-world-open]), [data-world-open=''])
+  .tx-stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      90deg,
+      rgb(11 15 25 / 0.86) 0%,
+      rgb(11 15 25 / 0.62) 30%,
+      rgb(11 15 25 / 0) 56%
+    ),
+    linear-gradient(0deg, rgb(11 15 25 / 0.55) 0%, rgb(11 15 25 / 0) 26%);
+}
+@media (max-width: 767px) {
+  .wakaclock-marketing[data-world='on']:is(:not([data-world-open]), [data-world-open=''])
+    .tx-stage::after {
+    background: linear-gradient(
+      0deg,
+      rgb(11 15 25 / 0.92) 0%,
+      rgb(11 15 25 / 0.7) 55%,
+      rgb(11 15 25 / 0.2) 100%
+    );
+  }
+}

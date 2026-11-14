@@ -9,6 +9,7 @@ import { HoverTip } from './hover-tip';
 import { chooseTimeQuality, readDeviceSignals, type TimeSceneQuality } from './time-quality';
 import { setTimeUi, useTimeUi } from './time-store';
 import { useTimeScroll } from './use-time-scroll';
+import { WorldMode } from './voyage/world-mode';
 
 import type { TimeCopyShape } from './time-copy';
 
@@ -104,7 +105,8 @@ export function TimeStage({
         {quality ? (
           <div className="tx-canvas">
             {/* Continuous while the story is on screen; below it, frames only on change. */}
-            <TimeCanvas mode={visible ? 'always' : 'demand'} quality={quality} />
+            {/* The archipelago is always on screen in world mode: keep it running. */}
+            <TimeCanvas mode="always" quality={quality} />
           </div>
         ) : null}
         {/* One reading veil per layout; the active chapter fades the right ones in. The
@@ -149,6 +151,8 @@ export function TimeStage({
           {status === 'fallback' ? <span className="tx-sr-only">{copy.loader.skipped}</span> : null}
         </div>
       </div>
+      {/* Outside the overlay's stacking context, so the panel's controls sit above it. */}
+      {quality ? <WorldMode rootId={rootId} /> : null}
     </>
   );
 }

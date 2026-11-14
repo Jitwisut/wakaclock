@@ -49,6 +49,12 @@ export function useTimeScroll(rootId: string) {
     let lastDay = '';
 
     const publish = () => {
+      // World mode replaces the scroll story: its chapters are hidden places, so their
+      // trigger positions mean nothing. The story stays at its opening.
+      if (timeMotion.world) {
+        timeMotion.target = 0;
+        return;
+      }
       const g = progress.reduce((sum, value) => sum + value, 0);
       // One scroll event can update several chapter triggers; only the first of them sees
       // the movement, so speed and jumps are measured on the page's scroll position.

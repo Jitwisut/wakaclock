@@ -141,6 +141,48 @@ presets, Retro Pixel 3D included, stay selectable in the theme customizer.
   intro animations advance from frame `delta`, not `clock.elapsedTime`, so they are
   testable and an on-demand canvas never skips them.
 
+### Marketing — art direction and the Voyage Log world
+
+The public site (`app/(marketing)`, `app/th`) was redesigned on 2026-11-14 (owner decisions):
+a dusk palette (navy `#0B0F19`, warm ivory text, gold `#F2B35E` = human / primary, teal
+`#4FC9BD` = AI), Space Grotesk display / Geist / Geist Mono / IBM Plex Sans Thai.
+**Copy, headings, ids, links, metadata and JSON-LD are locked**: the redesign is layout,
+visuals and motion only. Diff the server HTML of every route before and after any marketing
+design change.
+
+- `components/marketing/cosmos.css` is the design layer, imported last by both marketing
+  layouts. It re-points the `--mkt-*` tokens and restyles; it adds no copy. Thai text gets no
+  letter-spacing or text-transform. CSS-generated text uses the `content: 'x' / ''` form.
+- 3D lives on the homepage only: the **Voyage Log** (`components/marketing/time/voyage/`).
+  A procedural pirate ship (`hull.ts`, `rig-plan.ts`, `sails.ts`, `ship.tsx`) floats on a
+  Gerstner ocean whose wave table is shared by GLSL and JS (`waves.ts`, buoyancy). The sea
+  moves by an accumulated offset (`voyage.sea`), not a constant speed. Demo heartbeats drop
+  as chip-log markers in the wake (`chip-log.ts`); there is one rail lantern per supported
+  editor; the helm and the clock tower show today's demo ring. All data is the seeded demo,
+  always labelled.
+- **World mode** (`world-mode.tsx`, `world-places.ts`): when 3D runs, the homepage becomes
+  an archipelago. Each place opens existing sections in a reading panel, and the far islands
+  link to subpages. It only tags and hides server-rendered sections; it never moves or adds
+  page copy. Hotspot labels are read from the page's headings and `NAV_LINKS`. In world mode
+  the scroll hook stops driving the story and Lenis stays off. Without WebGL or with reduced
+  motion it never mounts, and the page scrolls top to bottom with `TimeStill` as the visual.
+- **Scroll tour** (owner decision 2026-11-14): the page stays locked; wheel, touch and keys
+  move `timeMotion.tour` along `TOUR` (the map, then every place with sections, in page
+  order). When the input rests the tour locks onto the stop the gesture committed to, the
+  camera flies there (`time-rig.tsx` follows a spline through `tourKeys()`), and the place
+  opens by itself once the camera has had time to arrive. A panel that can still scroll keeps
+  the input; only a fresh gesture at its end moves on. Each place's camera angle (`swing`,
+  `stand`) is chosen so no neighbouring island blocks it: a test enforces the clearance.
+  Islands are drawn `ISLAND_SCALE` larger than their plan size.
+- **Opening effects** (`place-fx.tsx`, `placeFx`/`fxBurst` in `state.ts`): opening a place
+  plays that place's own effect (pulse rings, whirling clock hand, twin light columns, sky
+  lanterns, sparks, pages, flares, coins, fireflies). Only the open place draws anything.
+- **Staged mount** (`time-canvas.tsx`): the scene mounts a part at a time, compiles shaders
+  with `compileAsync` and draws nothing until then, so the page never freezes while the
+  scene appears. Do not go back to mounting it all in one frame.
+- The Code Universe scene (`time/scene/core.tsx`, `galaxy.tsx`, `tunnel.tsx`, `atmosphere.tsx`)
+  is committed but no longer mounted.
+
 ### Layouts are per theme — Cinema only
 
 Owner rule (2026-11-04): a theme redesign must not change the other presets. The rebuilt

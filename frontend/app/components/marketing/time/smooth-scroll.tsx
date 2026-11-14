@@ -44,7 +44,8 @@ export function SmoothScroll() {
 
     const start = async () => {
       const { default: LenisScroll } = await import('lenis');
-      if (cancelled) return;
+      // World mode has no long page to scroll: only the reading panel scrolls, natively.
+      if (cancelled || document.querySelector('.wakaclock-marketing[data-world="on"]')) return;
       lenis = new LenisScroll({ autoRaf: false, lerp: 0.12 });
       gsap.registerPlugin(ScrollTrigger);
       lenis.on('scroll', ScrollTrigger.update);

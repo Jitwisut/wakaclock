@@ -1,27 +1,33 @@
 /**
- * The /time scene's palette: the brand's deep forest green ground with its mint, amber and
- * lime accents (the homepage's former "dusk" palette). Human and AI stay distinguishable by
- * hue, and the scene also patterns them differently.
+ * The Code Universe palette (owner decision 2026-11-14): a dark spatial void lit by two
+ * energies. Cyan is human work, amber is AI-assisted work, structural metal is
+ * unattributed — human and AI stay distinguishable by hue, and the scene also patterns
+ * them differently.
  */
 export const SCENE = {
-  bg: '#07110d',
-  ink: '#d8e8dc',
-  human: '#9be5b5',
-  ai: '#f2b25c',
-  unattributed: '#50635a',
-  highlight: '#c3ee8a',
+  bg: '#05070b',
+  ink: '#eef1f4',
+  human: '#66d9f7',
+  ai: '#e8a66a',
+  unattributed: '#4a5562',
+  highlight: '#d8f6ff',
+} as const;
+
+/** Physically based materials for the structures. */
+export const MATERIALS = {
+  /** Brushed titanium: the machined rings. */
+  titanium: '#5d6672',
+  /** Anodized dark aluminium: stabilisers, tunnel ribs. */
+  aluminium: '#242b35',
+  /** Rough ceramic: the outer shell fragments. */
+  ceramic: '#151a21',
+  /** Deep graphite: shards and housings. */
+  graphite: '#10141b',
 } as const;
 
 /**
- * Daylight: the same scene once the story has handed over to the light page — the
- * marketing site's ivory and forest ink, with the day palette's deeper kind colours so
- * the ring still reads on a pale ground.
+ * The page no longer turns to daylight below the story: the whole site lives in the void.
+ * `DAY` keeps its shape for the components that still blend towards it, and equals the
+ * night palette, so any blend is a no-op.
  */
-export const DAY = {
-  bg: '#f1efe7',
-  ink: '#1b3429',
-  human: '#176447',
-  ai: '#b4601c',
-  unattributed: '#a7ada5',
-  highlight: '#176447',
-} as const;
+export const DAY = { ...SCENE } as const;

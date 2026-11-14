@@ -31,10 +31,25 @@ const bodyMono = localFont({
   display: 'swap',
 });
 
-/** Thai text uses the same local asset and a system fallback for missing glyphs. */
+/**
+ * Thai text: IBM Plex Sans Thai (Thai subset). Listed after the Latin faces in every stack,
+ * so the browser takes Latin glyphs from Geist / Space Grotesk and Thai glyphs from here.
+ */
 const thaiSans = localFont({
-  src: '../../public/fonts/atoaxis-sans.woff2',
+  src: [
+    { path: '../../public/fonts/cinema-text-thai-400.woff2', weight: '400', style: 'normal' },
+    { path: '../../public/fonts/cinema-text-thai-500.woff2', weight: '500', style: 'normal' },
+    { path: '../../public/fonts/cinema-text-thai-600.woff2', weight: '600', style: 'normal' },
+  ],
   variable: '--font-mkt-thai',
+  display: 'swap',
+});
+
+/** Code Universe display face: Space Grotesk (variable 300–700), vendored. */
+const cosmosDisplay = localFont({
+  src: '../../public/fonts/cinema-display.woff2',
+  variable: '--font-mkt-cosmos',
+  weight: '300 700',
   display: 'swap',
 });
 
@@ -54,12 +69,12 @@ export function MarketingLayoutFrame({
 }) {
   return (
     <div
-      className={`wakaclock-marketing flex min-h-screen flex-col ${pixelDisplay.variable} ${bodyMono.variable} ${thaiSans.variable}`}
+      className={`wakaclock-marketing flex min-h-screen flex-col ${pixelDisplay.variable} ${bodyMono.variable} ${thaiSans.variable} ${cosmosDisplay.variable}`}
       lang={locale}
       style={{
         fontFamily:
           locale === 'th'
-            ? 'var(--font-mkt-thai), sans-serif'
+            ? 'var(--font-mkt-pixel), var(--font-mkt-thai), sans-serif'
             : 'var(--font-mkt-pixel), sans-serif',
       }}
     >
