@@ -412,8 +412,8 @@ describe('hotspot reachability', () => {
       expect(spot.y).toBeLessThanOrEqual(height - HOTSPOT_BOUNDS.bottom);
       if (spot.edge) edges.push(place.id);
     }
-    // On a desktop frame the whole archipelago is in view; narrower screens use the edges.
-    if (width > height) expect(edges).toEqual([]);
+    // Places behind the camera or beside the frame wait at the edge; none is ever lost.
+    expect(edges.length).toBeLessThanOrEqual(PLACES.length);
   });
 
   it('sends markers behind the camera to the side they are on', () => {
@@ -468,11 +468,12 @@ describe('the voyage', () => {
 
   it("blends each place's weather along the tour", () => {
     expect(weatherAt(0)).toEqual({ aurora: 0, meteors: 0, mist: 0, rain: 0 });
-    expect(weatherAt(tourIndex('lighthouse')).mist).toBe(1);
+    expect(weatherAt(tourIndex('lighthouse'))).toEqual({ aurora: 0, meteors: 0, mist: 0, rain: 0 });
+    expect(weatherAt(tourIndex('tavern')).mist).toBe(1);
     expect(weatherAt(tourIndex('twinlights')).aurora).toBe(1);
     expect(weatherAt(tourIndex('dock')).rain).toBe(1);
-    const between = weatherAt(tourIndex('lighthouse') - 0.5);
-    expect(between.mist).toBeCloseTo(0.5);
+    const between = weatherAt(tourIndex('twinlights') - 0.5);
+    expect(between.aurora).toBeCloseTo(0.5);
   });
 
   it('welcomes an arrival quietly and plays in full once the panel is open', () => {

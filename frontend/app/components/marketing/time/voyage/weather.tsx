@@ -53,7 +53,8 @@ const RAIN_FRAGMENT = /* glsl */ `
 uniform float uOpacity;
 varying float vFade;
 void main() {
-  gl_FragColor = vec4(vec3(0.78, 0.86, 0.94), vFade * uOpacity);
+  // Sea-teal, like characters streaming down a terminal.
+  gl_FragColor = vec4(vec3(0.38, 0.86, 0.78), vFade * uOpacity);
   #include <colorspace_fragment>
 }
 `;

@@ -153,6 +153,18 @@ design change.
 - `components/marketing/cosmos.css` is the design layer, imported last by both marketing
   layouts. It re-points the `--mkt-*` tokens and restyles; it adds no copy. Thai text gets no
   letter-spacing or text-transform. CSS-generated text uses the `content: 'x' / ''` form.
+- **Editor world** (owner decision 2026-11-15, branch `claude/editor-world`): the mounted
+  homepage scene is `components/marketing/time/editor/`. One source file is the landscape:
+  every line is a step going down the file, block bodies sit in valleys
+  (`file-plan.ts`: lines, `lineY`/`lineZ`, `cursorAt`, landmark glyphs — pure data). The
+  visitor travels with a gold cursor; the AI's teal cursor works `AI_LEAD` lines ahead; token
+  bars type themselves in as the cursor passes and stay typed (`scene.tsx`). Each place is a
+  glyph of cubes in the left margin that gathers on arrival and burns bright when opened. No
+  text is drawn in the scene. The tour, title cards, panel, effects, weather and whole-file
+  view below are shared with the sea scene; the compass is styled as the editor's minimap on
+  the right edge. `world-places.ts` now lays places out along the file (`inEditor`).
+- The **Voyage Log** sea scene described next is kept on `claude/cinematic-marketing` and in
+  `time/voyage/`, but is no longer mounted (ship, ocean, islands, sea life, route).
 - 3D lives on the homepage only: the **Voyage Log** (`components/marketing/time/voyage/`).
   A procedural pirate ship (`hull.ts`, `rig-plan.ts`, `sails.ts`, `ship.tsx`) floats on a
   Gerstner ocean whose wave table is shared by GLSL and JS (`waves.ts`, buoyancy). The sea

@@ -23,24 +23,24 @@ import { PLACE_ATTRIBUTE, PLACES, TOUR, tourIndex, tourStop } from './world-plac
 /** UI chrome for the panel; rendered on the client only, never part of the page copy. */
 const CHROME = {
   en: {
-    chart: 'Sea chart',
-    close: 'Close the log',
-    compass: 'Voyage compass',
-    home: 'Back to the map',
-    hint: 'Scroll to sail on',
-    open: 'Open the log',
+    chart: 'Whole file',
+    close: 'Close',
+    compass: 'Minimap',
+    home: 'Back to the top',
+    hint: 'Scroll to keep going',
+    open: 'Open',
     places: 'Places',
-    start: 'Scroll to set sail',
+    start: 'Scroll to start',
   },
   th: {
-    chart: 'แผนที่เดินเรือ',
-    close: 'ปิดบันทึก',
-    compass: 'เข็มทิศการเดินทาง',
-    home: 'กลับสู่แผนที่',
-    hint: 'เลื่อนเพื่อเดินทางต่อ',
+    chart: 'ดูทั้งไฟล์',
+    close: 'ปิด',
+    compass: 'มินิแมป',
+    home: 'กลับไปบนสุด',
+    hint: 'เลื่อนเพื่อไปต่อ',
     open: 'เปิดอ่าน',
     places: 'สถานที่',
-    start: 'เลื่อนเพื่อออกเรือ',
+    start: 'เลื่อนเพื่อเริ่ม',
   },
 } as const;
 
@@ -441,7 +441,7 @@ export function WorldMode({ rootId }: { rootId: string }) {
         <div aria-hidden="true" className="tx-world-compass-needle" />
         <ol>
           {stops.map((spot, index) => (
-            <li key={spot.id} style={{ '--i': index + 1, '--n': TOUR.length + 1 } as CSSProperties}>
+            <li key={spot.id} style={{ '--i': index + 1, '--n': TOUR.length } as CSSProperties}>
               <button
                 aria-current={stop === index + 1 && !moving ? 'step' : undefined}
                 aria-label={spot.label}

@@ -2356,3 +2356,147 @@ html:has(.wakaclock-marketing[data-world='on']) {
     );
   }
 }
+
+/* ─── Editor world: the instruments, restyled ──────────────────────────────────────────
+   Owner decision 2026-11-15: the homepage world is a source file, so the compass becomes
+   the editor's minimap, the spyglass a plain focus ring and the chart a blueprint grid.
+   Same elements and behaviour as above; only their look changes here. */
+.wakaclock-marketing[data-world='on'] {
+  & .tx-world-compass {
+    --view: 34px;
+    /* Where an editor keeps it: on the right edge, clear of the hero copy. */
+    top: 50%;
+    right: 26px;
+    bottom: auto;
+    left: auto;
+    translate: 0 -50%;
+    width: 58px;
+    height: 250px;
+    border: 1px solid rgb(244 237 227 / 0.16);
+    border-radius: 4px;
+    background: rgb(11 15 25 / 0.88);
+    box-shadow: 0 18px 40px -18px rgb(0 0 0 / 0.8);
+  }
+  /* The file in miniature: faint lines of code, bright where the cursor has been. */
+  & .tx-world-compass-ring {
+    inset: 6px 8px;
+    border-radius: 0;
+    background: repeating-linear-gradient(
+      180deg,
+      rgb(244 237 227 / 0.2) 0 2px,
+      transparent 2px 6px
+    );
+    mask: linear-gradient(90deg, #000 40%, rgb(0 0 0 / 0.35) 75%, transparent);
+    -webkit-mask: linear-gradient(90deg, #000 40%, rgb(0 0 0 / 0.35) 75%, transparent);
+  }
+  & .tx-world-compass-ring::after {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: calc(var(--p) * 100%);
+    background: repeating-linear-gradient(180deg, var(--cx-sun) 0 2px, transparent 2px 6px);
+  }
+  /* The viewport: the part of the file on screen. */
+  & .tx-world-compass-needle {
+    top: calc(var(--p) * (100% - var(--view)));
+    left: 2px;
+    right: 2px;
+    width: auto;
+    height: var(--view);
+    margin: 0;
+    border: 1px solid var(--cx-sun);
+    border-radius: 2px;
+    background: rgb(242 179 94 / 0.14);
+    rotate: none;
+    filter: none;
+  }
+  & .tx-world-compass li {
+    top: calc(var(--i) / var(--n) * (100% - var(--view)) + var(--view) / 2 - 11px);
+    right: auto;
+    left: -26px;
+    margin: 0;
+    rotate: none;
+    transform: none;
+  }
+  & .tx-world-compass-home {
+    top: -46px;
+    left: 0;
+    width: 38px;
+    height: 38px;
+    margin: 0;
+    border-radius: 4px;
+  }
+  & .tx-world-compass-chart {
+    top: -46px;
+    right: auto;
+    left: 46px;
+    width: 38px;
+    height: 38px;
+    border-radius: 4px;
+  }
+  & .tx-world-compass-hint {
+    top: 18px;
+    right: calc(100% + 40px);
+    left: auto;
+    translate: none;
+  }
+  /* The title card stands clear of the minimap. */
+  & .tx-world-card {
+    right: clamp(124px, 10vw, 168px);
+  }
+  & .tx-world-spyglass {
+    background: radial-gradient(
+      circle at var(--sx) var(--sy),
+      transparent calc(var(--sr) - 3px),
+      rgb(242 179 94 / 0.95) calc(var(--sr) - 2px),
+      rgb(242 179 94 / 0.95) var(--sr),
+      rgb(5 7 11 / 0.94) calc(var(--sr) + 1px)
+    );
+  }
+  & .tx-world-chartveil {
+    background:
+      radial-gradient(ellipse at center, transparent 50%, rgb(5 7 11 / 0.6) 100%),
+      repeating-linear-gradient(0deg, rgb(120 150 220 / 0.07) 0 1px, transparent 1px 72px),
+      repeating-linear-gradient(90deg, rgb(120 150 220 / 0.07) 0 1px, transparent 1px 72px);
+    mix-blend-mode: normal;
+  }
+}
+@media (max-width: 767px) {
+  .wakaclock-marketing[data-world='on'] {
+    & .tx-world-compass {
+      --view: 22px;
+      top: auto;
+      right: auto;
+      left: 16px;
+      bottom: 20px;
+      translate: none;
+      width: 40px;
+      height: 150px;
+    }
+    & .tx-world-compass-needle {
+      height: var(--view);
+      margin-top: 0;
+    }
+    & .tx-world-compass-home,
+    & .tx-world-compass-chart {
+      top: -40px;
+      width: 32px;
+      height: 32px;
+      margin: 0;
+    }
+    & .tx-world-compass-chart {
+      left: 38px;
+    }
+    & .tx-world-compass li {
+      right: -26px;
+      left: auto;
+    }
+    & .tx-world-compass-hint {
+      right: auto;
+      left: calc(100% + 36px);
+    }
+    & .tx-world-card {
+      right: 16px;
+    }
+  }
+}

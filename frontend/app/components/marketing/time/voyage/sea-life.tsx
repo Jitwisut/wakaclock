@@ -270,7 +270,7 @@ export function Gulls() {
     const delta = Math.min(rawDelta, 0.1);
     const ease = 1 - Math.exp(-1.6 * delta);
     const place = placeById(tourStop(Math.round(timeMotion.tour)));
-    const {current} = state;
+    const { current } = state;
     current.presence += ((place && timeMotion.world ? 1 : 0) - current.presence) * ease;
     if (place) {
       const [x, y, z] = landmark(place);

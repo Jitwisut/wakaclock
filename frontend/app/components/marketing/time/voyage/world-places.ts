@@ -1,3 +1,5 @@
+import { LANDMARK_HEIGHT, LINE_GAP, lineY, STOP_GAP, stopBase } from '../editor/file-plan';
+
 /**
  * The archipelago (owner decision 2026-11-14): the homepage as a world of places around the
  * ship. Each place opens existing homepage sections in a reading panel, or — for the far
@@ -69,11 +71,11 @@ export interface Place {
 }
 
 /** The view of the whole archipelago with the ship in front: the hero's composition. */
-export const HOME_POSE: { look: Vec3; pos: Vec3 } = { pos: [38, 9, 46], look: [-12, 9.5, -10] };
-/** The sea chart: the camera high above the middle of the archipelago, tilted a little. */
+export const HOME_POSE: { look: Vec3; pos: Vec3 } = { pos: [-24, 13, 30], look: [12, -5, -44] };
+/** The whole file from above: the camera high over its middle, tilted a little. */
 export const CHART_POSE: { look: Vec3; pos: Vec3 } = {
-  pos: [-105, 740, 70],
-  look: [-105, 0, -175],
+  pos: [2, 930, -STOP_GAP * 3.7],
+  look: [2, 0, -STOP_GAP * 5.55],
 };
 /** Time of day on the map view: late golden hour. */
 export const HOME_DUSK = 0.3;
@@ -100,7 +102,7 @@ export function fromMapView(screenX: number, distance: number): [number, number]
   return [Math.round(px + dx * distance), Math.round(pz + dz * distance)];
 }
 
-export const PLACES: readonly Place[] = [
+const PLAN: readonly Place[] = [
   {
     id: 'ship',
     building: 'ship',
@@ -120,7 +122,6 @@ export const PLACES: readonly Place[] = [
     sections: ['#tx-c1'],
     labelFrom: '#tx-beat-title',
     swing: 0.9,
-    weather: 'mist',
     dusk: 0.52,
   },
   {
@@ -213,7 +214,7 @@ export const PLACES: readonly Place[] = [
     sections: ['#faq'],
     labelFrom: '#faq h2',
     swing: 1.1,
-    weather: 'meteors',
+    weather: 'mist',
     dusk: 0.58,
   },
   {
@@ -268,16 +269,26 @@ export const PLACES: readonly Place[] = [
   },
 ];
 
-export function placeById(id: string) {
-  return PLACES.find((place) => place.id === id);
-}
+/** Far places (links to other pages) stand in the right margin, spaced down the file. */
+const FAR_X = 44;
 
 /**
- * The scroll tour: the map first, then every place that holds homepage sections, in the
- * order those sections appear in the page. Scrolling moves along it; far islands are links,
- * not stops.
+ * The editor world's layout (owner decision 2026-11-15): every place of the tour stands in
+ * the left margin of the file, level with the head of its block; the far places stand in the
+ * right margin. The archipelago's own positions above are kept for the sea scene, which is no
+ * longer mounted.
  */
-export const TOUR: readonly string[] = [
+function inEditor(place: Place): Place {
+  const stop = TOUR_ORDER.indexOf(place.id) + 1;
+  if (stop > 0) {
+    const [x, , z] = stopBase(stop);
+    return { ...place, at: [x, z] };
+  }
+  const far = PLAN.filter((entry) => entry.href).indexOf(place);
+  return { ...place, at: [FAR_X, -(far * 2 + 2) * STOP_GAP] };
+}
+
+const TOUR_ORDER: readonly string[] = [
   'lighthouse',
   'clocktower',
   'twinlights',
@@ -289,6 +300,19 @@ export const TOUR: readonly string[] = [
   'trading',
   'tavern',
 ];
+
+export const PLACES: readonly Place[] = PLAN.map((place) => inEditor(place));
+
+export function placeById(id: string) {
+  return PLACES.find((place) => place.id === id);
+}
+
+/**
+ * The scroll tour: the map first, then every place that holds homepage sections, in the
+ * order those sections appear in the page. Scrolling moves along it; far islands are links,
+ * not stops.
+ */
+export const TOUR: readonly string[] = TOUR_ORDER;
 
 /** Tour position of a place: 0 is the map, 1… are the stops. -1 for places off the tour. */
 export function tourIndex(id: string) {
@@ -363,9 +387,15 @@ export function keepOffIslands(x: number, z: number): [number, number] {
   return [px, pz];
 }
 
-/** The landmark's top: where the hotspot floats and the camera aims. */
+/** Height of the ground at a place: the step its block starts on (0 for the far places). */
+function groundAt(place: Place) {
+  const stop = TOUR_ORDER.indexOf(place.id) + 1;
+  return stop > 0 ? stopBase(stop)[1] : lineY(-place.at[1] / LINE_GAP);
+}
+
+/** The landmark's top: where the marker floats and the camera aims. */
 export function landmark(place: Place): Vec3 {
-  return [place.at[0], placeHeight(place), place.at[1]];
+  return [place.at[0], groundAt(place) + LANDMARK_HEIGHT, place.at[1]];
 }
 
 /**
@@ -374,28 +404,13 @@ export function landmark(place: Place): Vec3 {
  * reading panel on the right.
  */
 export function visitPose(place: Place): { center: Vec3; look: Vec3; pos: Vec3 } {
-  if (place.building === 'ship') {
-    return { pos: [-22, 6, 30], look: [6, 9, -6], center: [0, 9, 0] };
-  }
-  const reach = Math.hypot(place.at[0], place.at[1]) || 1;
-  const cx = place.at[0] - (place.at[0] / reach) * (place.aim ?? 0);
-  const cz = place.at[1] - (place.at[1] / reach) * (place.aim ?? 0);
-  const radius = placeRadius(place);
-  const height = placeHeight(place);
-  // Direction from the island toward the ship, slightly rotated so we see it three-quarter.
-  const angle = Math.atan2(-cz, -cx) + (place.swing ?? 0.35);
-  const dx = Math.cos(angle);
-  const dz = Math.sin(angle);
-  // Close enough that the island fills the open half of the frame.
-  const distance = (radius * 2.1 + height * 1.05) * (place.stand ?? 1);
-  const pos: Vec3 = [cx + dx * distance, height * 0.6 + radius * 0.3, cz + dz * distance];
-  // Right-hand vector of the view (y up): cross(view, up) = (-viewZ, 0, viewX).
-  const viewX = -dx;
-  const viewZ = -dz;
-  const shift = distance * 0.3;
-  const look: Vec3 = [cx - viewZ * shift, height * 0.58, cz + viewX * shift];
-  // `center` is the landmark itself, for screens where the panel is below, not beside.
-  return { pos, look, center: [cx, height * 0.58, cz] };
+  const [x, z] = place.at;
+  const ground = groundAt(place);
+  // Behind and above the cursor's line, turned a little toward the landmark in the margin:
+  // it fills the left of the frame and leaves the right for the title card and the panel.
+  const pos: Vec3 = [24, ground + 21, z + 54];
+  const look: Vec3 = [x + 22, ground + 9, z - 4];
+  return { pos, look, center: [x, ground + LANDMARK_HEIGHT * 0.55, z] };
 }
 
 /** Which place an element belongs to (closest tagged ancestor), for in-page links. */
