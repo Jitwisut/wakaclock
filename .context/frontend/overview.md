@@ -166,14 +166,28 @@ design change.
   page copy. Hotspot labels are read from the page's headings and `NAV_LINKS`. In world mode
   the scroll hook stops driving the story and Lenis stays off. Without WebGL or with reduced
   motion it never mounts, and the page scrolls top to bottom with `TimeStill` as the visual.
-- **Scroll tour** (owner decision 2026-11-14): the page stays locked; wheel, touch and keys
-  move `timeMotion.tour` along `TOUR` (the map, then every place with sections, in page
-  order). When the input rests the tour locks onto the stop the gesture committed to, the
-  camera flies there (`time-rig.tsx` follows a spline through `tourKeys()`), and the place
-  opens by itself once the camera has had time to arrive. A panel that can still scroll keeps
-  the input; only a fresh gesture at its end moves on. Each place's camera angle (`swing`,
-  `stand`) is chosen so no neighbouring island blocks it: a test enforces the clearance.
-  Islands are drawn `ISLAND_SCALE` larger than their plan size.
+- **Scroll tour** (owner decisions 2026-11-14): the page stays locked; wheel, touch and keys
+  move `timeMotion.tourTarget` along `TOUR` (the map, then every place with sections, in
+  page order) and the rig glides `timeMotion.tour` after it. When the input rests the tour
+  locks onto the stop the gesture committed to and that place's **title card** comes up (its
+  own heading plus a button); the visitor clicks to open the reading panel, which swings open
+  in 3D. Input over an open panel always belongs to the panel — it never sails away; the
+  voyage continues from the scene, the compass, the keys or the close button. Lenis must be
+  off in world mode (`smooth-scroll.tsx` stands down when `data-world` turns on) or the
+  panel cannot scroll. Each place's camera angle (`swing`, `stand`) is chosen so no
+  neighbouring island blocks it: a test enforces the clearance. Islands are drawn
+  `ISLAND_SCALE` larger than their plan size.
+- **Instruments** (`hotspot-projector.tsx` writes them every frame): the compass (progress,
+  a needle to the next place, a button per stop), the spyglass iris that closes on the place
+  ahead, and the tether from a landmark to its card or panel. Markers are hidden on the map
+  view and at the screen edge; while sailing each place in view wears its heading.
+- **The ship sails the tour** (`sailTour` in `director.tsx`, `Fleet` in `weather.tsx`): her
+  berth follows the tour along a course through each stop's `mooring`, kept off the islands.
+  Anything that rides with her must use `modelMatrix`, and buoyancy samples the sea at her
+  berth. **Weather** is per place (`weather` in `world-places.ts`: mist, rain, aurora,
+  meteors), blended along the tour.
+- Effects and weather that hide themselves must stay in the scene until `voyage.shown`, so
+  their shaders compile with the rest instead of in the frame they first appear.
 - **Opening effects** (`place-fx.tsx`, `placeFx`/`fxBurst` in `state.ts`): opening a place
   plays that place's own effect (pulse rings, whirling clock hand, twin light columns, sky
   lanterns, sparks, pages, flares, coins, fireflies). Only the open place draws anything.

@@ -745,8 +745,17 @@ function useBuoyancy(group: React.RefObject<Group | null>) {
   useFrame((_, rawDelta) => {
     const delta = Math.min(rawDelta, 0.1);
     const t = voyage.time;
+    // Probes ride with the ship: sample the sea where each one is on the water now.
+    const cos = Math.cos(voyage.shipHeading);
+    const sin = Math.sin(voyage.shipHeading);
     const [bow, stern, starboard, port] = PROBES.map(([x, z]) =>
-      surfaceHeight(x, z, t, 3, voyage.sea)
+      surfaceHeight(
+        voyage.shipX + x * cos + z * sin,
+        voyage.shipZ - x * sin + z * cos,
+        t,
+        3,
+        voyage.sea
+      )
     ) as [number, number, number, number];
     const targetY = (bow + stern + starboard + port) / 4 - DRAFT;
     const targetPitch = Math.atan2(bow - stern, 12.6) * 0.85;

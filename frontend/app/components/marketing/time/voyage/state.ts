@@ -31,6 +31,22 @@ export const voyage = {
   fxPlace: '',
   fxAge: 99,
   fxOn: 0,
+  /** Where the ship is on the sea, her heading (radians about Y) and her way (m/s). */
+  shipX: 0,
+  shipZ: 0,
+  shipHeading: 0,
+  way: 4.2,
+  /** Weather over the camera, each 0–1, blended between the places of the tour. */
+  mist: 0,
+  rain: 0,
+  aurora: 0,
+  meteors: 0,
+  /**
+   * False until the scene has drawn once. Until then effects that normally hide themselves
+   * stay in the scene (at zero strength) so their shaders compile with everything else,
+   * not in the frame they first appear.
+   */
+  shown: false,
 };
 
 /**
@@ -69,4 +85,12 @@ export function resetVoyage() {
   voyage.fxPlace = '';
   voyage.fxAge = 99;
   voyage.fxOn = 0;
+  voyage.shipX = 0;
+  voyage.shipZ = 0;
+  voyage.shipHeading = 0;
+  voyage.way = 4.2;
+  voyage.mist = 0;
+  voyage.rain = 0;
+  voyage.aurora = 0;
+  voyage.meteors = 0;
 }

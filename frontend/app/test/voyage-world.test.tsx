@@ -11,11 +11,17 @@ import {
   latestDrop,
   sliceAge,
 } from '@/components/marketing/time/voyage/chip-log';
-import { focusTargets, windVisibility } from '@/components/marketing/time/voyage/director';
+import {
+  courseAt,
+  focusTargets,
+  weatherAt,
+  windVisibility,
+} from '@/components/marketing/time/voyage/director';
 import {
   HOTSPOT_BOUNDS,
   hotspotPosition,
   separate,
+  spyglassAmount,
 } from '@/components/marketing/time/voyage/hotspot-projector';
 import { STERN_X } from '@/components/marketing/time/voyage/hull';
 import { islandGeometry, PLATEAU } from '@/components/marketing/time/voyage/islands';
@@ -39,7 +45,9 @@ import { WorldMode } from '@/components/marketing/time/voyage/world-mode';
 import {
   fromMapView,
   HOME_POSE,
+  keepOffIslands,
   landmark,
+  mooring,
   placeById,
   placeRadius,
   PLACES,
@@ -219,87 +227,128 @@ describe('world mode', () => {
     expect(timeMotion.world).toBe(false);
   });
 
-  it('opens a place once the camera has had time to arrive, and closes it with Escape', () => {
+  it("shows a place's title card on arrival and opens its panel on click", () => {
     vi.useFakeTimers();
     const site = homepage();
     const { container } = render(<WorldMode rootId="tx-experience" />);
     act(() => {
       (container.querySelector('[data-hotspot="lighthouse"] button') as HTMLButtonElement).click();
     });
-    // In flight: the camera is on its way, nothing is open yet.
-    expect(timeMotion.tour).toBe(tourIndex('lighthouse'));
+    // Arrived: the title card speaks for the place; nothing is open until it is asked for.
+    expect(timeMotion.tourTarget).toBe(tourIndex('lighthouse'));
     expect(site.dataset.worldOpen).toBe('travel');
+    expect(site.dataset.worldAt).toBe('lighthouse');
     expect(timeMotion.place).toBe('');
     expect(site.querySelector('#tx-c0')?.hasAttribute('data-world-open')).toBe(false);
+    const card = container.querySelector('.tx-world-card');
+    expect(card?.textContent).toContain('Every Second Tells a Story.');
     act(() => {
-      vi.advanceTimersByTime(1600);
+      (container.querySelector('.tx-world-card-open') as HTMLButtonElement).click();
     });
     expect(site.dataset.worldOpen).toBe('lighthouse');
     expect(timeMotion.place).toBe('lighthouse');
     expect(site.querySelector('#tx-c1')?.hasAttribute('data-world-open')).toBe(true);
+    expect(container.querySelector('.tx-world-card')).toBeNull();
     expect(container.querySelector('.tx-world-close')).not.toBeNull();
 
+    // An in-page link sails to its place and opens it once the camera has arrived.
     act(() => {
       (site.querySelector('a[href="#faq"]') as HTMLAnchorElement).click();
+    });
+    expect(timeMotion.tourTarget).toBe(tourIndex('tavern'));
+    expect(site.dataset.worldOpen).toBe('travel');
+    act(() => {
       vi.advanceTimersByTime(1600);
     });
     expect(site.dataset.worldOpen).toBe('tavern');
-    expect(timeMotion.tour).toBe(tourIndex('tavern'));
 
+    // Escape steps back one level at a time: the panel, then the island.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(site.dataset.worldOpen).toBe('travel');
+    expect(site.dataset.worldAt).toBe('tavern');
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     });
     expect(site.dataset.worldOpen).toBe('');
-    expect(timeMotion.tour).toBe(0);
+    expect(timeMotion.tourTarget).toBe(0);
     expect(site.querySelector('#tx-c0')?.hasAttribute('data-world-open')).toBe(true);
     vi.useRealTimers();
   });
 
-  it('scrolls along the tour, locks onto the nearest stop and opens it', () => {
+  it('scrolls along the tour and locks onto the nearest stop', () => {
     vi.useFakeTimers();
     const site = homepage();
-    render(<WorldMode rootId="tx-experience" />);
-    const wheel = (deltaY: number) =>
+    const { container } = render(<WorldMode rootId="tx-experience" />);
+    const wheel = (deltaY: number, target: EventTarget = window) =>
       act(() => {
-        window.dispatchEvent(new WheelEvent('wheel', { deltaY }));
+        target.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY }));
       });
     // A nudge that does not commit falls back to the map.
-    wheel(40);
-    expect(timeMotion.tour).toBeGreaterThan(0);
+    wheel(120);
+    expect(timeMotion.tourTarget).toBeGreaterThan(0);
     act(() => {
       vi.advanceTimersByTime(400);
     });
-    expect(timeMotion.tour).toBe(0);
+    expect(timeMotion.tourTarget).toBe(0);
     expect(site.dataset.worldOpen).toBe('');
 
-    // A real scroll leaves the map, flies on and opens the first stop.
-    wheel(300);
+    // A real scroll leaves the map, sails on and brings up the first stop's card.
+    wheel(700);
+    expect(site.dataset.worldOpen).toBe('travel');
+    expect(site.dataset.worldAt).toBe('');
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(timeMotion.tourTarget).toBe(1);
+    expect(site.dataset.worldAt).toBe(TOUR[0]);
+
+    // With the panel open, scrolling over it reads it; it never sails away.
+    act(() => {
+      (container.querySelector('.tx-world-card-open') as HTMLButtonElement).click();
+    });
+    wheel(4000, site.querySelector('#tx-c1') as HTMLElement);
+    expect(timeMotion.tourTarget).toBe(1);
+    expect(site.dataset.worldOpen).toBe(TOUR[0]);
+    // Scrolling the scene beside it does.
+    wheel(1500);
     expect(site.dataset.worldOpen).toBe('travel');
     act(() => {
-      vi.advanceTimersByTime(200);
+      vi.advanceTimersByTime(400);
     });
-    expect(timeMotion.tour).toBe(1);
-    act(() => {
-      vi.advanceTimersByTime(1600);
-    });
-    expect(site.dataset.worldOpen).toBe(TOUR[0]);
+    expect(timeMotion.tourTarget).toBe(2);
 
     // Keys step one stop at a time and stay inside the tour.
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown' }));
     });
-    expect(timeMotion.tour).toBe(2);
+    expect(timeMotion.tourTarget).toBe(3);
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'End' }));
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
     });
-    expect(timeMotion.tour).toBe(TOUR.length);
+    expect(timeMotion.tourTarget).toBe(TOUR.length);
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home' }));
     });
-    expect(timeMotion.tour).toBe(0);
+    expect(timeMotion.tourTarget).toBe(0);
     expect(site.dataset.worldOpen).toBe('');
     vi.useRealTimers();
+  });
+
+  it('offers the stops on the compass', () => {
+    homepage();
+    const { container } = render(<WorldMode rootId="tx-experience" />);
+    const stops = [...container.querySelectorAll<HTMLButtonElement>('.tx-world-compass li button')];
+    // One per place of the tour that this page has a heading for.
+    const places = container.querySelectorAll('.tx-world-hotspots button');
+    expect(stops.length).toBe(places.length);
+    expect(stops[0]?.getAttribute('aria-label')).toBe('Every Second Tells a Story.');
+    act(() => stops[0]?.click());
+    expect(timeMotion.tourTarget).toBe(tourIndex('lighthouse'));
+    act(() => (container.querySelector('.tx-world-compass-home') as HTMLButtonElement).click());
+    expect(timeMotion.tourTarget).toBe(0);
   });
 
   it('visits every place that holds sections, in page order, and keeps the camera clear', () => {
@@ -368,23 +417,67 @@ describe('hotspot reachability', () => {
     expect(hotspotPosition(-0.4, 0, true, 800, 600).edge).toBe('right');
   });
 
-  it('returns keyboard focus to the place that was just read', () => {
+  it('returns keyboard focus to the button that opened the panel', () => {
     const site = homepage();
     const { container } = render(<WorldMode rootId="tx-experience" />);
-    const button = container.querySelector(
-      '[data-hotspot="lighthouse"] button'
-    ) as HTMLButtonElement;
     site.append(container);
-    vi.useFakeTimers();
     act(() => {
-      button.click();
-      vi.advanceTimersByTime(1600);
+      (container.querySelector('[data-hotspot="lighthouse"] button') as HTMLButtonElement).click();
     });
     act(() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      (container.querySelector('.tx-world-card-open') as HTMLButtonElement).click();
     });
-    expect(document.activeElement).toBe(button);
-    vi.useRealTimers();
+    act(() => {
+      (container.querySelector('.tx-world-close') as HTMLButtonElement).click();
+    });
+    expect(document.activeElement).toBe(container.querySelector('.tx-world-card-open'));
+  });
+});
+
+describe('the voyage', () => {
+  it('moors the ship off every stop, clear of every island', () => {
+    for (const key of tourKeys()) {
+      for (const place of PLACES) {
+        if (place.building === 'ship') continue;
+        const gap = Math.hypot(key.moor[0] - place.at[0], key.moor[1] - place.at[1]);
+        expect(gap).toBeGreaterThan(placeRadius(place));
+      }
+    }
+    expect(mooring(placeById('ship') as (typeof PLACES)[number])).toEqual([0, 0]);
+    const lighthouse = placeById('lighthouse') as (typeof PLACES)[number];
+    const [x, z] = keepOffIslands(lighthouse.at[0], lighthouse.at[1]);
+    expect(Math.hypot(x - lighthouse.at[0], z - lighthouse.at[1])).toBeGreaterThan(
+      placeRadius(lighthouse)
+    );
+  });
+
+  it('sails a smooth course through the moorings', () => {
+    const values = [0, 10, 30, 20];
+    expect(courseAt(values, 0)).toBe(0);
+    expect(courseAt(values, 1)).toBe(10);
+    expect(courseAt(values, 3)).toBe(20);
+    expect(courseAt(values, 9)).toBe(20);
+    const mid = courseAt(values, 1.5);
+    expect(mid).toBeGreaterThan(10);
+    expect(mid).toBeLessThan(30);
+  });
+
+  it("blends each place's weather along the tour", () => {
+    expect(weatherAt(0)).toEqual({ aurora: 0, meteors: 0, mist: 0, rain: 0 });
+    expect(weatherAt(tourIndex('lighthouse')).mist).toBe(1);
+    expect(weatherAt(tourIndex('twinlights')).aurora).toBe(1);
+    expect(weatherAt(tourIndex('dock')).rain).toBe(1);
+    const between = weatherAt(tourIndex('lighthouse') - 0.5);
+    expect(between.mist).toBeCloseTo(0.5);
+  });
+
+  it('closes the spyglass only while nearing a stop', () => {
+    expect(spyglassAmount(0.3, 1)).toBe(0);
+    expect(spyglassAmount(0.8, 1)).toBeGreaterThan(0.9);
+    expect(spyglassAmount(1, 1)).toBe(0);
+    // Leaving a stop, or lying at one, the view stays open.
+    expect(spyglassAmount(1.2, 2)).toBe(0);
+    expect(spyglassAmount(0.2, 0)).toBe(0);
   });
 });
 

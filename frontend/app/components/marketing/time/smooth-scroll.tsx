@@ -28,6 +28,7 @@ export function SmoothScroll() {
 
     let lenis: Lenis | undefined;
     let cancelled = false;
+    let watcher: MutationObserver | undefined;
     const tick = (time: number) => lenis?.raf(time * 1000);
 
     const onClick = (event: MouseEvent) => {
@@ -42,6 +43,16 @@ export function SmoothScroll() {
       window.history.pushState(null, '', hash);
     };
 
+    const stop = () => {
+      watcher?.disconnect();
+      watcher = undefined;
+      document.removeEventListener('click', onClick);
+      gsap.ticker.remove(tick);
+      gsap.ticker.lagSmoothing(500, 33);
+      lenis?.destroy();
+      lenis = undefined;
+    };
+
     const start = async () => {
       const { default: LenisScroll } = await import('lenis');
       // World mode has no long page to scroll: only the reading panel scrolls, natively.
@@ -52,15 +63,22 @@ export function SmoothScroll() {
       gsap.ticker.add(tick);
       gsap.ticker.lagSmoothing(0);
       document.addEventListener('click', onClick);
+      // The 3D world can start after this (it waits for the page to go idle). Lenis takes
+      // every wheel event for the page, which would leave the world's reading panel unable
+      // to scroll: stand down the moment the world turns on.
+      const site = document.querySelector<HTMLElement>('.wakaclock-marketing');
+      if (site) {
+        watcher = new MutationObserver(() => {
+          if (site.dataset.world === 'on') stop();
+        });
+        watcher.observe(site, { attributeFilter: ['data-world'] });
+      }
     };
     void start();
 
     return () => {
       cancelled = true;
-      document.removeEventListener('click', onClick);
-      gsap.ticker.remove(tick);
-      gsap.ticker.lagSmoothing(500, 33);
-      lenis?.destroy();
+      stop();
     };
   }, []);
 

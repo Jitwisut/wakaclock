@@ -1548,7 +1548,9 @@ html:has(.wakaclock-marketing[data-world='on']) {
     -webkit-backdrop-filter: blur(18px) saturate(1.1);
     border-left: 1px solid var(--cx-line-strong);
     box-shadow: -40px 0 80px -40px rgb(0 0 0 / 0.7);
-    animation: cx-panel-in 520ms var(--cx-ease) both;
+    /* The panel swings open like a chart leaf hinged on the edge nearest its island. */
+    transform-origin: left center;
+    animation: cx-panel-unfold 900ms var(--cx-ease) both;
   }
   & .tx-day:has([data-world-open]) > * {
     max-width: none;
@@ -1799,14 +1801,433 @@ html:has(.wakaclock-marketing[data-world='on']) {
       0 0 18px var(--cx-sun);
   }
 }
-@keyframes cx-panel-in {
+@keyframes cx-panel-unfold {
   from {
     opacity: 0;
-    translate: 40px 0;
+    transform: perspective(1500px) rotateY(-84deg) scaleX(0.7);
+    filter: brightness(1.7);
+  }
+  45% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+@keyframes cx-sheet-unfold {
+  from {
+    opacity: 0;
+    transform: perspective(1200px) rotateX(78deg) scaleY(0.7);
+    filter: brightness(1.7);
+  }
+  45% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+@keyframes cx-leaf-in {
+  from {
+    opacity: 0;
+    translate: 0 22px;
   }
   to {
     opacity: 1;
     translate: 0 0;
+  }
+}
+@keyframes cx-card-in {
+  from {
+    opacity: 0;
+    transform: perspective(900px) rotateY(-38deg) translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes cx-hint-bob {
+  50% {
+    translate: 0 5px;
+  }
+}
+
+/* ─── World mode: the voyage's instruments ─────────────────────────────────────────────
+   Title card, tether, spyglass and compass. All client-only chrome around the scene; the
+   scene writes their positions every frame (voyage/hotspot-projector.tsx). */
+.wakaclock-marketing[data-world='on'] {
+  /* The open place's content arrives leaf by leaf after the panel has swung open. */
+  & :is(.tx-chapters, .tx-day):has([data-world-open]:not(#tx-c0)) [data-world-open] > * {
+    animation: cx-leaf-in 700ms var(--cx-ease) both;
+    animation-delay: 620ms;
+  }
+  &
+    :is(.tx-chapters, .tx-day):has([data-world-open]:not(#tx-c0))
+    [data-world-open]
+    > :nth-child(1) {
+    animation-delay: 380ms;
+  }
+  &
+    :is(.tx-chapters, .tx-day):has([data-world-open]:not(#tx-c0))
+    [data-world-open]
+    > :nth-child(2) {
+    animation-delay: 460ms;
+  }
+  &
+    :is(.tx-chapters, .tx-day):has([data-world-open]:not(#tx-c0))
+    [data-world-open]
+    > :nth-child(3) {
+    animation-delay: 540ms;
+  }
+
+  /* While sailing, every place in view wears its own heading: you can tell what each
+     island holds before you reach it. Places at the screen edge stay a dot. */
+  &[data-world-open='travel'] .tx-world-hotspots li[data-edge=''] .tx-world-spot:not([data-far]) {
+    max-width: 260px;
+    gap: 9px;
+    padding: 0 13px 0 10px;
+  }
+  /* Solid, not frosted: a dozen blurred pills moving over a WebGL canvas cost frames. */
+  & .tx-world-spot {
+    background: rgb(11 15 25 / 0.82);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  &[data-world-open='travel']
+    .tx-world-hotspots
+    li[data-edge='']
+    .tx-world-spot:not([data-far])
+    .tx-world-label {
+    opacity: 1;
+  }
+  /* Places out of frame are not piled along the screen edge: the compass reaches them. */
+  & .tx-world-hotspots li:not([data-edge='']) {
+    opacity: 0;
+    visibility: hidden;
+  }
+  /* The place the tour rests at speaks through its title card instead. */
+  & .tx-world-hotspots li[data-current] {
+    opacity: 0;
+    visibility: hidden;
+  }
+
+  & .tx-world-card {
+    position: fixed;
+    z-index: 41;
+    top: 50%;
+    right: clamp(32px, 7vw, 132px);
+    width: min(430px, 36vw);
+    translate: 0 -50%;
+    padding: 30px 32px 26px;
+    border: 1px solid var(--cx-line-strong);
+    border-left: 2px solid var(--cx-sun);
+    background: linear-gradient(160deg, rgb(21 27 42 / 0.9), rgb(11 15 25 / 0.94));
+    backdrop-filter: blur(16px) saturate(1.1);
+    -webkit-backdrop-filter: blur(16px) saturate(1.1);
+    box-shadow: 0 30px 80px -30px rgb(0 0 0 / 0.75);
+    transform-origin: left center;
+    animation: cx-card-in 620ms var(--cx-ease) 260ms both;
+  }
+  & .tx-world-card-index {
+    margin: 0 0 14px;
+    font-family: var(--cx-mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    color: var(--cx-dim, rgb(244 237 227 / 0.55));
+  }
+  & .tx-world-card-index span {
+    color: var(--cx-sun);
+  }
+  & .tx-world-card-title {
+    margin: 0 0 24px;
+    font-family: var(--cx-display, inherit);
+    font-size: clamp(26px, 2.5vw, 38px);
+    font-weight: 500;
+    line-height: 1.12;
+    letter-spacing: -0.01em;
+    color: var(--cx-ink);
+    text-wrap: balance;
+  }
+  & .tx-world-card-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 48px;
+    padding: 0 22px;
+    border: 1px solid var(--cx-sun);
+    background: var(--cx-sun);
+    color: #1d1206;
+    font-family: var(--cx-mono);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition:
+      background 200ms,
+      color 200ms,
+      gap 200ms;
+  }
+  &:lang(th) .tx-world-card-open {
+    letter-spacing: 0;
+    text-transform: none;
+    font-size: 15px;
+  }
+  & .tx-world-card-open:is(:hover, :focus-visible) {
+    gap: 18px;
+    background: transparent;
+    color: var(--cx-sun);
+  }
+  & .tx-world-card-hint {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 22px 0 0;
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: rgb(244 237 227 / 0.5);
+  }
+  &:lang(th) .tx-world-card-hint {
+    letter-spacing: 0;
+    font-size: 12.5px;
+  }
+  & .tx-world-card-hint::before {
+    content: '';
+    width: 1px;
+    height: 18px;
+    background: linear-gradient(var(--cx-sun), transparent);
+    animation: cx-hint-bob 1.8s ease-in-out infinite;
+  }
+
+  /* A line of light from the landmark to its card or panel. */
+  & .tx-world-tether {
+    position: fixed;
+    z-index: 39;
+    top: 0;
+    left: 0;
+    height: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transform-origin: 0 50%;
+    background: linear-gradient(90deg, rgb(242 179 94 / 0.95), rgb(242 179 94 / 0.25));
+    box-shadow: 0 0 10px rgb(242 179 94 / 0.6);
+    transition: opacity 500ms 300ms;
+  }
+  & .tx-world-tether::before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: -4px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--cx-sun);
+    box-shadow:
+      0 0 0 5px rgb(242 179 94 / 0.2),
+      0 0 16px var(--cx-sun);
+  }
+
+  /* The spyglass: a round brass-rimmed view that closes on the place ahead. */
+  & .tx-world-spyglass {
+    --sx: 50%;
+    --sy: 50%;
+    --sr: 200vmax;
+    position: fixed;
+    z-index: 34;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    background: radial-gradient(
+      circle at var(--sx) var(--sy),
+      transparent calc(var(--sr) - 12px),
+      rgb(255 214 150 / 0.85) calc(var(--sr) - 11px),
+      rgb(150 104 48 / 0.95) calc(var(--sr) - 6px),
+      rgb(60 40 18 / 0.98) calc(var(--sr) - 1px),
+      rgb(5 7 11 / 0.95) var(--sr)
+    );
+  }
+
+  /* The compass. */
+  & .tx-world-compass {
+    --p: 0;
+    --needle: 0rad;
+    --size: 108px;
+    position: fixed;
+    z-index: 36;
+    left: 28px;
+    bottom: 28px;
+    width: var(--size);
+    height: var(--size);
+    border-radius: 50%;
+    background: radial-gradient(circle, rgb(21 27 42 / 0.92) 0 58%, rgb(11 15 25 / 0.7) 59%);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow:
+      0 0 0 1px rgb(244 237 227 / 0.14),
+      0 18px 40px -18px rgb(0 0 0 / 0.8);
+  }
+  & .tx-world-compass-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: conic-gradient(var(--cx-sun) calc(var(--p) * 360deg), rgb(244 237 227 / 0.14) 0);
+    mask: radial-gradient(circle, transparent 0 calc(50% - 4px), #000 calc(50% - 3px));
+    -webkit-mask: radial-gradient(circle, transparent 0 calc(50% - 4px), #000 calc(50% - 3px));
+  }
+  & .tx-world-compass-needle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 2px;
+    height: 62px;
+    margin: -31px 0 0 -1px;
+    border-radius: 2px;
+    background: linear-gradient(var(--cx-sun) 0 50%, rgb(244 237 227 / 0.28) 50%);
+    rotate: var(--needle);
+    filter: drop-shadow(0 0 5px rgb(242 179 94 / 0.7));
+  }
+  & .tx-world-compass ol {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  & .tx-world-compass li {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 22px;
+    height: 22px;
+    margin: -11px;
+    rotate: calc(var(--i) / var(--n) * 360deg);
+    translate: 0 0;
+    transform: translateY(calc(var(--size) / -2 - 9px));
+  }
+  & .tx-world-compass li button {
+    position: relative;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+  }
+  & .tx-world-compass li button::before {
+    content: '';
+    position: absolute;
+    inset: 7px;
+    border-radius: 50%;
+    background: rgb(244 237 227 / 0.45);
+    transition:
+      inset 200ms,
+      background 200ms,
+      box-shadow 200ms;
+  }
+  & .tx-world-compass li button:is(:hover, :focus-visible, [aria-current])::before {
+    inset: 4px;
+    background: var(--cx-sun);
+    box-shadow: 0 0 12px var(--cx-sun);
+  }
+  & .tx-world-compass-home {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 40px;
+    height: 40px;
+    margin: -20px;
+    border: 1px solid rgb(242 179 94 / 0.5);
+    border-radius: 50%;
+    background: rgb(11 15 25 / 0.94);
+    color: var(--cx-sun);
+    font-family: var(--cx-mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+  & .tx-world-compass-home:is(:hover, :focus-visible) {
+    background: var(--cx-sun);
+    color: #1d1206;
+  }
+  & .tx-world-compass-hint {
+    position: absolute;
+    top: 50%;
+    left: calc(100% + 26px);
+    margin: 0;
+    translate: 0 -50%;
+    white-space: nowrap;
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: rgb(244 237 227 / 0.6);
+  }
+  &:lang(th) .tx-world-compass-hint {
+    letter-spacing: 0;
+    font-size: 12.5px;
+  }
+  /* The hero's own scroll cue gives way to the compass's invitation. */
+  & .tx-scroll-cue {
+    display: none !important;
+  }
+  /* Instruments wait for the scene, like the markers. */
+  & .tx-root:not([data-scene='ready']) :is(.tx-world-compass, .tx-world-card) {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+@media (max-width: 767px) {
+  .wakaclock-marketing[data-world='on'] {
+    & .tx-chapters:has([data-world-open]:not(#tx-c0)),
+    & .tx-day:has([data-world-open]) {
+      transform-origin: center bottom;
+      animation-name: cx-sheet-unfold;
+    }
+    & .tx-world-card {
+      top: auto;
+      right: 16px;
+      bottom: 104px;
+      left: 16px;
+      width: auto;
+      translate: none;
+      padding: 22px 22px 20px;
+    }
+    & .tx-world-card-title {
+      margin-bottom: 18px;
+      font-size: 24px;
+    }
+    & .tx-world-card-hint {
+      margin-top: 16px;
+    }
+    & .tx-world-compass {
+      --size: 76px;
+      left: 22px;
+      bottom: 20px;
+    }
+    & .tx-world-compass-needle {
+      height: 42px;
+      margin-top: -21px;
+    }
+    & .tx-world-compass-home {
+      width: 30px;
+      height: 30px;
+      margin: -15px;
+      font-size: 10px;
+    }
+    & .tx-world-compass-hint {
+      left: calc(100% + 20px);
+    }
+    & .tx-world-tether {
+      display: none;
+    }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wakaclock-marketing[data-world='on'] :is(.tx-world-card, .tx-world-card-hint::before),
+  .wakaclock-marketing[data-world='on'] [data-world-open] > * {
+    animation: none !important;
   }
 }
 @media (prefers-reduced-motion: reduce) {
