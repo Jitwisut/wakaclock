@@ -1,4 +1,5 @@
 src/**
+project-intelligence/**
 test/**
 out/test/**
 tsconfig.json
