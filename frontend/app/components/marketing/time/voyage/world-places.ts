@@ -1,0 +1,335 @@
+/**
+ * The archipelago (owner decision 2026-11-14): the homepage as a world of places around the
+ * ship. Each place opens existing homepage sections in a reading panel, or — for the far
+ * islands — links to an existing page. Labels are read from the page's own headings and
+ * nav links at runtime, so the world adds no copy of its own.
+ */
+
+export type Building =
+  | 'clocktower'
+  | 'dock'
+  | 'far'
+  | 'library'
+  | 'lighthouse'
+  | 'market'
+  | 'ship'
+  | 'signal'
+  | 'tavern'
+  | 'trading'
+  | 'twinlights';
+
+export type Vec3 = [number, number, number];
+
+/**
+ * Islands are built at their plan size and drawn this much larger, so the landmarks read
+ * clearly from the map. `radius` and `height` below are the plan size; use `placeRadius` and
+ * `placeHeight` for the size in the world.
+ */
+export const ISLAND_SCALE = 1.3;
+
+export function placeRadius(place: Place) {
+  return place.building === 'ship' ? place.radius : place.radius * ISLAND_SCALE;
+}
+
+export function placeHeight(place: Place) {
+  return place.building === 'ship' ? place.height : place.height * ISLAND_SCALE;
+}
+
+export interface Place {
+  /** Metres the visiting camera's subject sits out from the island's centre, toward the ship. */
+  aim?: number;
+  /** Island centre on the water (x, z). The ship lies at the origin. */
+  at: [number, number];
+  building: Building;
+  /** Time of day while here, 0 golden hour → 1 midnight (drives sun and lanterns). */
+  dusk: number;
+  /** Height of the landmark: where the hotspot sits and the camera looks. */
+  height: number;
+  /** For far islands: the existing page this island links to. */
+  href?: string;
+  id: string;
+  /** Where the label text comes from: a heading in the page. */
+  labelFrom?: string;
+  /** Island radius in metres (0 for the ship). */
+  radius: number;
+  /** Elements this place opens (selectors, all inside one homepage container). */
+  sections: readonly string[];
+  /** How far back the visiting camera stands, as a multiple of the usual distance. */
+  stand?: number;
+  /**
+   * Angle (radians) the visiting camera swings round from the line to the ship. Chosen per
+   * place so that no neighbouring island stands between the camera and its landmark.
+   */
+  swing?: number;
+}
+
+/** The view of the whole archipelago with the ship in front: the hero's composition. */
+export const HOME_POSE: { look: Vec3; pos: Vec3 } = { pos: [38, 9, 46], look: [-12, 9.5, -10] };
+/** Time of day on the map view: late golden hour. */
+export const HOME_DUSK = 0.3;
+/** Horizontal field of view of the map camera (38° vertical at 16:10). */
+const HOME_HALF_FOV = Math.atan(Math.tan((19 * Math.PI) / 180) * 1.6);
+
+/**
+ * Lays an island out from the map view: `screenX` (0 left → 1 right) and its distance from
+ * the camera. Every place sits in the right half, so the hero copy on the left stays clear
+ * and the archipelago reads as one view behind the ship.
+ */
+export function fromMapView(screenX: number, distance: number): [number, number] {
+  const [px, , pz] = HOME_POSE.pos;
+  const [lx, , lz] = HOME_POSE.look;
+  const length = Math.hypot(lx - px, lz - pz);
+  const vx = (lx - px) / length;
+  const vz = (lz - pz) / length;
+  // Right-hand vector on the water plane for a camera looking along (vx, vz).
+  const rx = -vz;
+  const rz = vx;
+  const offset = Math.atan((screenX - 0.5) * 2 * Math.tan(HOME_HALF_FOV));
+  const dx = Math.cos(offset) * vx + Math.sin(offset) * rx;
+  const dz = Math.cos(offset) * vz + Math.sin(offset) * rz;
+  return [Math.round(px + dx * distance), Math.round(pz + dz * distance)];
+}
+
+export const PLACES: readonly Place[] = [
+  {
+    id: 'ship',
+    building: 'ship',
+    at: [0, 0],
+    radius: 0,
+    height: 12,
+    sections: ['#tx-c5'],
+    labelFrom: '#tx-begin-title',
+    dusk: 0.55,
+  },
+  {
+    id: 'lighthouse',
+    building: 'lighthouse',
+    at: fromMapView(0.68, 118),
+    radius: 15,
+    height: 24,
+    sections: ['#tx-c1'],
+    labelFrom: '#tx-beat-title',
+    swing: 0.9,
+    dusk: 0.52,
+  },
+  {
+    id: 'clocktower',
+    building: 'clocktower',
+    at: fromMapView(0.58, 195),
+    radius: 17,
+    height: 26,
+    sections: ['#tx-c2'],
+    labelFrom: '#tx-ring-title',
+    dusk: 0.3,
+  },
+  {
+    id: 'twinlights',
+    building: 'twinlights',
+    at: fromMapView(0.76, 270),
+    radius: 15,
+    height: 15,
+    sections: ['#tx-c3'],
+    labelFrom: '#tx-ai-title',
+    swing: 1.3,
+    dusk: 0.5,
+  },
+  {
+    id: 'market',
+    building: 'market',
+    at: fromMapView(0.93, 325),
+    radius: 22,
+    height: 12,
+    sections: ['#tx-c4'],
+    labelFrom: '#tx-product-title',
+    swing: 1.2,
+    dusk: 0.35,
+  },
+  {
+    id: 'dock',
+    building: 'dock',
+    at: fromMapView(0.955, 190),
+    radius: 14,
+    height: 12,
+    sections: ['#quick-start'],
+    labelFrom: '#quick-start h2',
+    // Round to the slipway side, clear of the crane's mast.
+    stand: 1.2,
+    swing: -0.35,
+    dusk: 0.2,
+  },
+  {
+    id: 'library',
+    building: 'library',
+    at: fromMapView(0.5, 300),
+    radius: 18,
+    height: 22,
+    sections: ['.axis-briefing', '.axis-evidence', '#answer-guide'],
+    labelFrom: '#what-is-atoaxis h2',
+    dusk: 0.28,
+  },
+  {
+    id: 'signal',
+    building: 'signal',
+    at: fromMapView(0.83, 156),
+    radius: 12,
+    height: 22,
+    sections: ['#compare'],
+    labelFrom: '#compare h2',
+    stand: 1.15,
+    swing: -0.3,
+    dusk: 0.25,
+  },
+  {
+    id: 'trading',
+    building: 'trading',
+    at: fromMapView(0.64, 375),
+    radius: 18,
+    height: 11,
+    sections: ['#pricing', '.axis-cta'],
+    labelFrom: '#pricing h2',
+    swing: 0.1,
+    dusk: 0.32,
+  },
+  {
+    id: 'tavern',
+    building: 'tavern',
+    at: fromMapView(0.92, 240),
+    radius: 16,
+    height: 11,
+    sections: ['#faq'],
+    labelFrom: '#faq h2',
+    swing: 1.1,
+    dusk: 0.6,
+  },
+  {
+    id: 'far-ai',
+    building: 'far',
+    at: fromMapView(0.56, 480),
+    radius: 11,
+    height: 12,
+    sections: [],
+    href: '/ai-coding-tracker',
+    dusk: 0.3,
+  },
+  {
+    id: 'far-analytics',
+    building: 'far',
+    at: fromMapView(0.74, 490),
+    radius: 11,
+    height: 12,
+    sections: [],
+    href: '/developer-analytics',
+    dusk: 0.3,
+  },
+  {
+    id: 'far-teams',
+    building: 'far',
+    at: fromMapView(0.9, 440),
+    radius: 11,
+    height: 12,
+    sections: [],
+    href: '/teams',
+    dusk: 0.3,
+  },
+  {
+    id: 'far-integrations',
+    building: 'far',
+    at: fromMapView(0.46, 560),
+    radius: 11,
+    height: 12,
+    sections: [],
+    href: '/integrations',
+    dusk: 0.3,
+  },
+  {
+    id: 'far-docs',
+    building: 'far',
+    at: fromMapView(0.82, 580),
+    radius: 11,
+    height: 12,
+    sections: [],
+    href: '/docs',
+    dusk: 0.3,
+  },
+];
+
+export function placeById(id: string) {
+  return PLACES.find((place) => place.id === id);
+}
+
+/**
+ * The scroll tour: the map first, then every place that holds homepage sections, in the
+ * order those sections appear in the page. Scrolling moves along it; far islands are links,
+ * not stops.
+ */
+export const TOUR: readonly string[] = [
+  'lighthouse',
+  'clocktower',
+  'twinlights',
+  'market',
+  'ship',
+  'dock',
+  'library',
+  'signal',
+  'trading',
+  'tavern',
+];
+
+/** Tour position of a place: 0 is the map, 1… are the stops. -1 for places off the tour. */
+export function tourIndex(id: string) {
+  return id ? TOUR.indexOf(id) + 1 : 0;
+}
+
+/** The place at a tour stop ('' for the map). */
+export function tourStop(index: number) {
+  return index <= 0 ? '' : (TOUR[Math.min(TOUR.length, index) - 1] ?? '');
+}
+
+/** Camera pose and time of day at each tour stop, the map first. */
+export function tourKeys(): { center: Vec3; dusk: number; look: Vec3; pos: Vec3 }[] {
+  return [
+    { ...HOME_POSE, center: HOME_POSE.look, dusk: HOME_DUSK },
+    ...TOUR.map((id) => {
+      const place = placeById(id) as Place;
+      return { ...visitPose(place), dusk: place.dusk };
+    }),
+  ];
+}
+
+/** The landmark's top: where the hotspot floats and the camera aims. */
+export function landmark(place: Place): Vec3 {
+  return [place.at[0], placeHeight(place), place.at[1]];
+}
+
+/**
+ * Camera pose for visiting a place: approach from the ship's side, a little above, and
+ * aim slightly right of the landmark so it sits on the left of the frame — clear of the
+ * reading panel on the right.
+ */
+export function visitPose(place: Place): { center: Vec3; look: Vec3; pos: Vec3 } {
+  if (place.building === 'ship') {
+    return { pos: [-22, 6, 30], look: [6, 9, -6], center: [0, 9, 0] };
+  }
+  const reach = Math.hypot(place.at[0], place.at[1]) || 1;
+  const cx = place.at[0] - (place.at[0] / reach) * (place.aim ?? 0);
+  const cz = place.at[1] - (place.at[1] / reach) * (place.aim ?? 0);
+  const radius = placeRadius(place);
+  const height = placeHeight(place);
+  // Direction from the island toward the ship, slightly rotated so we see it three-quarter.
+  const angle = Math.atan2(-cz, -cx) + (place.swing ?? 0.35);
+  const dx = Math.cos(angle);
+  const dz = Math.sin(angle);
+  // Close enough that the island fills the open half of the frame.
+  const distance = (radius * 2.1 + height * 1.05) * (place.stand ?? 1);
+  const pos: Vec3 = [cx + dx * distance, height * 0.6 + radius * 0.3, cz + dz * distance];
+  // Right-hand vector of the view (y up): cross(view, up) = (-viewZ, 0, viewX).
+  const viewX = -dx;
+  const viewZ = -dz;
+  const shift = distance * 0.3;
+  const look: Vec3 = [cx - viewZ * shift, height * 0.58, cz + viewX * shift];
+  // `center` is the landmark itself, for screens where the panel is below, not beside.
+  return { pos, look, center: [cx, height * 0.58, cz] };
+}
+
+/** Which place an element belongs to (closest tagged ancestor), for in-page links. */
+export const PLACE_ATTRIBUTE = 'data-world-place';

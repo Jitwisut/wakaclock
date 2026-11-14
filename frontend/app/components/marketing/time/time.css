@@ -2,18 +2,18 @@
    /time root layouts. Colours follow the homepage's dusk palette. */
 
 .tx-root {
-  --tx-bg: #05070b;
-  --tx-bg-raised: #0b0f15;
-  --tx-panel: rgb(16 20 27 / 0.66);
+  --tx-bg: #0b0f19;
+  --tx-bg-raised: #0e1320;
+  --tx-panel: rgb(21 27 42 / 0.66);
   --tx-ink: #eef1f4;
   --tx-muted: #9aa5b1;
   --tx-dim: #87929f;
   --tx-line: rgb(238 241 244 / 0.12);
   --tx-line-strong: rgb(238 241 244 / 0.24);
-  --tx-human: #66d9f7;
-  --tx-ai: #e8a66a;
+  --tx-human: #f2b35e;
+  --tx-ai: #4fc9bd;
   --tx-unattributed: #4a5562;
-  --tx-lime: #66d9f7;
+  --tx-lime: #f2b35e;
   --tx-font:
     var(--font-geist, var(--font-mkt-pixel)), 'Sukhumvit Set', 'Thonburi', 'Noto Sans Thai',
     'Leelawadee UI', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -135,18 +135,18 @@
 
 .tx-root .tx-btn--primary {
   background: var(--tx-lime);
-  color: #06090e;
-  box-shadow: 0 0 0 0 rgb(102 217 247 / 0.4);
+  color: #0a0d16;
+  box-shadow: 0 0 0 0 rgb(242 179 94 / 0.4);
 }
 
 .tx-root .tx-btn--primary:hover {
-  background: #bfefff;
-  box-shadow: 0 0 32px -4px rgb(102 217 247 / 0.45);
+  background: #ffe0b0;
+  box-shadow: 0 0 32px -4px rgb(242 179 94 / 0.45);
 }
 
 .tx-root .tx-btn--ghost {
   border-color: var(--tx-line-strong);
-  background: rgb(5 7 11 / 0.4);
+  background: rgb(11 15 25 / 0.4);
 }
 
 .tx-root .tx-btn--ghost:hover {
@@ -170,7 +170,7 @@
   padding: 6px 12px;
   border: 1px solid var(--tx-line-strong);
   border-radius: 999px;
-  background: rgb(5 7 11 / 0.45);
+  background: rgb(11 15 25 / 0.45);
   font-family: var(--tx-mono);
   font-size: 12px;
   letter-spacing: 0.02em;
@@ -204,7 +204,7 @@
   inset: 0;
   z-index: 0;
   overflow: hidden;
-  background: radial-gradient(ellipse 70% 60% at 68% 48%, #10141b 0%, var(--tx-bg) 70%);
+  background: radial-gradient(ellipse 70% 60% at 68% 48%, #151b2a 0%, var(--tx-bg) 70%);
 }
 
 /* Dawn: --tx-day (0–1, from the scroll hook) lightens every dark layer of the stage. */
@@ -282,8 +282,8 @@
 .tx-root .tx-veil[data-veil='left'] {
   background: linear-gradient(
     90deg,
-    rgb(5 7 11 / 0.94) 0%,
-    rgb(5 7 11 / 0.78) 30%,
+    rgb(11 15 25 / 0.94) 0%,
+    rgb(11 15 25 / 0.78) 30%,
     transparent 60%
   );
 }
@@ -291,33 +291,38 @@
 .tx-root .tx-veil[data-veil='right'] {
   background: linear-gradient(
     270deg,
-    rgb(5 7 11 / 0.94) 0%,
-    rgb(5 7 11 / 0.78) 30%,
+    rgb(11 15 25 / 0.94) 0%,
+    rgb(11 15 25 / 0.78) 30%,
     transparent 60%
   );
 }
 
 .tx-root .tx-veil[data-veil='center'] {
-  background: radial-gradient(ellipse 58% 48% at 50% 56%, rgb(5 7 11 / 0.88), transparent 80%);
+  background: radial-gradient(ellipse 58% 48% at 50% 56%, rgb(11 15 25 / 0.88), transparent 80%);
 }
 
 .tx-root .tx-veil[data-veil='bottom'] {
-  background: linear-gradient(0deg, rgb(5 7 11 / 0.92) 0%, rgb(5 7 11 / 0.55) 32%, transparent 58%);
+  background: linear-gradient(
+    0deg,
+    rgb(11 15 25 / 0.92) 0%,
+    rgb(11 15 25 / 0.55) 32%,
+    transparent 58%
+  );
 }
 
 .tx-root .tx-veil[data-veil='band'] {
   background: linear-gradient(
     180deg,
-    rgb(5 7 11 / 0.7) 0%,
-    rgb(5 7 11 / 0.35) 30%,
-    rgb(5 7 11 / 0.82) 55%,
-    rgb(5 7 11 / 0.82) 85%,
-    rgb(5 7 11 / 0.5) 100%
+    rgb(11 15 25 / 0.7) 0%,
+    rgb(11 15 25 / 0.35) 30%,
+    rgb(11 15 25 / 0.82) 55%,
+    rgb(11 15 25 / 0.82) 85%,
+    rgb(11 15 25 / 0.5) 100%
   );
 }
 
 .tx-root .tx-veil[data-veil='full'] {
-  background: rgb(5 7 11 / 0.6);
+  background: rgb(11 15 25 / 0.6);
 }
 
 /* Which veils each chapter's layout needs; before the scroll hook runs, the hero's. */
@@ -528,7 +533,7 @@
   padding: 4px 10px;
   border: 1px solid var(--tx-line);
   border-radius: 999px;
-  background: rgb(5 7 11 / 0.6);
+  background: rgb(11 15 25 / 0.6);
   font-family: var(--tx-mono);
   font-size: 11px;
   letter-spacing: 0.04em;
@@ -733,7 +738,7 @@
 }
 
 .tx-root .tx-card:hover {
-  border-color: rgb(102 217 247 / 0.4);
+  border-color: rgb(242 179 94 / 0.4);
 }
 
 .tx-root .tx-card-tag {
@@ -782,7 +787,7 @@
   padding: 4px;
   border: 1px solid var(--tx-line-strong);
   border-radius: 999px;
-  background: rgb(5 7 11 / 0.6);
+  background: rgb(11 15 25 / 0.6);
 }
 
 .tx-root .tx-segmented button {
@@ -908,7 +913,7 @@
   line-height: 0.8;
   letter-spacing: -0.06em;
   color: transparent;
-  -webkit-text-stroke: 1px rgb(102 217 247 / 0.16);
+  -webkit-text-stroke: 1px rgb(242 179 94 / 0.16);
   pointer-events: none;
   user-select: none;
 }
@@ -1010,7 +1015,7 @@
   padding: 10px 18px;
   border: 1px solid var(--tx-line-strong);
   border-radius: 999px;
-  background: rgb(5 7 11 / 0.55);
+  background: rgb(11 15 25 / 0.55);
   font-family: var(--tx-mono);
   font-size: 14px;
   white-space: nowrap;
@@ -1118,7 +1123,7 @@
 }
 
 .tx-root .tx-track-card:hover {
-  border-color: rgb(102 217 247 / 0.45);
+  border-color: rgb(242 179 94 / 0.45);
 }
 
 .tx-root .tx-track-index {
@@ -1190,7 +1195,7 @@
   padding: 10px 12px;
   border: 1px solid var(--tx-line-strong);
   border-radius: 10px;
-  background: rgb(5 7 11 / 0.92);
+  background: rgb(11 15 25 / 0.92);
   font-family: var(--tx-mono);
   font-size: 12px;
   color: var(--tx-ink);
@@ -1218,7 +1223,7 @@
 /* ---------- midnight: the day turns over ---------- */
 .tx-root .tx-clock[data-midnight='true'] .tx-clock-time {
   color: var(--tx-ink);
-  text-shadow: 0 0 18px rgb(102 217 247 / 0.65);
+  text-shadow: 0 0 18px rgb(242 179 94 / 0.65);
   animation: tx-strike 1.2s var(--tx-ease) both;
 }
 
@@ -1227,7 +1232,7 @@
 }
 
 .tx-root[data-midnight='true'] .tx-begin .tx-h2 {
-  text-shadow: 0 0 42px rgb(102 217 247 / 0.28);
+  text-shadow: 0 0 42px rgb(242 179 94 / 0.28);
   transition: text-shadow 1.2s var(--tx-ease);
 }
 
@@ -1361,11 +1366,11 @@
 .wakaclock-marketing:has(.tx-root[data-onstage='true']:not([data-dawn='true'])) .axis-nav {
   --mkt-fg: #eef1f4;
   --mkt-fg-muted: #9aa5b1;
-  --mkt-accent: #66d9f7;
+  --mkt-accent: #f2b35e;
   --mkt-border: rgb(238 241 244 / 0.24);
 
   border-bottom-color: rgb(238 241 244 / 0.12);
-  background: rgb(5 7 11 / 0.86);
+  background: rgb(11 15 25 / 0.86);
   color: #eef1f4;
 }
 
@@ -1557,13 +1562,13 @@ html.lenis.lenis-smooth {
 @keyframes tx-cta-glow {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgb(102 217 247 / 0.45);
+    box-shadow: 0 0 0 0 rgb(242 179 94 / 0.45);
   }
 
   50% {
     box-shadow:
-      0 0 0 10px rgb(102 217 247 / 0),
-      0 0 48px 4px rgb(102 217 247 / 0.45);
+      0 0 0 10px rgb(242 179 94 / 0),
+      0 0 48px 4px rgb(242 179 94 / 0.45);
   }
 }
 
@@ -1681,7 +1686,7 @@ html.lenis.lenis-smooth {
   line-height: 1;
   letter-spacing: -0.03em;
   color: var(--tx-ink);
-  text-shadow: 0 0 42px rgb(102 217 247 / 0.18);
+  text-shadow: 0 0 42px rgb(242 179 94 / 0.18);
 }
 
 .tx-root .tx-intro-label {
@@ -1739,7 +1744,7 @@ html.lenis.lenis-smooth {
     var(--tx-lime) 70%,
     transparent
   );
-  box-shadow: 0 0 24px 2px rgb(102 217 247 / 0.55);
+  box-shadow: 0 0 24px 2px rgb(242 179 94 / 0.55);
   opacity: 0;
   transform: scaleX(0);
 }
@@ -1879,6 +1884,6 @@ html.lenis.lenis-smooth {
   }
 
   .tx-root[data-midnight='true'] .tx-begin .tx-btn--primary {
-    box-shadow: 0 0 36px 2px rgb(102 217 247 / 0.4);
+    box-shadow: 0 0 36px 2px rgb(242 179 94 / 0.4);
   }
 }

@@ -1,54 +1,84 @@
 'use client';
 
-/* eslint-disable react/no-unknown-property -- React Three Fiber elements take three.js props. */
-
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { PerformanceMonitor } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Bloom, EffectComposer } from '@react-three/postprocessing';
-import { NoToneMapping, SRGBColorSpace } from 'three';
+import { ACESFilmicToneMapping, PCFSoftShadowMap, SRGBColorSpace } from 'three';
 
-import { generateDemoDays } from '../time-data';
+import { COMPATIBLE_EDITORS } from '../../editor-wall.data';
+import { type ActivitySlice, generateDemoDays } from '../time-data';
 import { setTimeUi, timeMotion } from '../time-store';
+import { AiWind, Spray, VoyageDirector, VoyageLights } from '../voyage/director';
+import { Ocean, SkyDome } from '../voyage/environment';
+import { HotspotProjector } from '../voyage/hotspot-projector';
+import { Islands } from '../voyage/islands';
+import { ChipLog, Helm, Lanterns } from '../voyage/log-props';
+import { PlaceEffects } from '../voyage/place-fx';
+import { Ship } from '../voyage/ship';
+import { Wake } from '../voyage/wake';
 
-import { Atmosphere } from './atmosphere';
-import { Burst } from './burst';
-import { CodeFragments } from './code-fragments';
-import { IntelligenceCore } from './core';
-import { Galaxy } from './galaxy';
-import { Dust, Heartbeats } from './heartbeats';
-import { Helix } from './helix';
-import { BLOOM_BASE, MidnightDirector } from './midnight-director';
-import { PointerProbe } from './pointer-probe';
-import { SCENE } from './scene-palette';
-import { Shockwaves } from './shockwaves';
+import { MidnightDirector } from './midnight-director';
 import { TimeRig } from './time-rig';
-import { TimeRings } from './time-rings';
-import { TimeTunnel } from './tunnel';
 
 import type { TimeSceneQuality } from '../time-quality';
 import type { BloomEffect } from 'postprocessing';
 
-/** Below this monitor factor (sustained slow frames) the bloom pass is dropped. */
-const BLOOM_MIN_FACTOR = 0.5;
-
 /** Seconds of motion the scene's clock starts with, so every cycle opens mid-flight. */
 const WARM_START_SECONDS = 3600;
 
+/** Frames between mounting one part of the scene and the next. */
+const STAGE_GAP = 2;
+const STAGES = 4;
+
 /**
- * Marks the scene ready after its first rendered frame, so the still can fade out, and
- * moves its clock on: the code and the helix are mid-cycle, as if long under way.
+ * Builds the scene a part at a time and draws nothing until all of it is ready.
+ *
+ * Mounting everything in one frame meant building every geometry and compiling every shader
+ * inside it: a freeze of a few hundred milliseconds right as the page appears. Here the sea
+ * and sky mount first, then the ship, then the islands, then the effects, a couple of frames
+ * apart; the shaders compile off the main thread (`compileAsync`); and only then does the
+ * first frame draw and the still fade out. Rendering is taken over (priority 1) so that
+ * nothing is drawn, and so nothing compiles synchronously, before that.
  */
-function FirstFrame() {
-  const done = useRef(false);
-  useFrame(({ clock }) => {
-    if (done.current) return;
-    done.current = true;
-    clock.elapsedTime += WARM_START_SECONDS;
-    setTimeUi({ sceneStatus: 'ready' });
-  });
-  return null;
+function useStagedScene() {
+  const [stage, setStage] = useState(0);
+  const compiled = useRef(false);
+  const compiling = useRef(false);
+  const shown = useRef(0);
+  const waited = useRef(0);
+  useFrame(({ camera, clock, gl, scene }) => {
+    if (compiled.current) {
+      gl.render(scene, camera);
+      // The first draw uploads every buffer and texture: let it pass unseen, and reveal the
+      // scene (and start its opening move) on the clean frame after it.
+      if (shown.current === 1) {
+        clock.elapsedTime += WARM_START_SECONDS;
+        setTimeUi({ sceneStatus: 'ready' });
+      }
+      if (shown.current < 2) shown.current += 1;
+      return;
+    }
+    if (stage < STAGES) {
+      waited.current += 1;
+      if (waited.current >= STAGE_GAP) {
+        waited.current = 0;
+        setStage(stage + 1);
+      }
+      return;
+    }
+    if (compiling.current) return;
+    compiling.current = true;
+    const finish = () => {
+      compiled.current = true;
+    };
+    // Older three builds and test renderers have no async compile: fall back to drawing.
+    const compile = (gl as { compileAsync?: (scene: unknown, camera: unknown) => Promise<unknown> })
+      .compileAsync;
+    if (compile) void compile.call(gl, scene, camera).then(finish, finish);
+    else finish();
+  }, 1);
+  return stage;
 }
 
 /**
@@ -62,12 +92,9 @@ function Invalidator() {
     const settling =
       Math.abs(m.target - m.current) > 1e-4 ||
       Math.abs(m.dayTarget - m.dayCurrent) > 1e-4 ||
-      Math.abs(m.dawnTarget - m.daylight) > 1e-3 ||
       m.warp > 1e-3 ||
       Math.abs(m.handSpeed) > 0.5 ||
       (m.collapse > 0 && m.collapse < 1) ||
-      (m.wave > 0 && m.wave < 1) ||
-      m.pulseAge < 1.2 ||
       m.wake < 1;
     if (settling) invalidate();
   });
@@ -85,10 +112,47 @@ function Invalidator() {
   return null;
 }
 
+function Scene({ quality, slices }: { quality: TimeSceneQuality; slices: ActivitySlice[] }) {
+  const stage = useStagedScene();
+  // The midnight ending still runs (the clock reads 00:00), without a bloom pass to drive.
+  const noBloom = useRef<BloomEffect | null>(null);
+  return (
+    <>
+      <TimeRig parallax={quality.parallax} />
+      <VoyageDirector lanterns={COMPATIBLE_EDITORS.length} slices={slices} />
+      <MidnightDirector bloom={noBloom} />
+      <Invalidator />
+      <VoyageLights shadows={quality.shadows} />
+      <SkyDome />
+      <Ocean segments={quality.oceanSegments} />
+      {stage >= 1 ? (
+        <>
+          <Wake />
+          <ChipLog slices={slices} />
+          <Ship>
+            <Helm slices={slices} />
+            <Lanterns />
+          </Ship>
+        </>
+      ) : null}
+      {stage >= 2 ? <Islands detail={quality.islandDetail} slices={slices} /> : null}
+      {stage >= 3 ? (
+        <>
+          <PlaceEffects particles={quality.fxParticles} />
+          <Spray count={quality.spray} />
+          <AiWind count={quality.wind} />
+        </>
+      ) : null}
+      <HotspotProjector />
+    </>
+  );
+}
+
 /**
- * The Code Universe: the Intelligence Core with today's 24-hour dial in its plane, the week
- * receding behind it, the project galaxy and the time tunnel. Loaded with
- * `next/dynamic` after first paint, so none of three.js is on the critical path.
+ * The Voyage Log (owner decision 2026-11-14): a pirate ship crossing a living sunset ocean,
+ * whose wake carries the chip log — one lit marker per demo heartbeat. Loaded with
+ * `next/dynamic` after first paint, so none of three.js is on the critical path. No text is
+ * drawn anywhere in the scene.
  */
 export default function TimeCanvas({
   mode,
@@ -98,16 +162,12 @@ export default function TimeCanvas({
   quality: TimeSceneQuality;
 }) {
   const slices = useMemo(() => generateDemoDays(quality.days), [quality.days]);
-  // Opens at the tier's full quality; the monitor only steps it down on sustained slow
-  // frames. (Starting at half and climbing took ~10 s to look right on a fast machine.)
   const [factor, setFactor] = useState(1);
-  const [bloom, setBloom] = useState(quality.bloom);
   const dpr = 1 + factor * (quality.maxDpr - 1);
-  const bloomEffect = useRef<BloomEffect | null>(null);
 
   return (
     <Canvas
-      camera={{ fov: 36, near: 0.1, far: 140, position: [3.8, 2.2, 26] }}
+      camera={{ fov: 38, near: 0.1, far: 4000, position: [26, 7, 34] }}
       dpr={dpr}
       frameloop={mode}
       gl={{
@@ -116,53 +176,20 @@ export default function TimeCanvas({
         powerPreference: 'high-performance',
         stencil: false,
         outputColorSpace: SRGBColorSpace,
-        // Colours are matched to the page's CSS tokens, so no tone mapping.
-        toneMapping: NoToneMapping,
+        toneMapping: ACESFilmicToneMapping,
       }}
+      shadows={quality.shadows ? { type: PCFSoftShadowMap } : false}
     >
-      <color args={[SCENE.bg]} attach="background" />
-      {/* Haze: the void swallows distance, so depth reads in layers. */}
-      <fog args={[SCENE.bg, 14, 62]} attach="fog" />
-      {/* Adaptive quality: lower the pixel ratio when frames drop, raise it when they
-          recover. No flip-flop fallback: drei counts every step up as a flip, so a fast
-          machine climbing back to full quality would trip it and lose the glow for good. */}
+      {/* Lowers the resolution only if the device cannot hold the frame rate, in a few
+          coarse steps: every change reallocates the drawing buffer, which is itself a hitch. */}
       <PerformanceMonitor
-        bounds={() => [45, 58]}
+        bounds={() => [40, 58]}
         factor={1}
-        onChange={({ factor: next }) => {
-          setFactor(next);
-          // Struggling device: the expensive glow goes for good once the resolution has
-          // already been cut well down.
-          if (next < BLOOM_MIN_FACTOR) setBloom(false);
-        }}
+        flipflops={2}
+        onChange={({ factor: next }) => setFactor(Math.round(next * 4) / 4)}
+        onFallback={() => setFactor(0.5)}
       />
-      <TimeRig parallax={quality.parallax} />
-      <Atmosphere shafts={quality.bloom || quality.parallax} />
-      <Invalidator />
-      <MidnightDirector bloom={bloomEffect} />
-      <IntelligenceCore debris={quality.debris} shell={quality.parallax} />
-      <TimeRings bloom={bloom} days={quality.days} slices={slices} />
-      <Galaxy maxNodes={quality.galaxyNodes} slices={slices} />
-      <TimeTunnel days={quality.days} maxPulses={quality.particles * 2} slices={slices} />
-      <Shockwaves />
-      <CodeFragments count={quality.parallax ? 8 : 4} dim={bloom} slices={slices} />
-      <Helix count={quality.particles} dim={bloom} />
-      <Heartbeats count={quality.particles} slices={slices} />
-      <Burst count={quality.particles + 60} />
-      <Dust count={quality.particles * 2} days={quality.days} interactive={quality.parallax} />
-      {quality.parallax ? <PointerProbe slices={slices} /> : null}
-      {bloom ? (
-        <EffectComposer multisampling={4}>
-          <Bloom
-            intensity={BLOOM_BASE}
-            luminanceSmoothing={0.25}
-            luminanceThreshold={0.32}
-            mipmapBlur
-            ref={bloomEffect}
-          />
-        </EffectComposer>
-      ) : null}
-      <FirstFrame />
+      <Scene quality={quality} slices={slices} />
     </Canvas>
   );
 }

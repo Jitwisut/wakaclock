@@ -57,11 +57,9 @@ describe('awakening', () => {
 });
 
 describe('camera and visibility', () => {
-  it('keeps one composition per chapter and ends deep in the tunnel facing the core', () => {
+  it('keeps one camera composition per chapter', () => {
+    // The homepage now sails the Voyage Log; the chapter count is the contract that stays.
     expect(CAMERA_KEYS).toHaveLength(6);
-    const last = CAMERA_KEYS.at(-1);
-    expect(last?.pos[2]).toBeLessThan(TUNNEL_START);
-    expect(last?.look).toEqual([0, 0, 0]);
   });
 
   it('shows the galaxy around chapter 03 and the tunnel from chapter 05', () => {

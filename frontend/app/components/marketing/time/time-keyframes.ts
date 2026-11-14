@@ -33,20 +33,19 @@ export const RING_SPACING = 2.4;
 type Vec3 = readonly [number, number, number];
 
 export const CAMERA_KEYS: readonly { look: Vec3; pos: Vec3 }[] = [
-  // 01 — the awakening: a three-quarter establishing shot of the Intelligence Core, which
-  // fills the right of the frame beside the headline.
-  { pos: [4.4, 2.4, 17.5], look: [-3.6, 0.2, 0] },
-  // 02 — heartbeats: a dolly in, low and close along the machinery, text on the right.
-  { pos: [-5.2, -1.4, 8.8], look: [2.8, -0.2, -1.2] },
-  // 03 — one day, every project: pulled wide and high so the receding days and the
-  // project galaxy share the frame around a centred statement.
-  { pos: [9.5, 7.5, 17], look: [0, 0, -9] },
-  // 04 — human + AI: a slow orbit to the other flank, oblique across the stack.
-  { pos: [-9, -3.6, 7.5], look: [1.5, 0.4, -6] },
-  // 05 — the product: inside the time tunnel, travelling back through the week.
-  { pos: [0.4, 0.5, -26], look: [0, -0.1, -48] },
-  // 06 — begin: deep in the tunnel, turned around — the core burns at the far end.
-  { pos: [0.9, -0.8, -58], look: [0, 0, 0] },
+  // 01 — golden hour: a three-quarter establishing shot, the ship on the right of the frame
+  // with the low sun behind her sails.
+  { pos: [34, 6.8, 42], look: [-9, 8.8, -4] },
+  // 02 — heartbeats: off the quarter, the stern lanterns and the chip log streaming astern.
+  { pos: [-3.5, 4.6, 12.5], look: [-17, 1.4, -6] },
+  // 03 — one day: over the helmsman's shoulder, the 24-spoke wheel in front of the ship.
+  { pos: [-9.9, 5.7, 1.1], look: [-6.2, 3.7, 0] },
+  // 04 — human + AI: low off the stern quarter, looking up into the sails and the wind.
+  { pos: [-17, 3.2, 17], look: [2, 10, -2] },
+  // 05 — the product: low over the wake, flying back through earlier days of the log.
+  { pos: [-32, 2.6, 4], look: [-78, 0.4, -1] },
+  // 06 — night: far astern and wide, the lit ship sailing on along her own log.
+  { pos: [-72, 9.5, 27], look: [-9, 5.5, 0] },
 ];
 
 /**
@@ -173,14 +172,14 @@ export function onRingBand(x: number, y: number, tolerance = 0.3): boolean {
  */
 export const DAY_CAMERA_KEYS: readonly { look: Vec3; pos: Vec3 }[] = [
   CAMERA_KEYS[CAMERA_KEYS.length - 1] as { look: Vec3; pos: Vec3 },
-  // Out of the tunnel's mouth, still facing the core.
-  { pos: [-2.5, 1.8, -14], look: [0, 0, 0] },
-  // A long lateral pass beside the machinery.
-  { pos: [-15, 3, 4], look: [0, 0, -2] },
-  // High above, the galaxy spread beneath.
-  { pos: [4, 20, 10], look: [0, 0, -10] },
-  // Back to a calm wide view of the whole system.
-  { pos: [12, 2, 20], look: [-1, 0, -4] },
+  // Drawing alongside in the dark, the lanterns and the wake in view.
+  { pos: [-38, 13, 40], look: [0, 6, 0] },
+  // Ahead of the bow, the ship coming on.
+  { pos: [34, 10, 32], look: [0, 8, 0] },
+  // High, the whole log trailing behind her.
+  { pos: [20, 34, 26], look: [-20, 2, 0] },
+  // Back to a calm wide view.
+  { pos: [24, 6, 36], look: [-4, 8, -2] },
 ];
 
 /** Spline parameter along the day path for a 0–1 progress through the lower page. */

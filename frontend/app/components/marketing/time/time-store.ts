@@ -43,6 +43,14 @@ export const timeMotion = {
   daylight: 0,
   /** The core's awakening, 0 → 1 once from the scene's first frame (see time-rig). */
   wake: 0,
+  /**
+   * World mode (the archipelago): the camera visits places instead of following the scroll.
+   * `place` is the id being visited ('' = the map view).
+   */
+  world: false,
+  place: '',
+  /** Position along the world's scroll tour: 0 = the map, 1… = the stops (fractions between). */
+  tour: 0,
 };
 
 const MOTION_DEFAULTS = { ...timeMotion };

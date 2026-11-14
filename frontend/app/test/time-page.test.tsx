@@ -788,7 +788,7 @@ describe('TimeStage', () => {
     expect(screen.getByRole('status')).toHaveTextContent(TIME_COPY.en.loader.skipped);
   });
 
-  it('loads the scene when idle, pauses it off screen and tracks the chapter', () => {
+  it('loads the scene when idle, keeps the world running and tracks the chapter', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({} as RenderingContext);
     Object.assign(window, {
       requestIdleCallback: (run: () => void) => (run(), 1),
@@ -807,7 +807,8 @@ describe('TimeStage', () => {
 
     const visibility = observers.find((record) => record.targets[0]?.id === 'tx-chapters');
     intersect(visibility as ObserverRecord, root, false);
-    expect(screen.getByTestId('time-canvas')).toHaveAttribute('data-mode', 'demand');
+    // The archipelago is the whole page in world mode: it never drops to on-demand frames.
+    expect(screen.getByTestId('time-canvas')).toHaveAttribute('data-mode', 'always');
     act(() => {
       (visibility as ObserverRecord).callback([], {} as IntersectionObserver);
     });

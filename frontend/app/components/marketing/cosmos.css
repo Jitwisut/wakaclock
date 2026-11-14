@@ -10,19 +10,19 @@
 
 .wakaclock-marketing {
   /* Palette — the only raw colours in this layer. */
-  --cx-void: #05070b;
-  --cx-deep: #080b10;
-  --cx-graphite: #10141b;
-  --cx-metal: #242b35;
-  --cx-ink: #eef1f4;
-  --cx-muted: #87929f;
-  --cx-soft: #b4bdc7;
-  --cx-cyan: #66d9f7;
-  --cx-amber: #e8a66a;
+  --cx-void: #0b0f19;
+  --cx-deep: #0e1320;
+  --cx-graphite: #151b2a;
+  --cx-metal: #2a3245;
+  --cx-ink: #f4ede3;
+  --cx-muted: #9ba3b3;
+  --cx-soft: #cbc4ba;
+  --cx-sun: #f2b35e;
+  --cx-sea: #4fc9bd;
   --cx-line: rgb(238 241 244 / 0.08);
   --cx-line-strong: rgb(238 241 244 / 0.16);
-  --cx-cyan-glow: rgb(102 217 247 / 0.14);
-  --cx-amber-glow: rgb(232 166 106 / 0.12);
+  --cx-sun-glow: rgb(242 179 94 / 0.14);
+  --cx-sea-glow: rgb(79 201 189 / 0.12);
   --cx-ease: cubic-bezier(0.22, 1, 0.36, 1);
 
   /* Type */
@@ -39,12 +39,12 @@
   --mkt-fg-muted: var(--cx-muted);
   --mkt-border: var(--cx-line-strong);
   --mkt-border-soft: var(--cx-line);
-  --mkt-accent: var(--cx-cyan);
-  --mkt-accent-fg: #021218;
-  --mkt-accent-soft: rgb(102 217 247 / 0.09);
-  --mkt-highlight-soft: rgb(102 217 247 / 0.09);
+  --mkt-accent: var(--cx-sun);
+  --mkt-accent-fg: #1d1206;
+  --mkt-accent-soft: rgb(242 179 94 / 0.09);
+  --mkt-highlight-soft: rgb(242 179 94 / 0.09);
   --mkt-code-bg: var(--cx-deep);
-  --mkt-code-fg: #bfeffb;
+  --mkt-code-fg: #ffe3b8;
   --mkt-danger: #f19a8a;
 
   --axis-gutter: clamp(20px, 5vw, 88px);
@@ -66,15 +66,15 @@
     line-height: 1.3;
   }
   & ::selection {
-    background: rgb(102 217 247 / 0.28);
+    background: rgb(242 179 94 / 0.28);
     color: var(--cx-ink);
   }
   & :is(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-    outline: 2px solid var(--cx-cyan);
+    outline: 2px solid var(--cx-sun);
     outline-offset: 3px;
   }
   & a {
-    text-decoration-color: rgb(102 217 247 / 0.45);
+    text-decoration-color: rgb(242 179 94 / 0.45);
   }
   & code,
   & pre,
@@ -82,7 +82,7 @@
     font-family: var(--cx-mono);
   }
   & .axis-skip {
-    background: var(--cx-cyan);
+    background: var(--cx-sun);
     color: var(--mkt-accent-fg);
   }
 
@@ -120,17 +120,17 @@
   }
   & input:not([type='checkbox']):focus,
   & select:focus {
-    border-color: var(--cx-cyan) !important;
+    border-color: var(--cx-sun) !important;
   }
   & input[type='checkbox'] {
-    accent-color: var(--cx-cyan);
+    accent-color: var(--cx-sun);
   }
 }
 
 /* ─── Navigation: a minimal command line across the top of the frame ──────────────────── */
 .wakaclock-marketing {
   & .axis-nav {
-    background: rgb(5 7 11 / 0.72);
+    background: rgb(11 15 25 / 0.72);
     backdrop-filter: blur(16px) saturate(1.2);
     -webkit-backdrop-filter: blur(16px) saturate(1.2);
     border-bottom: 1px solid var(--cx-line);
@@ -189,8 +189,8 @@
     height: 4px;
     margin-left: -2px;
     border-radius: 50%;
-    background: var(--cx-cyan);
-    box-shadow: 0 0 10px var(--cx-cyan);
+    background: var(--cx-sun);
+    box-shadow: 0 0 10px var(--cx-sun);
   }
   & .axis-nav-controls {
     margin-left: 8px;
@@ -208,7 +208,7 @@
   & .axis-nav-login {
     min-height: 34px !important;
     padding: 0 16px;
-    border: 1px solid rgb(102 217 247 / 0.5);
+    border: 1px solid rgb(242 179 94 / 0.5);
     border-radius: 2px;
     color: var(--cx-ink);
     font-family: var(--cx-mono);
@@ -226,8 +226,8 @@
     font-size: 13px !important;
   }
   & .axis-nav-login:hover {
-    background: var(--cx-cyan-glow);
-    border-color: var(--cx-cyan);
+    background: var(--cx-sun-glow);
+    border-color: var(--cx-sun);
   }
   & .axis-menu-toggle span {
     width: 20px;
@@ -257,13 +257,13 @@
   }
   & .axis-nav-expanded li a:hover,
   & .axis-nav-expanded li a[aria-current] {
-    color: var(--cx-cyan);
+    color: var(--cx-sun);
     padding-left: 10px;
   }
   & .axis-nav-expanded li a > span:first-child {
     font-family: var(--cx-mono);
     font-size: 11px;
-    color: var(--cx-amber);
+    color: var(--cx-sea);
     min-width: 2.4em;
   }
   & .axis-menu-brand {
@@ -275,7 +275,7 @@
   }
   & .axis-action {
     border-radius: 2px;
-    background: var(--cx-cyan);
+    background: var(--cx-sun);
     color: var(--mkt-accent-fg);
     font-weight: 600;
   }
@@ -283,7 +283,7 @@
 @supports (animation-timeline: scroll()) {
   @media (prefers-reduced-motion: no-preference) {
     .wakaclock-marketing .axis-nav::after {
-      background: linear-gradient(90deg, var(--cx-cyan), var(--cx-amber));
+      background: linear-gradient(90deg, var(--cx-sun), var(--cx-sea));
       height: 1px;
       opacity: 0.8;
     }
@@ -310,15 +310,15 @@
     aspect-ratio: 1;
     border-radius: 50%;
     background:
-      radial-gradient(circle at 50% 50%, rgb(102 217 247 / 0.22) 0 0.6%, transparent 1.4%),
-      radial-gradient(circle at 50% 50%, rgb(102 217 247 / 0.08), transparent 18%),
+      radial-gradient(circle at 50% 50%, rgb(242 179 94 / 0.22) 0 0.6%, transparent 1.4%),
+      radial-gradient(circle at 50% 50%, rgb(242 179 94 / 0.08), transparent 18%),
       repeating-radial-gradient(
         circle at 50% 50%,
         transparent 0 13.6%,
         rgb(238 241 244 / 0.06) 13.6% 13.75%,
         transparent 13.75% 19%
       ),
-      radial-gradient(circle at 70% 30%, rgb(232 166 106 / 0.08), transparent 42%);
+      radial-gradient(circle at 70% 30%, rgb(79 201 189 / 0.08), transparent 42%);
     mask-image: radial-gradient(circle at 50% 50%, #000 20%, transparent 62%);
     transform: perspective(1200px) rotateX(64deg) rotateZ(-18deg);
     opacity: 0.9;
@@ -367,7 +367,7 @@
     grid-area: rule;
     height: 1px;
     margin: clamp(28px, 4vh, 48px) 0;
-    background: linear-gradient(90deg, var(--cx-cyan) 0 64px, var(--cx-line-strong) 64px);
+    background: linear-gradient(90deg, var(--cx-sun) 0 64px, var(--cx-line-strong) 64px);
   }
   & .mkt-page-intro > p:first-child:not(.axis-page-lead) {
     grid-area: badge;
@@ -375,7 +375,7 @@
     margin-bottom: 28px;
     padding: 6px 10px;
     border: 1px solid var(--cx-line-strong) !important;
-    color: var(--cx-amber) !important;
+    color: var(--cx-sea) !important;
     font-family: var(--cx-mono);
     font-size: 11px;
     letter-spacing: 0.08em;
@@ -464,7 +464,7 @@
     font-size: 12px;
   }
   & .mkt-page-art figcaption > span {
-    color: var(--cx-amber);
+    color: var(--cx-sea);
     font-family: var(--cx-mono);
     letter-spacing: 0.1em;
   }
@@ -500,7 +500,7 @@
     font-size: 10px;
     letter-spacing: 0.16em;
     text-transform: uppercase;
-    color: var(--cx-amber);
+    color: var(--cx-sea);
   }
   & .mkt-index-label:lang(th) {
     letter-spacing: 0;
@@ -543,14 +543,14 @@
     color: var(--cx-ink);
   }
   & .mkt-page-index a:hover::before {
-    background: var(--cx-cyan);
-    border-color: var(--cx-cyan);
-    box-shadow: 0 0 10px var(--cx-cyan);
+    background: var(--cx-sun);
+    border-color: var(--cx-sun);
+    box-shadow: 0 0 10px var(--cx-sun);
   }
   & .mkt-page-index a span {
     font-family: var(--cx-mono);
     font-size: 10px;
-    color: var(--cx-cyan);
+    color: var(--cx-sun);
   }
   & .mkt-page-content {
     max-width: 920px;
@@ -585,7 +585,7 @@
     font-size: 11px;
     font-weight: 400;
     letter-spacing: 0.1em;
-    color: var(--cx-cyan);
+    color: var(--cx-sun);
   }
   & .axis-chapter-copy {
     font-size: 15.5px;
@@ -617,7 +617,7 @@
     top: 0.72em;
     width: 8px;
     height: 1px;
-    background: var(--cx-cyan);
+    background: var(--cx-sun);
   }
   & .axis-chapter-copy figure {
     border: 1px solid var(--cx-line-strong) !important;
@@ -644,7 +644,7 @@
     font-weight: 400;
     letter-spacing: 0.14em;
     text-transform: uppercase;
-    color: var(--cx-amber);
+    color: var(--cx-sea);
   }
   & .mkt-related h2:lang(th) {
     letter-spacing: 0;
@@ -664,14 +664,14 @@
     letter-spacing: -0.01em;
   }
   & .axis-related-link::before {
-    background: linear-gradient(90deg, var(--cx-cyan), transparent);
+    background: linear-gradient(90deg, var(--cx-sun), transparent);
   }
   & .axis-related-link::after {
     content: '→';
     content: '→' / '';
     font-size: 18px;
     top: 26px;
-    color: var(--cx-cyan);
+    color: var(--cx-sun);
   }
   & .mkt-page-provenance {
     border-color: var(--cx-line);
@@ -736,7 +736,7 @@
     font-family: var(--cx-mono) !important;
     font-size: 12px !important;
     letter-spacing: 0.1em;
-    color: var(--cx-cyan) !important;
+    color: var(--cx-sun) !important;
     background: transparent !important;
     border: 0 !important;
   }
@@ -767,7 +767,7 @@
     font-family: var(--cx-mono);
     font-weight: 400;
     font-size: 12px;
-    color: var(--cx-cyan);
+    color: var(--cx-sun);
   }
   & :is(.axis-briefing, .axis-evidence) dt strong:lang(th) {
     font-family: var(--cx-text);
@@ -788,7 +788,7 @@
     top: 0.72em;
     width: 8px;
     height: 1px;
-    background: var(--cx-cyan);
+    background: var(--cx-sun);
   }
 
   /* Comparison: a readout table, AtoAxis column lit from within. */
@@ -814,8 +814,8 @@
   }
   & #compare td[style] {
     box-shadow:
-      inset 1px 0 0 rgb(102 217 247 / 0.25),
-      inset -1px 0 0 rgb(102 217 247 / 0.25);
+      inset 1px 0 0 rgb(242 179 94 / 0.25),
+      inset -1px 0 0 rgb(242 179 94 / 0.25);
   }
 
   /* Pricing: the number is the hero; the offer is an instrument panel. */
@@ -835,7 +835,7 @@
     border-radius: 2px;
     box-shadow:
       0 0 0 1px rgb(0 0 0 / 0.4),
-      0 40px 80px -40px rgb(102 217 247 / 0.18);
+      0 40px 80px -40px rgb(242 179 94 / 0.18);
   }
   & .axis-pricing-offer::before {
     content: '';
@@ -844,7 +844,7 @@
     right: 24px;
     top: -1px;
     height: 1px;
-    background: linear-gradient(90deg, transparent, var(--cx-cyan), transparent);
+    background: linear-gradient(90deg, transparent, var(--cx-sun), transparent);
   }
   & .axis-billing button {
     border-radius: 2px !important;
@@ -885,18 +885,18 @@
   & .axis-faq-toggle {
     background: transparent;
     border: 1px solid var(--cx-line-strong);
-    color: var(--cx-cyan);
+    color: var(--cx-sun);
     font-size: 18px;
   }
   & .axis-faq-row[open] .axis-faq-toggle {
-    border-color: var(--cx-cyan);
-    box-shadow: 0 0 14px rgb(102 217 247 / 0.25);
+    border-color: var(--cx-sun);
+    box-shadow: 0 0 14px rgb(242 179 94 / 0.25);
   }
 
   /* Sign-up */
   & .axis-signup-layout button[type='submit'] {
     border-radius: 2px;
-    background: var(--cx-cyan) !important;
+    background: var(--cx-sun) !important;
     color: var(--mkt-accent-fg) !important;
     border: 0 !important;
   }
@@ -904,8 +904,8 @@
   /* Closing call: a horizon with the core rising. */
   & .axis-cta {
     background:
-      radial-gradient(ellipse 60% 70% at 50% 120%, rgb(102 217 247 / 0.16), transparent 70%),
-      radial-gradient(ellipse 40% 50% at 85% 0%, rgb(232 166 106 / 0.08), transparent 70%),
+      radial-gradient(ellipse 60% 70% at 50% 120%, rgb(242 179 94 / 0.16), transparent 70%),
+      radial-gradient(ellipse 40% 50% at 85% 0%, rgb(79 201 189 / 0.08), transparent 70%),
       var(--cx-void);
     border-top: 1px solid var(--cx-line);
     padding-block: clamp(96px, 16vh, 180px);
@@ -913,7 +913,7 @@
   & .axis-cta::before {
     inset: auto -10% -60% -10%;
     height: 120%;
-    border: 1px solid rgb(102 217 247 / 0.14);
+    border: 1px solid rgb(242 179 94 / 0.14);
     border-bottom: 0;
     border-radius: 50% 50% 0 0;
     transform: none;
@@ -923,7 +923,7 @@
   }
   & .axis-cta-link {
     border-radius: 2px;
-    background: var(--cx-cyan);
+    background: var(--cx-sun);
     color: var(--mkt-accent-fg);
     font-family: var(--cx-mono);
     font-size: 12px;
@@ -931,8 +931,8 @@
     letter-spacing: 0.1em;
     text-transform: uppercase;
     box-shadow:
-      0 0 0 1px rgb(102 217 247 / 0.4),
-      0 16px 40px -12px rgb(102 217 247 / 0.45);
+      0 0 0 1px rgb(242 179 94 / 0.4),
+      0 16px 40px -12px rgb(242 179 94 / 0.45);
   }
   & .axis-cta-link:lang(th) {
     font-family: var(--cx-text);
@@ -959,7 +959,7 @@
   }
   & #answer-guide thead th,
   & #answer-guide dt {
-    color: var(--cx-cyan);
+    color: var(--cx-sun);
     font-family: var(--cx-mono);
     font-size: 12px;
     font-weight: 400;
@@ -969,7 +969,7 @@
     font-size: 13px;
   }
   & #answer-guide figure.border-l-2 {
-    border-color: var(--cx-amber);
+    border-color: var(--cx-sea);
   }
 
   /* Campaign (/join) and success pages share the title block's voice. */
@@ -985,7 +985,7 @@
     border-color: var(--cx-line);
   }
   & .axis-campaign-value > span {
-    color: var(--cx-cyan);
+    color: var(--cx-sun);
     font-family: var(--cx-mono);
     font-size: 14px;
   }
@@ -995,8 +995,8 @@
     border-radius: 2px;
   }
   & .mkt-success-mark {
-    color: var(--cx-cyan);
-    text-shadow: 0 0 24px rgb(102 217 247 / 0.6);
+    color: var(--cx-sun);
+    text-shadow: 0 0 24px rgb(242 179 94 / 0.6);
   }
 }
 
@@ -1006,7 +1006,7 @@
     color: var(--cx-ink);
   }
   & .axis-scroll-index details {
-    background: rgb(16 20 27 / 0.9);
+    background: rgb(21 27 42 / 0.9);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     border: 1px solid var(--cx-line-strong);
@@ -1016,7 +1016,7 @@
   & .axis-scroll-index details::after {
     left: 0;
     right: 0;
-    background: var(--cx-cyan);
+    background: var(--cx-sun);
     height: 1px;
   }
   & .axis-index-label {
@@ -1030,7 +1030,7 @@
     text-transform: none;
   }
   & .axis-index-orbit {
-    color: var(--cx-cyan);
+    color: var(--cx-sun);
   }
   & .axis-scroll-index nav {
     background: var(--cx-graphite);
@@ -1043,9 +1043,9 @@
     color: var(--cx-soft);
   }
   & .axis-scroll-index nav a[aria-current] {
-    background: rgb(102 217 247 / 0.08);
+    background: rgb(242 179 94 / 0.08);
     color: var(--cx-ink);
-    box-shadow: inset 2px 0 0 var(--cx-cyan);
+    box-shadow: inset 2px 0 0 var(--cx-sun);
   }
 
   & .axis-footer {
@@ -1069,7 +1069,7 @@
     letter-spacing: -0.06em;
     color: transparent;
     -webkit-text-stroke: 1px rgb(238 241 244 / 0.09);
-    background: linear-gradient(180deg, rgb(102 217 247 / 0.12), transparent 70%);
+    background: linear-gradient(180deg, rgb(242 179 94 / 0.12), transparent 70%);
     background-clip: text;
     -webkit-background-clip: text;
     white-space: nowrap;
@@ -1096,7 +1096,7 @@
     font-weight: 400;
     letter-spacing: 0.16em;
     text-transform: uppercase;
-    color: var(--cx-amber);
+    color: var(--cx-sea);
   }
   & .axis-footer-grid nav h2:lang(th) {
     font-family: var(--cx-text);
@@ -1139,21 +1139,21 @@
   @media (hover: hover) and (pointer: fine) {
     .wakaclock-marketing {
       & :is(.mkt-page-art img, [data-tilt])[data-pointer-active] {
-        box-shadow: 0 28px 56px -28px rgb(102 217 247 / 0.3);
+        box-shadow: 0 28px 56px -28px rgb(242 179 94 / 0.3);
       }
       & :is(.axis-pricing-offer, [data-glow])[data-pointer-active] {
         background-image:
           radial-gradient(
             circle at var(--mx, 50%) var(--my, 50%),
-            rgb(102 217 247 / 0.12),
+            rgb(242 179 94 / 0.12),
             transparent 46%
           ),
           linear-gradient(180deg, var(--cx-graphite), var(--cx-deep));
       }
       & .axis-cta-link:hover {
         box-shadow:
-          0 0 0 1px var(--cx-cyan),
-          0 20px 48px -12px rgb(102 217 247 / 0.6);
+          0 0 0 1px var(--cx-sun),
+          0 20px 48px -12px rgb(242 179 94 / 0.6);
       }
     }
   }
@@ -1163,7 +1163,7 @@
 @media (max-width: 1023px) {
   .wakaclock-marketing {
     & .axis-nav {
-      background: rgb(5 7 11 / 0.94);
+      background: rgb(11 15 25 / 0.94);
     }
     & .mkt-page-intro,
     & .mkt-page-editorial .mkt-page-intro {
@@ -1239,19 +1239,19 @@
 .wakaclock-marketing .tx-root {
   --tx-bg: var(--cx-void);
   --tx-bg-raised: var(--cx-graphite);
-  --tx-panel: rgb(10 13 18 / 0.72);
+  --tx-panel: rgb(14 19 32 / 0.72);
   --tx-ink: var(--cx-ink);
   --tx-muted: var(--cx-soft);
   --tx-dim: var(--cx-muted);
   --tx-line: var(--cx-line-strong);
   --tx-line-strong: rgb(238 241 244 / 0.26);
-  --tx-lime: var(--cx-cyan);
+  --tx-lime: var(--cx-sun);
   --tx-font: var(--cx-text);
   --tx-mono: var(--cx-mono);
 
   & .tx-stage {
     background:
-      radial-gradient(ellipse 60% 55% at 66% 46%, rgb(102 217 247 / 0.06), transparent 70%),
+      radial-gradient(ellipse 60% 55% at 66% 46%, rgb(242 179 94 / 0.06), transparent 70%),
       var(--cx-void);
   }
   & .tx-dayfill {
@@ -1261,14 +1261,14 @@
   & .tx-veil[data-veil='day'] {
     background: linear-gradient(
       90deg,
-      rgb(5 7 11 / 0.9),
-      rgb(5 7 11 / 0.7) 60%,
-      rgb(5 7 11 / 0.55)
+      rgb(11 15 25 / 0.9),
+      rgb(11 15 25 / 0.7) 60%,
+      rgb(11 15 25 / 0.55)
     );
   }
   & .tx-daybadge {
     border-color: var(--cx-line-strong);
-    background: rgb(5 7 11 / 0.8);
+    background: rgb(11 15 25 / 0.8);
     color: var(--cx-muted);
   }
 
@@ -1296,7 +1296,7 @@
   }
   & .tx-accent {
     color: transparent;
-    background: linear-gradient(100deg, var(--cx-ink) 0%, var(--cx-cyan) 55%, #9fe8fb 100%);
+    background: linear-gradient(100deg, var(--cx-ink) 0%, var(--cx-sun) 55%, #ffd99a 100%);
     background-clip: text;
     -webkit-background-clip: text;
   }
@@ -1311,8 +1311,8 @@
     width: 48px;
     height: 1px;
     margin-bottom: 18px;
-    background: var(--cx-cyan);
-    box-shadow: 0 0 12px var(--cx-cyan);
+    background: var(--cx-sun);
+    box-shadow: 0 0 12px var(--cx-sun);
   }
   & .tx-eyebrow {
     font-family: var(--cx-mono);
@@ -1320,7 +1320,7 @@
     color: var(--cx-soft);
   }
   & .tx-kicker {
-    color: var(--cx-amber);
+    color: var(--cx-sea);
     letter-spacing: 0.18em;
   }
   & :is(.tx-eyebrow, .tx-kicker):lang(th) {
@@ -1329,8 +1329,8 @@
     font-family: var(--cx-text);
   }
   & .tx-pulse {
-    background: var(--cx-cyan);
-    box-shadow: 0 0 10px var(--cx-cyan);
+    background: var(--cx-sun);
+    box-shadow: 0 0 10px var(--cx-sun);
   }
   & .tx-numeral {
     font-family: var(--cx-display);
@@ -1354,20 +1354,20 @@
     text-transform: none;
   }
   & .tx-btn--primary {
-    background: var(--cx-cyan);
-    color: #021218;
+    background: var(--cx-sun);
+    color: #1d1206;
     box-shadow:
-      0 0 0 1px rgb(102 217 247 / 0.5),
-      0 18px 44px -14px rgb(102 217 247 / 0.55);
+      0 0 0 1px rgb(242 179 94 / 0.5),
+      0 18px 44px -14px rgb(242 179 94 / 0.55);
   }
   & .tx-btn--ghost {
     border-color: var(--cx-line-strong);
-    background: rgb(5 7 11 / 0.5);
+    background: rgb(11 15 25 / 0.5);
   }
   & .tx-chips li {
     border-radius: 2px !important;
     border-color: var(--cx-line) !important;
-    background: rgb(5 7 11 / 0.55) !important;
+    background: rgb(11 15 25 / 0.55) !important;
     font-family: var(--cx-mono);
     font-size: 11px !important;
     letter-spacing: 0.04em;
@@ -1382,7 +1382,7 @@
     position: relative;
     border-radius: 2px !important;
     border-color: var(--cx-line) !important;
-    background: rgb(8 11 16 / 0.74);
+    background: rgb(14 19 32 / 0.74);
   }
   & :is(.tx-card, .tx-track-card, .tx-example)::before {
     content: '';
@@ -1391,7 +1391,7 @@
     left: 0;
     width: 40px;
     height: 1px;
-    background: var(--cx-cyan);
+    background: var(--cx-sun);
   }
   & .tx-panel,
   & .tx-example {
@@ -1400,10 +1400,10 @@
   & .tx-card-tag,
   & .tx-track-index {
     font-family: var(--cx-mono);
-    color: var(--cx-amber) !important;
+    color: var(--cx-sea) !important;
   }
   & .tx-track-index {
-    color: var(--cx-cyan) !important;
+    color: var(--cx-sun) !important;
   }
 
   /* HUD: rail, clock and demo badge as quiet technical readouts. */
@@ -1411,7 +1411,7 @@
     font-family: var(--cx-mono);
   }
   & .tx-rail a[aria-current] {
-    color: var(--cx-cyan);
+    color: var(--cx-sun);
   }
   & .tx-badge {
     border-radius: 2px;
@@ -1422,7 +1422,7 @@
   & .tx-intro-count {
     font-weight: 200;
     color: var(--cx-ink);
-    text-shadow: 0 0 40px rgb(102 217 247 / 0.25);
+    text-shadow: 0 0 40px rgb(242 179 94 / 0.25);
   }
   & .tx-intro {
     cursor: pointer;
@@ -1432,12 +1432,12 @@
 /* The lower page reads on dark plates over the dimmed scene. */
 .wakaclock-marketing:has(.tx-root) {
   & .axis-briefing {
-    background: rgb(5 7 11 / 0.78);
+    background: rgb(11 15 25 / 0.78);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
   }
   & .axis-pricing {
-    background: rgb(5 7 11 / 0.72);
+    background: rgb(11 15 25 / 0.72);
   }
   & .tx-day > section,
   & .tx-day > .axis-evidence {
@@ -1445,31 +1445,431 @@
   }
 }
 
-/* The still drawing of the core (reduced motion, no WebGL, and the first frame). */
+/* The still drawing of the voyage (reduced motion, no WebGL, and the first frame): the
+   sky is a CSS gradient on the stage, so the SVG carries no gradient ids. */
 .wakaclock-marketing .tx-root {
+  & .tx-night {
+    background:
+      radial-gradient(circle at 70% 47%, rgb(255 210 150 / 0.55), transparent 22%),
+      linear-gradient(
+        180deg,
+        #3b4a72 0%,
+        #8a86a8 26%,
+        #d6948a 44%,
+        #f2b27a 55%,
+        #2b4a55 56%,
+        #0f2a33 78%,
+        #0b0f19 100%
+      );
+  }
   & .tx-still {
     overflow: visible;
   }
-  & .tx-still-machinery :is(ellipse, circle) {
-    fill: none;
-    stroke: rgb(238 241 244 / 0.22);
-    stroke-width: 2;
+  & .tx-still-sun circle {
+    fill: #ffd79a;
   }
-  & .tx-still-machinery .tx-still-machinery-amber {
-    stroke: rgb(232 166 106 / 0.45);
+  & .tx-still-horizon {
+    stroke: rgb(255 220 170 / 0.5);
     stroke-width: 1.5;
   }
-  & .tx-still-machinery .tx-still-precision {
-    stroke: rgb(238 241 244 / 0.16);
-    stroke-width: 1;
-    stroke-dasharray: 1 7;
+  & .tx-still-glint {
+    stroke: #ffe2b0;
+    stroke-width: 3;
+    stroke-linecap: round;
+    opacity: 0.75;
+  }
+  & .tx-still-ship path {
+    fill: #120c09;
+  }
+  & .tx-still-ship .tx-still-spar {
+    fill: none;
+    stroke: #120c09;
+    stroke-width: 7;
+  }
+  & .tx-still-wheel .tx-still-hour {
+    font-size: 44px;
   }
 }
-.wakaclock-marketing .tx-root {
-  & .tx-still-nucleus circle {
-    fill: var(--cx-cyan);
+
+/* ─── World mode: the homepage as an archipelago ───────────────────────────────────────
+   Set by voyage/world-mode.tsx only when the 3D world runs. The page stops scrolling;
+   every section stays in the document, tagged with its place, and only the open place's
+   sections show — in a reading panel on the right (a sheet on phones). */
+html:has(.wakaclock-marketing[data-world='on']) {
+  overflow: hidden;
+}
+.wakaclock-marketing[data-world='on'] {
+  height: 100svh;
+  overflow: hidden;
+
+  & .axis-footer,
+  & .axis-scroll-index,
+  & .tx-handoff,
+  & .tx-rail,
+  & .tx-veil:not([data-veil='left']) {
+    display: none !important;
   }
-  & .tx-still-nucleus .tx-still-nucleus-core {
-    fill: #f2fcff;
+  /* The tour is driven by the wheel and by touch: the page itself never pans. */
+  touch-action: none;
+  & :is(.tx-chapters, .tx-day):has([data-world-open]) {
+    touch-action: pan-y;
+  }
+  & [data-world-place]:not([data-world-open]) {
+    display: none !important;
+  }
+  & .tx-day:not(:has([data-world-open])) {
+    display: none;
+  }
+  /* The map view: only the hero shows, over a left veil, with the places around it. */
+  &:not([data-world-open]) .tx-veil[data-veil='left'],
+  &[data-world-open=''] .tx-veil[data-veil='left'] {
+    --veil-on: 1;
+  }
+  &[data-world-open]:not([data-world-open='']) .tx-veil[data-veil='left'] {
+    --veil-on: 0;
+  }
+
+  /* The reading panel: whichever container holds the open place. */
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)),
+  & .tx-day:has([data-world-open]) {
+    position: fixed;
+    z-index: 40;
+    top: 60px;
+    right: 0;
+    bottom: 0;
+    width: min(640px, 50vw);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(242 179 94 / 0.35) transparent;
+    padding: 72px clamp(24px, 3vw, 48px) 96px;
+    background: linear-gradient(180deg, rgb(11 15 25 / 0.94), rgb(11 15 25 / 0.97));
+    backdrop-filter: blur(18px) saturate(1.1);
+    -webkit-backdrop-filter: blur(18px) saturate(1.1);
+    border-left: 1px solid var(--cx-line-strong);
+    box-shadow: -40px 0 80px -40px rgb(0 0 0 / 0.7);
+    animation: cx-panel-in 520ms var(--cx-ease) both;
+  }
+  & .tx-day:has([data-world-open]) > * {
+    max-width: none;
+    margin: 0;
+    padding-inline: 0;
+    background: none;
+    border: 0;
+  }
+  & .tx-day:has([data-world-open]) .mkt-content-section,
+  &
+    .tx-day:has([data-world-open])
+    :is(.axis-pricing, .mkt-faq-section, .axis-signup-layout, .mkt-related) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  & .tx-day:has([data-world-open]) .axis-setup-steps {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  & .tx-day:has([data-world-open]) .axis-setup-step {
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--cx-line) !important;
+  }
+  & .tx-day:has([data-world-open]) .axis-pricing-intro {
+    justify-self: start;
+  }
+  & .tx-day:has([data-world-open]) .axis-cta {
+    margin-top: 48px;
+    padding: 64px 0;
+    border-top: 1px solid var(--cx-line);
+    background: none;
+  }
+  & .tx-day:has([data-world-open]) .axis-cta::before {
+    display: none;
+  }
+
+  /* Story chapters read as plain columns inside the panel. */
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-chapter {
+    display: block;
+    min-height: 0;
+    padding: 0;
+  }
+  &
+    .tx-chapters:has([data-world-open]:not(#tx-c0))
+    :is(.tx-col, .tx-wide, .tx-tools, .tx-track-head) {
+    max-width: none;
+    padding-inline: 0;
+    text-align: left;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-actions--center {
+    justify-content: flex-start;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-numeral {
+    display: none;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-h2 {
+    font-size: clamp(2rem, 3vw, 3rem);
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-cards--row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-pin {
+    position: static;
+    height: auto;
+    padding: 0;
+    overflow: visible;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-track {
+    flex-direction: column;
+    width: auto;
+    padding-inline: 0;
+    transform: none;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-track-card {
+    width: auto;
+    min-height: 0;
+  }
+  & .tx-chapters:has([data-world-open]:not(#tx-c0)) .tx-chapter--right {
+    gap: 32px;
+  }
+
+  /* Hotspots: a lit marker and the place's own heading, pinned to its landmark. */
+  & .tx-world-hotspots {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    pointer-events: none;
+  }
+  /* Markers wait for the scene: there is nothing to point at over the still drawing. */
+  & .tx-root:not([data-scene='ready']) .tx-world-hotspots {
+    opacity: 0;
+  }
+  /* The map view (the hero) shows the scene alone: markers appear once the tour has left it
+     (owner decision 2026-11-14). Scrolling is the way in. */
+  &:is(:not([data-world-open]), [data-world-open='']) .tx-world-hotspots {
+    opacity: 0;
+    visibility: hidden;
+  }
+  & .tx-world-hotspots {
+    transition:
+      opacity 600ms,
+      visibility 600ms;
+  }
+  & .tx-world-hotspots ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  & .tx-world-hotspots li {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transition: opacity 300ms;
+    will-change: transform;
+  }
+  & .tx-world-hotspots li[data-visible='false'] {
+    opacity: 0;
+    visibility: hidden;
+  }
+  /* A place out of frame waits at the screen edge; its label unfolds inward. */
+  & .tx-world-hotspots li[data-edge='right'] .tx-world-spot {
+    flex-direction: row-reverse;
+    padding: 0 10px 0 0;
+    transform: translate(calc(-100% + 15px), -50%);
+  }
+  &
+    .tx-world-hotspots
+    li[data-edge='right']
+    .tx-world-spot:is(:hover, :focus-visible, [aria-pressed='true']) {
+    padding: 0 10px 0 14px;
+  }
+  & .tx-world-hotspots li:is([data-edge='left'], [data-edge='right']) .tx-world-dot {
+    background: var(--cx-ink);
+  }
+  /* A lit marker per place; its label (the place's own heading) unfolds on hover or
+     keyboard focus, so the sky stays clear but every place is reachable. */
+  & .tx-world-spot {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    max-width: 30px;
+    height: 30px;
+    padding: 0 0 0 10px;
+    border: 1px solid rgb(244 237 227 / 0.28);
+    border-radius: 999px;
+    background: rgb(11 15 25 / 0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: var(--cx-ink);
+    font-family: var(--cx-text);
+    font-size: 12.5px;
+    line-height: 1.3;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    transform: translate(-15px, -50%);
+    pointer-events: auto;
+    cursor: pointer;
+    transition:
+      max-width 380ms var(--cx-ease),
+      padding 380ms var(--cx-ease),
+      gap 380ms var(--cx-ease),
+      background 200ms,
+      border-color 200ms,
+      color 200ms;
+  }
+  & .tx-world-spot:hover,
+  & .tx-world-spot:focus-visible,
+  & .tx-world-spot[aria-pressed='true'] {
+    max-width: 280px;
+    gap: 10px;
+    padding: 0 14px 0 10px;
+    background: rgb(242 179 94 / 0.94);
+    border-color: var(--cx-sun);
+    color: #1d1206;
+    z-index: 2;
+  }
+  & .tx-world-label {
+    opacity: 0;
+    transition: opacity 200ms;
+  }
+  & .tx-world-spot:is(:hover, :focus-visible, [aria-pressed='true']) .tx-world-label {
+    opacity: 1;
+    transition-delay: 120ms;
+  }
+  & .tx-world-hotspots li:has(.tx-world-spot:is(:hover, :focus-visible)) {
+    z-index: 5;
+  }
+  & .tx-world-spot[data-far] {
+    font-size: 11.5px;
+  }
+  & .tx-world-dot {
+    width: 8px;
+    height: 8px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--cx-sun);
+    box-shadow:
+      0 0 0 4px rgb(242 179 94 / 0.18),
+      0 0 14px var(--cx-sun);
+  }
+  & .tx-world-spot:not(:hover, :focus-visible) .tx-world-dot {
+    animation: cx-beacon 2.6s ease-in-out infinite;
+  }
+  & .tx-world-spot[data-far] .tx-world-dot {
+    background: var(--cx-sea);
+    box-shadow:
+      0 0 0 4px rgb(79 201 189 / 0.18),
+      0 0 14px var(--cx-sea);
+  }
+  /* While reading, the other places stay reachable but recede. */
+  &[data-world-open]:not([data-world-open=''], [data-world-open='travel'])
+    .tx-world-spot:not([aria-pressed='true'], :hover, :focus-visible) {
+    opacity: 0.55;
+  }
+
+  & .tx-world-close {
+    position: fixed;
+    z-index: 45;
+    top: 76px;
+    right: calc(min(640px, 50vw) - 64px);
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 1px solid rgb(242 179 94 / 0.55);
+    border-radius: 50%;
+    background: rgb(21 27 42 / 0.92);
+    color: var(--cx-sun);
+    font-family: var(--cx-mono);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  /* Headings receive focus when a place opens, for screen readers; no ring for that. */
+  & [data-world-place] :is(h2, h3)[tabindex='-1']:focus {
+    outline: none;
+  }
+  & .tx-world-close:hover {
+    border-color: var(--cx-sun);
+    color: var(--cx-sun);
+  }
+}
+@keyframes cx-beacon {
+  50% {
+    box-shadow:
+      0 0 0 7px rgb(242 179 94 / 0.08),
+      0 0 18px var(--cx-sun);
+  }
+}
+@keyframes cx-panel-in {
+  from {
+    opacity: 0;
+    translate: 40px 0;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wakaclock-marketing[data-world='on'] :is(.tx-chapters, .tx-day, .tx-world-dot) {
+    animation: none !important;
+  }
+}
+@media (max-width: 767px) {
+  .wakaclock-marketing[data-world='on'] {
+    & .tx-chapters:has([data-world-open]:not(#tx-c0)),
+    & .tx-day:has([data-world-open]) {
+      top: auto;
+      left: 0;
+      width: auto;
+      height: 72svh;
+      padding: 64px 20px 72px;
+      border-left: 0;
+      border-top: 1px solid var(--cx-line-strong);
+      border-radius: 18px 18px 0 0;
+    }
+    & .tx-world-close {
+      top: auto;
+      right: 16px;
+      bottom: calc(72svh - 54px);
+    }
+    & .tx-world-spot:is(:hover, :focus-visible, [aria-pressed='true']) {
+      max-width: 200px;
+    }
+  }
+}
+/* A touch more colour and contrast over the dusk scene; the GPU composites it for free. */
+.wakaclock-marketing[data-world='on'] .tx-canvas canvas {
+  filter: saturate(1.14) contrast(1.06);
+}
+/* World mode has no dusk-to-day hand-off: keep the overlay and veils at full strength
+   (the scroll hook still writes --tx-day inline; this wins). */
+.wakaclock-marketing[data-world='on'] .tx-root {
+  --tx-day: 0 !important;
+}
+/* On the map view the hero reads over a soft dusk gradient from the left edge. */
+.wakaclock-marketing[data-world='on']:is(:not([data-world-open]), [data-world-open=''])
+  .tx-stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      90deg,
+      rgb(11 15 25 / 0.86) 0%,
+      rgb(11 15 25 / 0.62) 30%,
+      rgb(11 15 25 / 0) 56%
+    ),
+    linear-gradient(0deg, rgb(11 15 25 / 0.55) 0%, rgb(11 15 25 / 0) 26%);
+}
+@media (max-width: 767px) {
+  .wakaclock-marketing[data-world='on']:is(:not([data-world-open]), [data-world-open=''])
+    .tx-stage::after {
+    background: linear-gradient(
+      0deg,
+      rgb(11 15 25 / 0.92) 0%,
+      rgb(11 15 25 / 0.7) 55%,
+      rgb(11 15 25 / 0.2) 100%
+    );
   }
 }
