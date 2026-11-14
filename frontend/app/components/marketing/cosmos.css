@@ -2168,6 +2168,68 @@ html:has(.wakaclock-marketing[data-world='on']) {
     letter-spacing: 0;
     font-size: 12.5px;
   }
+  /* Places already read are ticked on the rim. */
+  & .tx-world-compass li button[data-visited]::before {
+    inset: 5px;
+    background: var(--cx-sea);
+    box-shadow: 0 0 8px var(--cx-sea);
+  }
+  & .tx-world-compass-chart {
+    position: absolute;
+    top: -6px;
+    right: -30px;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid rgb(244 237 227 / 0.22);
+    border-radius: 50%;
+    background: rgb(11 15 25 / 0.9);
+    color: var(--cx-ink);
+    cursor: pointer;
+    transition:
+      background 200ms,
+      color 200ms,
+      border-color 200ms;
+  }
+  & .tx-world-compass-chart:is(:hover, :focus-visible, [aria-pressed='true']) {
+    border-color: var(--cx-sun);
+    background: var(--cx-sun);
+    color: #1d1206;
+  }
+
+  /* The sea chart: the archipelago from above, toned like inked parchment, every place
+     named. Markers show even from the map view and at the edges. */
+  & .tx-world-chartveil {
+    position: fixed;
+    z-index: 2;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse at center, transparent 45%, rgb(20 12 4 / 0.7) 100%),
+      repeating-linear-gradient(0deg, rgb(242 179 94 / 0.07) 0 1px, transparent 1px 88px),
+      repeating-linear-gradient(90deg, rgb(242 179 94 / 0.07) 0 1px, transparent 1px 88px),
+      rgb(150 110 60 / 0.14);
+    mix-blend-mode: multiply;
+    transition: opacity 900ms;
+  }
+  &[data-world-chart='on'] .tx-world-chartveil {
+    opacity: 1;
+  }
+  &[data-world-chart='on'] .tx-world-hotspots,
+  &[data-world-chart='on'] .tx-world-hotspots li {
+    opacity: 1;
+    visibility: visible;
+  }
+  &[data-world-chart='on'] .tx-world-hotspots .tx-world-spot {
+    max-width: 260px;
+    gap: 9px;
+    padding: 0 13px 0 10px;
+  }
+  &[data-world-chart='on'] .tx-world-hotspots .tx-world-label {
+    opacity: 1;
+  }
   /* The hero's own scroll cue gives way to the compass's invitation. */
   & .tx-scroll-cue {
     display: none !important;

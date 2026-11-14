@@ -30,6 +30,7 @@ import {
 
 import { dotTexture } from '../scene/heartbeats';
 import { type ActivitySlice, MINUTES_PER_DAY, seededRandom, sliceRuns } from '../time-data';
+import { timeMotion } from '../time-store';
 
 import { KIND_LIGHT } from './log-props';
 import { fxBurst, placeFx, voyage } from './state';
@@ -910,6 +911,44 @@ function Landmark({
   }
 }
 
+/**
+ * The flag a place flies once its log has been read: it climbs its pole and streams in the
+ * wind, so the archipelago shows at a glance which places the visitor has been to.
+ */
+function Flag({ id, radius }: { id: string; radius: number }) {
+  const flag = useRef<Group>(null);
+  const cloth = useRef<Mesh>(null);
+  const level = useRef(0);
+  useFrame((_, delta) => {
+    const flown = timeMotion.visited.split(',').includes(id) ? 1 : 0;
+    level.current += (flown - level.current) * (1 - Math.exp(-2.2 * Math.min(delta, 0.1)));
+    if (!flag.current) return;
+    flag.current.visible = level.current > 0.01 || !voyage.shown;
+    flag.current.scale.setScalar(Math.max(0.001, level.current));
+    if (cloth.current) cloth.current.rotation.y = Math.sin(voyage.time * 3.1) * 0.35;
+  });
+  return (
+    <group position={[radius * 0.36, PLATEAU, -radius * 0.16]} ref={flag}>
+      <mesh position={[0, 4.5, 0]}>
+        <cylinderGeometry args={[0.07, 0.09, 9, 6]} />
+        <meshStandardMaterial color="#2c1f16" roughness={0.8} />
+      </mesh>
+      <group position={[0, 8.2, 0]} ref={cloth}>
+        <mesh position={[1.25, 0, 0]}>
+          <planeGeometry args={[2.5, 1.4]} />
+          <meshStandardMaterial
+            color="#f2b35e"
+            emissive="#f2b35e"
+            emissiveIntensity={0.35}
+            roughness={0.8}
+            side={DoubleSide}
+          />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
 function Island({
   detail,
   materials,
@@ -939,6 +978,7 @@ function Island({
         seed={seed + 1}
       />
       <Landmark building={place.building} materials={materials} slices={slices} />
+      {place.sections.length > 0 ? <Flag id={place.id} radius={place.radius} /> : null}
     </group>
   );
 }

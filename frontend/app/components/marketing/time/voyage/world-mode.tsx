@@ -23,6 +23,7 @@ import { PLACE_ATTRIBUTE, PLACES, TOUR, tourIndex, tourStop } from './world-plac
 /** UI chrome for the panel; rendered on the client only, never part of the page copy. */
 const CHROME = {
   en: {
+    chart: 'Sea chart',
     close: 'Close the log',
     compass: 'Voyage compass',
     home: 'Back to the map',
@@ -32,6 +33,7 @@ const CHROME = {
     start: 'Scroll to set sail',
   },
   th: {
+    chart: 'แผนที่เดินเรือ',
     close: 'ปิดบันทึก',
     compass: 'เข็มทิศการเดินทาง',
     home: 'กลับสู่แผนที่',
@@ -46,7 +48,7 @@ const HOME = '#tx-c0';
 /** Shown while the camera is between places: no section belongs to it. */
 const TRAVEL = 'travel';
 /** Wheel distance (px) from one stop to the next. */
-const STOP_PIXELS = 1500;
+const STOP_PIXELS = 4500;
 /** How far the scroll must leave a stop before it commits to the next one. */
 const COMMIT = 0.18;
 /** Quiet time after the last scroll input before the tour locks onto a stop. */
@@ -84,6 +86,10 @@ export function WorldMode({ rootId }: { rootId: string }) {
   /** The stop the tour is locked onto (0 = the map) and whether the scroll has left it. */
   const [stop, setStop] = useState(0);
   const [moving, setMoving] = useState(false);
+  /** The sea chart is up: the camera looks down on every place at once. */
+  const [chart, setChart] = useState(false);
+  /** Places whose panel has been opened: their flags fly and the compass ticks them. */
+  const [visited, setVisited] = useState<readonly string[]>([]);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
   const [locale, setLocale] = useState<'en' | 'th'>('en');
   const frame = useRef<HTMLElement | null>(null);
@@ -124,8 +130,12 @@ export function WorldMode({ rootId }: { rootId: string }) {
       delete site.dataset.world;
       delete site.dataset.worldOpen;
       delete site.dataset.worldAt;
+      delete site.dataset.worldChart;
       timeMotion.world = false;
       timeMotion.place = '';
+      timeMotion.at = '';
+      timeMotion.chart = false;
+      timeMotion.visited = '';
       timeMotion.tour = 0;
       timeMotion.tourTarget = 0;
       window.clearTimeout(settleTimer.current);
@@ -139,21 +149,22 @@ export function WorldMode({ rootId }: { rootId: string }) {
 
   const atHome = stop === 0 && !moving;
   /** The place the tour rests at with its title card up (no panel open yet). */
-  const arrived = !moving && !open ? tourStop(stop) : '';
+  const arrived = !moving && !open && !chart ? tourStop(stop) : '';
 
   // Show what the tour is on: the hero on the map, a place's sections when its panel is
   // open, nothing while sailing or while a title card is up.
   useEffect(() => {
     const site = frame.current;
     if (!site) return;
-    const shown = open || (atHome ? 'home' : TRAVEL);
+    const shown = open || (atHome && !chart ? 'home' : TRAVEL);
     for (const element of site.querySelectorAll<HTMLElement>(`[${PLACE_ATTRIBUTE}]`)) {
       if (element.getAttribute(PLACE_ATTRIBUTE) === shown) element.dataset.worldOpen = '';
       else delete element.dataset.worldOpen;
     }
-    site.dataset.worldOpen = open || (atHome ? '' : TRAVEL);
+    site.dataset.worldOpen = open || (atHome && !chart ? '' : TRAVEL);
     site.dataset.worldAt = arrived;
     timeMotion.place = open;
+    timeMotion.at = arrived;
     if (!open) {
       // The panel closed: return keyboard focus to the button that opened it.
       if (lastOpen.current) openButton.current?.focus({ preventScroll: true });
@@ -175,25 +186,43 @@ export function WorldMode({ rootId }: { rootId: string }) {
       if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
       heading.focus({ preventScroll: true });
     }
-  }, [arrived, atHome, open]);
+  }, [arrived, atHome, chart, open]);
+
+  // The sea chart and the visited places, for the scene and the stylesheet.
+  useEffect(() => {
+    const site = frame.current;
+    if (site) site.dataset.worldChart = chart ? 'on' : 'off';
+    timeMotion.chart = chart;
+  }, [chart]);
+  useEffect(() => {
+    timeMotion.visited = visited.join(',');
+  }, [visited]);
+  const read = useCallback((id: string) => {
+    setOpen(id);
+    setVisited((current) => (current.includes(id) ? current : [...current, id]));
+  }, []);
 
   /**
    * Locks the tour onto a stop: the ship and the camera glide there and the place's title
    * card comes up. `thenOpen` also opens its panel once the camera has had time to arrive
    * (an in-page link asked for that content).
    */
-  const lockTo = useCallback((index: number, thenOpen = false) => {
-    const next = Math.min(TOUR.length, Math.max(0, index));
-    base.current = next;
-    timeMotion.tourTarget = next;
-    window.clearTimeout(settleTimer.current);
-    window.clearTimeout(openTimer.current);
-    setStop(next);
-    setMoving(false);
-    const id = tourStop(next);
-    setOpen((current) => (current === id ? current : ''));
-    if (thenOpen && id) openTimer.current = window.setTimeout(() => setOpen(id), ARRIVE_MS);
-  }, []);
+  const lockTo = useCallback(
+    (index: number, thenOpen = false) => {
+      const next = Math.min(TOUR.length, Math.max(0, index));
+      base.current = next;
+      timeMotion.tourTarget = next;
+      window.clearTimeout(settleTimer.current);
+      window.clearTimeout(openTimer.current);
+      setStop(next);
+      setMoving(false);
+      setChart(false);
+      const id = tourStop(next);
+      setOpen((current) => (current === id ? current : ''));
+      if (thenOpen && id) openTimer.current = window.setTimeout(() => read(id), ARRIVE_MS);
+    },
+    [read]
+  );
 
   const goTo = useCallback(
     (id: string, thenOpen = false) =>
@@ -223,6 +252,7 @@ export function WorldMode({ rootId }: { rootId: string }) {
       const next = Math.min(TOUR.length, Math.max(0, timeMotion.tourTarget + amount));
       if (next === timeMotion.tourTarget) return;
       timeMotion.tourTarget = next;
+      setChart(false);
       window.clearTimeout(openTimer.current);
       // Leaving a place closes it; the map's hero goes the same way.
       if (Math.abs(next - base.current) > COMMIT) {
@@ -258,7 +288,7 @@ export function WorldMode({ rootId }: { rootId: string }) {
       const moved = touchY - y;
       touchY = y;
       if (heldByPanel(event.target)) return;
-      advance(moved / (window.innerHeight * 1.1));
+      advance(moved / (window.innerHeight * 3.2));
     };
     const onTouchEnd = () => {
       touching = false;
@@ -324,8 +354,9 @@ export function WorldMode({ rootId }: { rootId: string }) {
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      // Escape steps back one level: the panel, then the island.
-      if (site.dataset.worldOpen && site.dataset.worldOpen !== TRAVEL) setOpen('');
+      // Escape steps back one level: the chart, the panel, then the island.
+      if (site.dataset.worldChart === 'on') setChart(false);
+      else if (site.dataset.worldOpen && site.dataset.worldOpen !== TRAVEL) setOpen('');
       else if (base.current > 0) lockTo(0);
     };
     if (window.location.hash) reveal(window.location.hash);
@@ -378,6 +409,7 @@ export function WorldMode({ rootId }: { rootId: string }) {
       {/* Decoration the scene drives every frame: the spyglass iris and the tether that ties
           a title card or a panel to its landmark. */}
       <div aria-hidden="true" className="tx-world-spyglass" />
+      <div aria-hidden="true" className="tx-world-chartveil" />
       <div aria-hidden="true" className="tx-world-tether" />
 
       {/* The title card: the place's own heading and the way in. */}
@@ -389,7 +421,7 @@ export function WorldMode({ rootId }: { rootId: string }) {
           <p className="tx-world-card-title">{card.label}</p>
           <button
             className="tx-world-card-open"
-            onClick={() => setOpen(card.id)}
+            onClick={() => read(card.id)}
             ref={openButton}
             type="button"
           >
@@ -413,6 +445,7 @@ export function WorldMode({ rootId }: { rootId: string }) {
               <button
                 aria-current={stop === index + 1 && !moving ? 'step' : undefined}
                 aria-label={spot.label}
+                data-visited={visited.includes(spot.id) || undefined}
                 onClick={() => goTo(spot.id)}
                 title={spot.label}
                 type="button"
@@ -429,7 +462,27 @@ export function WorldMode({ rootId }: { rootId: string }) {
         >
           {atHome ? 'N' : String(stop).padStart(2, '0')}
         </button>
-        {atHome ? (
+        <button
+          aria-label={chrome.chart}
+          aria-pressed={chart}
+          className="tx-world-compass-chart"
+          onClick={() => {
+            setOpen('');
+            setChart((current) => !current);
+          }}
+          title={chrome.chart}
+          type="button"
+        >
+          <svg aria-hidden="true" fill="none" height="16" viewBox="0 0 16 16" width="16">
+            <path
+              d="M1.5 3.5 6 2l4 1.5L14.5 2v10.5L10 14l-4-1.5L1.5 14V3.5ZM6 2v10.5M10 3.5V14"
+              stroke="currentColor"
+              strokeLinejoin="round"
+              strokeWidth="1.2"
+            />
+          </svg>
+        </button>
+        {atHome && !chart ? (
           <p aria-hidden="true" className="tx-world-compass-hint">
             {chrome.start}
           </p>

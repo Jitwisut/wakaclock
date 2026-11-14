@@ -119,7 +119,7 @@ function driveSpyglass(element: HTMLElement | null, { at, camera, delta, height,
   const size = { height, width };
   // The spyglass closes round the place the voyage is nearing.
   const near = placeById(tourStop(Math.round(at)));
-  const wanted = spyglassAmount(at, timeMotion.tourTarget);
+  const wanted = timeMotion.chart ? 0 : spyglassAmount(at, timeMotion.tourTarget);
   glass.amount += (wanted - glass.amount) * (1 - Math.exp(-7 * delta));
   if (element) {
     const shown = glass.amount > 0.004 && near;

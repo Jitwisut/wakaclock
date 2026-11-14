@@ -49,6 +49,12 @@ export const timeMotion = {
    */
   world: false,
   place: '',
+  /** The place the tour rests at with its title card up ('' while sailing or reading). */
+  at: '',
+  /** The sea chart: the camera looks down on the whole archipelago. */
+  chart: false,
+  /** Ids of the places whose panel has been opened, comma-separated (their flags fly). */
+  visited: '',
   /**
    * Position along the world's scroll tour: 0 = the map, 1… = the stops (fractions between).
    * `tourTarget` is where the scroll has asked to be; `tour` glides after it (camera rig).

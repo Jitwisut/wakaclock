@@ -15,6 +15,7 @@ import { HotspotProjector } from '../voyage/hotspot-projector';
 import { Islands } from '../voyage/islands';
 import { ChipLog, Helm, Lanterns } from '../voyage/log-props';
 import { PlaceEffects } from '../voyage/place-fx';
+import { Dolphins, Gulls, Route, Whale } from '../voyage/sea-life';
 import { Ship } from '../voyage/ship';
 import { voyage } from '../voyage/state';
 import { Wake } from '../voyage/wake';
@@ -143,6 +144,7 @@ function Scene({ quality, slices }: { quality: TimeSceneQuality; slices: Activit
           <>
             <Spray count={quality.spray} />
             <AiWind count={quality.wind} />
+            <Dolphins />
           </>
         ) : null}
       </Fleet>
@@ -151,6 +153,9 @@ function Scene({ quality, slices }: { quality: TimeSceneQuality; slices: Activit
         <>
           <PlaceEffects particles={quality.fxParticles} />
           <Weather drops={quality.fxParticles * 5} />
+          <Route />
+          <Whale />
+          <Gulls />
         </>
       ) : null}
       <HotspotProjector />

@@ -186,6 +186,12 @@ design change.
   Anything that rides with her must use `modelMatrix`, and buoyancy samples the sea at her
   berth. **Weather** is per place (`weather` in `world-places.ts`: mist, rain, aurora,
   meteors), blended along the tour.
+- **Company on the voyage** (`sea-life.tsx`): the sailed route drawn on the sea
+  (`voyage.reached`), dolphins at the bow while under way, a whale far off, gulls over the
+  island ahead. A place's effect plays quietly on arrival (`WELCOME_LEVEL`) and in full once
+  its panel is opened; opened places fly a flag (`timeMotion.visited`) and are ticked on the
+  compass. The **sea chart** (`timeMotion.chart`, the button by the compass) lifts the
+  camera over the whole archipelago with every place named; any scroll or jump leaves it.
 - Effects and weather that hide themselves must stay in the scene until `voyage.shown`, so
   their shaders compile with the rest instead of in the frame they first appear.
 - **Opening effects** (`place-fx.tsx`, `placeFx`/`fxBurst` in `state.ts`): opening a place

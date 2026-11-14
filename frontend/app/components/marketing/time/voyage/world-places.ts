@@ -70,6 +70,11 @@ export interface Place {
 
 /** The view of the whole archipelago with the ship in front: the hero's composition. */
 export const HOME_POSE: { look: Vec3; pos: Vec3 } = { pos: [38, 9, 46], look: [-12, 9.5, -10] };
+/** The sea chart: the camera high above the middle of the archipelago, tilted a little. */
+export const CHART_POSE: { look: Vec3; pos: Vec3 } = {
+  pos: [-105, 740, 70],
+  look: [-105, 0, -175],
+};
 /** Time of day on the map view: late golden hour. */
 export const HOME_DUSK = 0.3;
 /** Horizontal field of view of the map camera (38° vertical at 16:10). */

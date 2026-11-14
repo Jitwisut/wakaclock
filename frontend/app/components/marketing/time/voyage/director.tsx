@@ -83,6 +83,11 @@ export function courseAt(values: readonly number[], at: number) {
   );
 }
 
+/** Where the ship's course lies on the water at a tour position (x, z). */
+export function courseXZ(at: number): [number, number] {
+  return keepOffIslands(courseAt(MOOR_X, at), courseAt(MOOR_Z, at));
+}
+
 /** How much of each weather the tour position sits under. */
 export function weatherAt(at: number) {
   const last = TOUR_KEYS.length - 1;
@@ -104,29 +109,40 @@ export function weatherAt(at: number) {
  * onto her course as she moves and holds her heading when she lies to.
  */
 function sailTour(delta: number) {
-  const [x, z] = keepOffIslands(
-    courseAt(MOOR_X, timeMotion.tour),
-    courseAt(MOOR_Z, timeMotion.tour)
-  );
-  const dx = x - voyage.shipX;
-  const dz = z - voyage.shipZ;
+  const [x, z] = courseXZ(timeMotion.tour);
+  voyage.reached = Math.max(voyage.reached, timeMotion.tour);
+  // She has weight: the hull eases toward her place on the course instead of snapping to it,
+  // so she gathers way and carries it, a little behind the camera.
+  const ease = dampFactor(delta, 1.5);
+  const dx = (x - voyage.shipX) * ease;
+  const dz = (z - voyage.shipZ) * ease;
   const speed = delta > 0 ? Math.hypot(dx, dz) / delta : 0;
-  voyage.shipX = x;
-  voyage.shipZ = z;
+  voyage.shipX += dx;
+  voyage.shipZ += dz;
   voyage.way += (Math.min(9, speed) - voyage.way) * dampFactor(delta, 2);
   if (speed > 0.4) {
     // The bow points down local +X: a heading h turns it to (cos h, 0, -sin h).
     const wanted = Math.atan2(-dz, dx);
     let turn = wanted - voyage.shipHeading;
     turn = Math.atan2(Math.sin(turn), Math.cos(turn));
-    voyage.shipHeading += turn * dampFactor(delta, 1.6);
+    voyage.shipHeading += turn * dampFactor(delta, 1.05);
   }
   const sky = weatherAt(timeMotion.tour);
-  const ease = dampFactor(delta, 1.4);
-  voyage.mist += (sky.mist - voyage.mist) * ease;
-  voyage.rain += (sky.rain - voyage.rain) * ease;
-  voyage.aurora += (sky.aurora - voyage.aurora) * ease;
-  voyage.meteors += (sky.meteors - voyage.meteors) * ease;
+  const settle = dampFactor(delta, 1.4);
+  voyage.mist += (sky.mist - voyage.mist) * settle;
+  voyage.rain += (sky.rain - voyage.rain) * settle;
+  voyage.aurora += (sky.aurora - voyage.aurora) * settle;
+  voyage.meteors += (sky.meteors - voyage.meteors) * settle;
+}
+
+/** Strength of an arrival's welcome, before the panel is opened. */
+export const WELCOME_LEVEL = 0.42;
+
+/** How strongly the effect of `playing` should run: full while read, a welcome on arrival. */
+export function fxLevel(place: string, at: string, playing: string) {
+  if (!playing) return 0;
+  if (place === playing) return 1;
+  return at === playing ? WELCOME_LEVEL : 0;
 }
 
 /**
@@ -143,6 +159,8 @@ export function VoyageDirector({
 }) {
   const { gl, scene } = useThree();
   const lastDrop = useRef(-1);
+  const opened = useRef('');
+  const chartLevel = useRef(0);
   const fog = useMemo(() => new FogExp2('#e5b495', FOG_DENSITY), []);
   useEffect(() => {
     scene.fog = fog;
@@ -187,22 +205,32 @@ export function VoyageDirector({
       voyage.pulseAge += delta;
     }
 
-    // The opening effect of the place being read: restart its clock when the place changes,
-    // hold its level while it stays open, let it die away after.
-    const { place } = timeMotion;
-    if (place && place !== voyage.fxPlace) {
-      voyage.fxPlace = place;
+    // A place's effect: a quiet welcome while its title card is up, the full show once its
+    // panel is opened, dying away when the tour moves on.
+    const { at, place } = timeMotion;
+    const playing = place || at;
+    if (playing && playing !== voyage.fxPlace) {
+      voyage.fxPlace = playing;
       voyage.fxAge = 0;
       voyage.fxOn = 0;
+      opened.current = '';
     }
+    // Opening the panel sets the full effect off again, from its burst.
+    if (place && opened.current !== place) {
+      opened.current = place;
+      voyage.fxAge = 0;
+    }
+    if (!place) opened.current = '';
     voyage.fxAge += delta;
-    voyage.fxOn +=
-      ((place === voyage.fxPlace && place ? 1 : 0) - voyage.fxOn) * dampFactor(delta, 2.4);
-    if (!place && voyage.fxOn < 0.004) voyage.fxPlace = '';
+    voyage.fxOn += (fxLevel(place, at, voyage.fxPlace) - voyage.fxOn) * dampFactor(delta, 2.4);
+    if (!playing && voyage.fxOn < 0.004) voyage.fxPlace = '';
 
     gl.toneMappingExposure = exposureFor(elevation) * (1 + timeMotion.flash * 0.35);
     fog.color.copy(FOG_NIGHT).lerp(FOG_DAY, voyage.daylight);
-    fog.density = FOG_DENSITY + voyage.fog * 0.012 + voyage.mist * 0.0075;
+    // From the sea chart's height the haze would hide the whole archipelago: clear it.
+    chartLevel.current += ((timeMotion.chart ? 1 : 0) - chartLevel.current) * dampFactor(delta, 2);
+    fog.density =
+      (FOG_DENSITY + voyage.fog * 0.012 + voyage.mist * 0.0075) * (1 - 0.94 * chartLevel.current);
   }, -0.5);
   return null;
 }

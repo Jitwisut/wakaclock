@@ -16,7 +16,7 @@ import {
   warpTarget,
 } from '../time-keyframes';
 import { getTimeUi, timeMotion } from '../time-store';
-import { HOME_DUSK, tourKeys } from '../voyage/world-places';
+import { CHART_POSE, HOME_DUSK, tourKeys } from '../voyage/world-places';
 
 const position = new Vector3();
 const look = new Vector3();
@@ -46,7 +46,26 @@ const TOUR_LIFT = TOUR_KEYS.slice(1).map((key, index) => {
 function glideTour(delta: number) {
   const gap = timeMotion.tourTarget - timeMotion.tour;
   timeMotion.tour =
-    Math.abs(gap) < 1e-4 ? timeMotion.tourTarget : timeMotion.tour + gap * dampFactor(delta, 3);
+    Math.abs(gap) < 1e-4 ? timeMotion.tourTarget : timeMotion.tour + gap * dampFactor(delta, 2.1);
+}
+
+/** Moves the world camera toward this frame's goal (`wantedPos`, `wantedLook`). */
+function chaseTour(delta: number, portrait: boolean) {
+  if (timeMotion.chart) {
+    // The sea chart: high over the archipelago, looking almost straight down.
+    const tall = portrait ? 1.75 : 1;
+    wantedPos.set(CHART_POSE.pos[0], CHART_POSE.pos[1] * tall, CHART_POSE.pos[2]);
+    wantedLook.set(...CHART_POSE.look);
+    worldPos.lerp(wantedPos, dampFactor(delta, 2));
+    worldLook.lerp(wantedLook, dampFactor(delta, 2.4));
+  } else {
+    // Far from the goal (a jump across the map): rise first, settle as it nears.
+    const remaining = worldPos.distanceTo(wantedPos);
+    wantedPos.y += Math.min(26, Math.max(0, remaining - 30) * 0.16);
+    const chase = remaining > 200 ? 2 : 3.4;
+    worldPos.lerp(wantedPos, dampFactor(delta, chase));
+    worldLook.lerp(wantedLook, dampFactor(delta, chase + 0.4));
+  }
 }
 
 /** Smooth step between stops, so the camera eases out of one place and into the next. */
@@ -203,11 +222,7 @@ export function TimeRig({ parallax }: { parallax: boolean }) {
         world.dusk = dusk;
         world.ready = true;
       }
-      // Far from the goal (a jump across the map): rise first, settle as it nears.
-      const remaining = worldPos.distanceTo(wantedPos);
-      wantedPos.y += Math.min(26, Math.max(0, remaining - 30) * 0.16);
-      worldPos.lerp(wantedPos, dampFactor(delta, 3.4));
-      worldLook.lerp(wantedLook, dampFactor(delta, 3.8));
+      chaseTour(delta, size.width < size.height);
       world.dusk += (dusk - world.dusk) * dampFactor(delta, 1.2);
       timeMotion.hand = 480 + world.dusk * 960;
       position.copy(worldPos);
