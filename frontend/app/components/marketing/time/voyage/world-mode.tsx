@@ -1,8 +1,18 @@
 'use client';
 
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 
 import { NAV_LINKS } from '../../nav-links.data';
+import { endDay, play, resetDay, subscribePlay } from '../editor/play';
+import { StoryOverlay } from '../editor/story-overlay';
 import { timeMotion } from '../time-store';
 
 import { PLACE_ATTRIBUTE, PLACES, TOUR, tourIndex, tourStop } from './world-places';
@@ -23,22 +33,24 @@ import { PLACE_ATTRIBUTE, PLACES, TOUR, tourIndex, tourStop } from './world-plac
 /** UI chrome for the panel; rendered on the client only, never part of the page copy. */
 const CHROME = {
   en: {
-    close: 'Close the log',
-    compass: 'Voyage compass',
-    home: 'Back to the map',
-    hint: 'Scroll to sail on',
-    open: 'Open the log',
+    chart: 'Whole file',
+    close: 'Close',
+    compass: 'Minimap',
+    home: 'Back to the top',
+    hint: 'Scroll to keep going',
+    open: 'Open',
     places: 'Places',
-    start: 'Scroll to set sail',
+    start: 'Scroll to start',
   },
   th: {
-    close: 'ปิดบันทึก',
-    compass: 'เข็มทิศการเดินทาง',
-    home: 'กลับสู่แผนที่',
-    hint: 'เลื่อนเพื่อเดินทางต่อ',
+    chart: 'ดูทั้งไฟล์',
+    close: 'ปิด',
+    compass: 'มินิแมป',
+    home: 'กลับไปบนสุด',
+    hint: 'เลื่อนเพื่อไปต่อ',
     open: 'เปิดอ่าน',
     places: 'สถานที่',
-    start: 'เลื่อนเพื่อออกเรือ',
+    start: 'เลื่อนเพื่อเริ่ม',
   },
 } as const;
 
@@ -46,7 +58,7 @@ const HOME = '#tx-c0';
 /** Shown while the camera is between places: no section belongs to it. */
 const TRAVEL = 'travel';
 /** Wheel distance (px) from one stop to the next. */
-const STOP_PIXELS = 1500;
+const STOP_PIXELS = 4500;
 /** How far the scroll must leave a stop before it commits to the next one. */
 const COMMIT = 0.18;
 /** Quiet time after the last scroll input before the tour locks onto a stop. */
@@ -84,6 +96,10 @@ export function WorldMode({ rootId }: { rootId: string }) {
   /** The stop the tour is locked onto (0 = the map) and whether the scroll has left it. */
   const [stop, setStop] = useState(0);
   const [moving, setMoving] = useState(false);
+  /** The sea chart is up: the camera looks down on every place at once. */
+  const [chart, setChart] = useState(false);
+  /** Places whose panel has been opened: their flags fly and the compass ticks them. */
+  const [visited, setVisited] = useState<readonly string[]>([]);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
   const [locale, setLocale] = useState<'en' | 'th'>('en');
   const frame = useRef<HTMLElement | null>(null);
@@ -124,8 +140,12 @@ export function WorldMode({ rootId }: { rootId: string }) {
       delete site.dataset.world;
       delete site.dataset.worldOpen;
       delete site.dataset.worldAt;
+      delete site.dataset.worldChart;
       timeMotion.world = false;
       timeMotion.place = '';
+      timeMotion.at = '';
+      timeMotion.chart = false;
+      timeMotion.visited = '';
       timeMotion.tour = 0;
       timeMotion.tourTarget = 0;
       window.clearTimeout(settleTimer.current);
@@ -137,23 +157,30 @@ export function WorldMode({ rootId }: { rootId: string }) {
     };
   }, [rootId]);
 
+  /** The day is over (the end card is up): the title card stands aside for it. */
+  const ended = useSyncExternalStore(
+    subscribePlay,
+    () => play.ended,
+    () => false
+  );
   const atHome = stop === 0 && !moving;
   /** The place the tour rests at with its title card up (no panel open yet). */
-  const arrived = !moving && !open ? tourStop(stop) : '';
+  const arrived = !moving && !open && !chart && !ended ? tourStop(stop) : '';
 
   // Show what the tour is on: the hero on the map, a place's sections when its panel is
   // open, nothing while sailing or while a title card is up.
   useEffect(() => {
     const site = frame.current;
     if (!site) return;
-    const shown = open || (atHome ? 'home' : TRAVEL);
+    const shown = open || (atHome && !chart ? 'home' : TRAVEL);
     for (const element of site.querySelectorAll<HTMLElement>(`[${PLACE_ATTRIBUTE}]`)) {
       if (element.getAttribute(PLACE_ATTRIBUTE) === shown) element.dataset.worldOpen = '';
       else delete element.dataset.worldOpen;
     }
-    site.dataset.worldOpen = open || (atHome ? '' : TRAVEL);
+    site.dataset.worldOpen = open || (atHome && !chart ? '' : TRAVEL);
     site.dataset.worldAt = arrived;
     timeMotion.place = open;
+    timeMotion.at = arrived;
     if (!open) {
       // The panel closed: return keyboard focus to the button that opened it.
       if (lastOpen.current) openButton.current?.focus({ preventScroll: true });
@@ -175,25 +202,45 @@ export function WorldMode({ rootId }: { rootId: string }) {
       if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
       heading.focus({ preventScroll: true });
     }
-  }, [arrived, atHome, open]);
+  }, [arrived, atHome, chart, open]);
+
+  // The sea chart and the visited places, for the scene and the stylesheet.
+  useEffect(() => {
+    const site = frame.current;
+    if (site) site.dataset.worldChart = chart ? 'on' : 'off';
+    timeMotion.chart = chart;
+  }, [chart]);
+  useEffect(() => {
+    timeMotion.visited = visited.join(',');
+  }, [visited]);
+  const read = useCallback((id: string) => {
+    setOpen(id);
+    setVisited((current) => (current.includes(id) ? current : [...current, id]));
+  }, []);
 
   /**
    * Locks the tour onto a stop: the ship and the camera glide there and the place's title
    * card comes up. `thenOpen` also opens its panel once the camera has had time to arrive
    * (an in-page link asked for that content).
    */
-  const lockTo = useCallback((index: number, thenOpen = false) => {
-    const next = Math.min(TOUR.length, Math.max(0, index));
-    base.current = next;
-    timeMotion.tourTarget = next;
-    window.clearTimeout(settleTimer.current);
-    window.clearTimeout(openTimer.current);
-    setStop(next);
-    setMoving(false);
-    const id = tourStop(next);
-    setOpen((current) => (current === id ? current : ''));
-    if (thenOpen && id) openTimer.current = window.setTimeout(() => setOpen(id), ARRIVE_MS);
-  }, []);
+  const lockTo = useCallback(
+    (index: number, thenOpen = false) => {
+      const next = Math.min(TOUR.length, Math.max(0, index));
+      // Going back to any stop before the last puts the day's end away.
+      if (next < TOUR.length) endDay(false);
+      base.current = next;
+      timeMotion.tourTarget = next;
+      window.clearTimeout(settleTimer.current);
+      window.clearTimeout(openTimer.current);
+      setStop(next);
+      setMoving(false);
+      setChart(false);
+      const id = tourStop(next);
+      setOpen((current) => (current === id ? current : ''));
+      if (thenOpen && id) openTimer.current = window.setTimeout(() => read(id), ARRIVE_MS);
+    },
+    [read]
+  );
 
   const goTo = useCallback(
     (id: string, thenOpen = false) =>
@@ -219,10 +266,26 @@ export function WorldMode({ rootId }: { rootId: string }) {
       if (Math.abs(moved) > 1) next = Math.round(timeMotion.tourTarget);
       lockTo(next);
     };
+    /** How far the scroll has pushed past the last stop: enough of it ends the day. */
+    let overshoot = 0;
     const advance = (amount: number) => {
-      const next = Math.min(TOUR.length, Math.max(0, timeMotion.tourTarget + amount));
+      if (amount > 0 && base.current === TOUR.length && timeMotion.tourTarget >= TOUR.length) {
+        overshoot += amount;
+        if (overshoot > 0.15) endDay();
+        return;
+      }
+      overshoot = 0;
+      if (amount < 0 && play.ended) endDay(false);
+      // One stop at a time, however hard the scroll: never more than one place past where
+      // the camera actually is, so a flick's momentum is spent while it travels.
+      const here = Math.round(timeMotion.tour);
+      const next = Math.min(
+        TOUR.length,
+        Math.max(0, here - 1, Math.min(here + 1, timeMotion.tourTarget + amount))
+      );
       if (next === timeMotion.tourTarget) return;
       timeMotion.tourTarget = next;
+      setChart(false);
       window.clearTimeout(openTimer.current);
       // Leaving a place closes it; the map's hero goes the same way.
       if (Math.abs(next - base.current) > COMMIT) {
@@ -258,7 +321,7 @@ export function WorldMode({ rootId }: { rootId: string }) {
       const moved = touchY - y;
       touchY = y;
       if (heldByPanel(event.target)) return;
-      advance(moved / (window.innerHeight * 1.1));
+      advance(moved / (window.innerHeight * 3.2));
     };
     const onTouchEnd = () => {
       touching = false;
@@ -277,7 +340,8 @@ export function WorldMode({ rootId }: { rootId: string }) {
       else if (forward || back) {
         // With the panel open the arrow keys read it; they do not leave the island.
         if (heldByPanel(document.activeElement)) return;
-        lockTo(base.current + (forward ? 1 : -1));
+        if (forward && base.current === TOUR.length) endDay();
+        else lockTo(base.current + (forward ? 1 : -1));
       } else return;
       event.preventDefault();
     };
@@ -324,8 +388,9 @@ export function WorldMode({ rootId }: { rootId: string }) {
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      // Escape steps back one level: the panel, then the island.
-      if (site.dataset.worldOpen && site.dataset.worldOpen !== TRAVEL) setOpen('');
+      // Escape steps back one level: the chart, the panel, then the island.
+      if (site.dataset.worldChart === 'on') setChart(false);
+      else if (site.dataset.worldOpen && site.dataset.worldOpen !== TRAVEL) setOpen('');
       else if (base.current > 0) lockTo(0);
     };
     if (window.location.hash) reveal(window.location.hash);
@@ -343,6 +408,14 @@ export function WorldMode({ rootId }: { rootId: string }) {
     [hotspots]
   );
   const card = hotspots.find((spot) => spot.id === arrived);
+  /** The figurines' line: the map's on the map, each place's on arrival, none while reading. */
+  let storyLine = -1;
+  if (atHome && !chart && !open) storyLine = 0;
+  else if (arrived) storyLine = tourIndex(arrived);
+  const restart = useCallback(() => {
+    resetDay();
+    lockTo(0);
+  }, [lockTo]);
   const total = String(TOUR.length).padStart(2, '0');
   return (
     <>
@@ -378,6 +451,7 @@ export function WorldMode({ rootId }: { rootId: string }) {
       {/* Decoration the scene drives every frame: the spyglass iris and the tether that ties
           a title card or a panel to its landmark. */}
       <div aria-hidden="true" className="tx-world-spyglass" />
+      <div aria-hidden="true" className="tx-world-chartveil" />
       <div aria-hidden="true" className="tx-world-tether" />
 
       {/* The title card: the place's own heading and the way in. */}
@@ -389,7 +463,7 @@ export function WorldMode({ rootId }: { rootId: string }) {
           <p className="tx-world-card-title">{card.label}</p>
           <button
             className="tx-world-card-open"
-            onClick={() => setOpen(card.id)}
+            onClick={() => read(card.id)}
             ref={openButton}
             type="button"
           >
@@ -409,10 +483,11 @@ export function WorldMode({ rootId }: { rootId: string }) {
         <div aria-hidden="true" className="tx-world-compass-needle" />
         <ol>
           {stops.map((spot, index) => (
-            <li key={spot.id} style={{ '--i': index + 1, '--n': TOUR.length + 1 } as CSSProperties}>
+            <li key={spot.id} style={{ '--i': index + 1, '--n': TOUR.length } as CSSProperties}>
               <button
                 aria-current={stop === index + 1 && !moving ? 'step' : undefined}
                 aria-label={spot.label}
+                data-visited={visited.includes(spot.id) || undefined}
                 onClick={() => goTo(spot.id)}
                 title={spot.label}
                 type="button"
@@ -429,12 +504,34 @@ export function WorldMode({ rootId }: { rootId: string }) {
         >
           {atHome ? 'N' : String(stop).padStart(2, '0')}
         </button>
-        {atHome ? (
+        <button
+          aria-label={chrome.chart}
+          aria-pressed={chart}
+          className="tx-world-compass-chart"
+          onClick={() => {
+            setOpen('');
+            setChart((current) => !current);
+          }}
+          title={chrome.chart}
+          type="button"
+        >
+          <svg aria-hidden="true" fill="none" height="16" viewBox="0 0 16 16" width="16">
+            <path
+              d="M1.5 3.5 6 2l4 1.5L14.5 2v10.5L10 14l-4-1.5L1.5 14V3.5ZM6 2v10.5M10 3.5V14"
+              stroke="currentColor"
+              strokeLinejoin="round"
+              strokeWidth="1.2"
+            />
+          </svg>
+        </button>
+        {atHome && !chart ? (
           <p aria-hidden="true" className="tx-world-compass-hint">
             {chrome.start}
           </p>
         ) : null}
       </nav>
+
+      <StoryOverlay line={storyLine} locale={locale} onRestart={restart} />
 
       {open ? (
         <button

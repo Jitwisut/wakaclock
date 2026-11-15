@@ -529,6 +529,44 @@
   color: var(--tx-lime);
 }
 
+/* The demo day's coded time, beside its clock (3D world only, client-rendered). */
+.tx-root .tx-clock-coded {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-left: 6px;
+  padding-left: 16px;
+  border-left: 1px solid var(--tx-line);
+}
+
+.tx-root .tx-clock-coded .tx-clock-time {
+  font-size: clamp(1.1rem, 1.6vw, 1.5rem);
+}
+
+.tx-root .tx-clock-hearts {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-left: 6px;
+  padding-left: 16px;
+  border-left: 1px solid var(--tx-line);
+}
+
+.tx-root .tx-clock-hearts .tx-clock-time {
+  font-size: clamp(1.1rem, 1.6vw, 1.5rem);
+  color: #e3a08f;
+}
+
+.tx-root .tx-clock-heart {
+  color: #d98a78;
+  font-size: 1rem;
+}
+
+.tx-root .tx-clock-coded .tx-clock-label:lang(th) {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .tx-root .tx-badge {
   padding: 4px 10px;
   border: 1px solid var(--tx-line);

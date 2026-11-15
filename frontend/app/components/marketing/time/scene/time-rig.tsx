@@ -16,7 +16,7 @@ import {
   warpTarget,
 } from '../time-keyframes';
 import { getTimeUi, timeMotion } from '../time-store';
-import { HOME_DUSK, tourKeys } from '../voyage/world-places';
+import { CHART_POSE, HOME_DUSK, tourKeys } from '../voyage/world-places';
 
 const position = new Vector3();
 const look = new Vector3();
@@ -43,10 +43,52 @@ const TOUR_LIFT = TOUR_KEYS.slice(1).map((key, index) => {
  * The scroll sets a target; the tour position glides after it, so a wheel's separate notches
  * and a finger's small jitters become one continuous movement.
  */
+/**
+ * The fastest the tour may travel (stops per second). Owner 2026-11-15: a hard scroll must
+ * not send the figurines racing; a stop takes about four seconds at most speed.
+ */
+export const MAX_TOUR_SPEED = 0.26;
+/** The tour's current speed (stops/s): it eases up to its pace and down into a stop. */
+const glide = { velocity: 0 };
+
+/** One frame of the tour's glide: speed eases toward the gap, never past MAX_TOUR_SPEED. */
+export function glideStep(tour: number, target: number, velocity: number, delta: number) {
+  const gap = target - tour;
+  if (Math.abs(gap) < 1e-4 && Math.abs(velocity) < 1e-3) return { tour: target, velocity: 0 };
+  // A scroll moves one stop at the walking pace; a jump (compass, keys, a new day) across
+  // several stops may go faster, in proportion, so it still takes only a few seconds.
+  const limit = MAX_TOUR_SPEED * Math.max(1, Math.abs(gap) / 1.2);
+  const wanted = Math.max(-limit, Math.min(limit, gap * 1.6));
+  const next = velocity + (wanted - velocity) * dampFactor(delta, 3);
+  let moved = tour + next * delta;
+  // Never overshoot the stop.
+  if ((target - moved) * gap < 0) moved = target;
+  return { tour: moved, velocity: moved === target ? 0 : next };
+}
+
 function glideTour(delta: number) {
-  const gap = timeMotion.tourTarget - timeMotion.tour;
-  timeMotion.tour =
-    Math.abs(gap) < 1e-4 ? timeMotion.tourTarget : timeMotion.tour + gap * dampFactor(delta, 3);
+  const step = glideStep(timeMotion.tour, timeMotion.tourTarget, glide.velocity, delta);
+  timeMotion.tour = step.tour;
+  glide.velocity = step.velocity;
+}
+
+/** Moves the world camera toward this frame's goal (`wantedPos`, `wantedLook`). */
+function chaseTour(delta: number, portrait: boolean) {
+  if (timeMotion.chart) {
+    // The sea chart: high over the archipelago, looking almost straight down.
+    const tall = portrait ? 1.75 : 1;
+    wantedPos.set(CHART_POSE.pos[0], CHART_POSE.pos[1] * tall, CHART_POSE.pos[2]);
+    wantedLook.set(...CHART_POSE.look);
+    worldPos.lerp(wantedPos, dampFactor(delta, 2));
+    worldLook.lerp(wantedLook, dampFactor(delta, 2.4));
+  } else {
+    // Far from the goal (a jump across the map): rise first, settle as it nears.
+    const remaining = worldPos.distanceTo(wantedPos);
+    wantedPos.y += Math.min(26, Math.max(0, remaining - 30) * 0.16);
+    const chase = remaining > 200 ? 2 : 3.4;
+    worldPos.lerp(wantedPos, dampFactor(delta, chase));
+    worldLook.lerp(wantedLook, dampFactor(delta, chase + 0.4));
+  }
 }
 
 /** Smooth step between stops, so the camera eases out of one place and into the next. */
@@ -203,11 +245,7 @@ export function TimeRig({ parallax }: { parallax: boolean }) {
         world.dusk = dusk;
         world.ready = true;
       }
-      // Far from the goal (a jump across the map): rise first, settle as it nears.
-      const remaining = worldPos.distanceTo(wantedPos);
-      wantedPos.y += Math.min(26, Math.max(0, remaining - 30) * 0.16);
-      worldPos.lerp(wantedPos, dampFactor(delta, 3.4));
-      worldLook.lerp(wantedLook, dampFactor(delta, 3.8));
+      chaseTour(delta, size.width < size.height);
       world.dusk += (dusk - world.dusk) * dampFactor(delta, 1.2);
       timeMotion.hand = 480 + world.dusk * 960;
       position.copy(worldPos);

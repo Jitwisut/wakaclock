@@ -1,30 +1,26 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { PerformanceMonitor } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { EffectComposer, N8AO, TiltShift2, ToneMapping } from '@react-three/postprocessing';
+import { ToneMappingMode } from 'postprocessing';
 import { ACESFilmicToneMapping, PCFSoftShadowMap, SRGBColorSpace } from 'three';
 
-import { COMPATIBLE_EDITORS } from '../../editor-wall.data';
-import { type ActivitySlice, generateDemoDays } from '../time-data';
+import { Desk, Lamp, Monitor, RingClock, RoomGlow, RoomLight } from '../editor/desk';
+import { Figures, StoryProjector } from '../editor/figures';
+import { RouteHearts } from '../editor/hearts';
+import { ScenePicker } from '../editor/pick';
+import { CodeFile, Cursors, EditorDirector, Landmarks } from '../editor/scene';
 import { setTimeUi, timeMotion } from '../time-store';
-import { AiWind, Spray, VoyageDirector, VoyageLights } from '../voyage/director';
-import { Ocean, SkyDome } from '../voyage/environment';
 import { HotspotProjector } from '../voyage/hotspot-projector';
-import { Islands } from '../voyage/islands';
-import { ChipLog, Helm, Lanterns } from '../voyage/log-props';
-import { PlaceEffects } from '../voyage/place-fx';
-import { Ship } from '../voyage/ship';
 import { voyage } from '../voyage/state';
-import { Wake } from '../voyage/wake';
-import { Fleet, Weather } from '../voyage/weather';
+import { TOUR } from '../voyage/world-places';
 
-import { MidnightDirector } from './midnight-director';
 import { TimeRig } from './time-rig';
 
 import type { TimeSceneQuality } from '../time-quality';
-import type { BloomEffect } from 'postprocessing';
 
 /** Seconds of motion the scene's clock starts with, so every cycle opens mid-flight. */
 const WARM_START_SECONDS = 3600;
@@ -43,15 +39,21 @@ const STAGES = 4;
  * first frame draw and the still fade out. Rendering is taken over (priority 1) so that
  * nothing is drawn, and so nothing compiles synchronously, before that.
  */
-function useStagedScene() {
+function useStagedScene(post: boolean) {
   const [stage, setStage] = useState(0);
+  /** All shaders compiled: drawing may begin (state, so the effect pass can switch on). */
+  const [ready, setReady] = useState(false);
   const compiled = useRef(false);
   const compiling = useRef(false);
   const shown = useRef(0);
   const waited = useRef(0);
   useFrame(({ camera, clock, gl, scene }) => {
     if (compiled.current) {
-      gl.render(scene, camera);
+      // With the effect pass on, it draws the frame (at the same priority); not us as well.
+      if (!post) gl.render(scene, camera);
+      // The effect pass switches on with the `ready` commit and compiles its own shaders on
+      // its first frame: count frames toward the reveal only once it is drawing.
+      else if (!ready) return;
       // The first draw uploads every buffer and texture: let it pass unseen, and reveal the
       // scene (and start its opening move) on the clean frame after it.
       if (shown.current === 1) {
@@ -74,6 +76,7 @@ function useStagedScene() {
     compiling.current = true;
     const finish = () => {
       compiled.current = true;
+      setReady(true);
     };
     // Older three builds and test renderers have no async compile: fall back to drawing.
     const compile = (gl as { compileAsync?: (scene: unknown, camera: unknown) => Promise<unknown> })
@@ -81,7 +84,31 @@ function useStagedScene() {
     if (compile) void compile.call(gl, scene, camera).then(finish, finish);
     else finish();
   }, 1);
-  return stage;
+  return { ready, stage };
+}
+
+/**
+ * The miniature's lens (owner decision 2026-11-15, full tier only): soft ambient occlusion
+ * where parts meet, a gentle tilt-shift that softens only the far edge of the frame (the
+ * band with the islands and the figurines stays sharp — uv y 0.4, low on the screen), and the tone mapping the renderer gives up to the pass.
+ * Off until the scene has compiled; its own shaders compile on its first frame, and the
+ * staged loader holds the reveal until after that frame (measured: ~120 ms, unseen).
+ */
+function MiniatureLens({ on }: { on: boolean }) {
+  return (
+    <EffectComposer enabled={on} enableNormalPass={false} multisampling={4}>
+      <N8AO
+        aoRadius={2.6}
+        color="#120c08"
+        distanceFalloff={1.2}
+        halfRes
+        intensity={2.4}
+        quality="medium"
+      />
+      <TiltShift2 blur={0.05} end={[1, 0.4]} start={[0, 0.4]} taper={0.75} />
+      <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
+    </EffectComposer>
+  );
 }
 
 /**
@@ -115,54 +142,55 @@ function Invalidator() {
   return null;
 }
 
-function Scene({ quality, slices }: { quality: TimeSceneQuality; slices: ActivitySlice[] }) {
-  const stage = useStagedScene();
-  // The midnight ending still runs (the clock reads 00:00), without a bloom pass to drive.
-  const noBloom = useRef<BloomEffect | null>(null);
+function Scene({ quality }: { quality: TimeSceneQuality }) {
+  const post = quality.bloom;
+  const { ready, stage } = useStagedScene(post);
   return (
     <>
       <TimeRig parallax={quality.parallax} />
-      <VoyageDirector lanterns={COMPATIBLE_EDITORS.length} slices={slices} />
-      <MidnightDirector bloom={noBloom} />
+      <EditorDirector />
       <Invalidator />
-      <VoyageLights shadows={quality.shadows} />
-      <SkyDome />
-      <Ocean segments={quality.oceanSegments} />
-      <Fleet>
-        {stage >= 1 ? (
-          <>
-            <Wake />
-            <ChipLog slices={slices} />
-            <Ship>
-              <Helm slices={slices} />
-              <Lanterns />
-            </Ship>
-          </>
-        ) : null}
-        {stage >= 3 ? (
-          <>
-            <Spray count={quality.spray} />
-            <AiWind count={quality.wind} />
-          </>
-        ) : null}
-      </Fleet>
-      {stage >= 2 ? <Islands detail={quality.islandDetail} slices={slices} /> : null}
+      <RoomLight stops={TOUR.length} />
+      <ScenePicker />
+      <Lamp shadows={quality.shadows} />
+      <RoomGlow />
+      <Desk />
+      <CodeFile />
+      {stage >= 1 ? (
+        <>
+          <Cursors />
+          <Figures />
+          <RouteHearts />
+        </>
+      ) : null}
+      {stage >= 2 ? <Landmarks particles={quality.fxParticles} /> : null}
       {stage >= 3 ? (
         <>
-          <PlaceEffects particles={quality.fxParticles} />
-          <Weather drops={quality.fxParticles * 5} />
+          <RingClock stops={TOUR.length} />
+          <Monitor />
         </>
       ) : null}
       <HotspotProjector />
+      <StoryProjector />
+      {post ? <MiniatureLens on={ready} /> : null}
     </>
   );
 }
 
 /**
- * The Voyage Log (owner decision 2026-11-14): a pirate ship crossing a living sunset ocean,
- * whose wake carries the chip log — one lit marker per demo heartbeat. Loaded with
- * `next/dynamic` after first paint, so none of three.js is on the critical path. No text is
- * drawn anywhere in the scene.
+ * The lowest pixel ratio the performance monitor may drop to. On a high-density screen the
+ * full tier never goes below 1.5: at 1 or 1.25 the token bars' edges and the glyphs went
+ * visibly soft (owner asked for a sharper scene, 2026-11-15).
+ */
+export function dprFloor(maxDpr: number, deviceRatio = globalThis.devicePixelRatio ?? 1) {
+  if (maxDpr < 2 || deviceRatio < 2) return 1;
+  return 1.5;
+}
+
+/**
+ * The editor world (owner decision 2026-11-15): one enormous source file seen as a landscape,
+ * travelled with the cursor. Loaded with `next/dynamic` after first paint, so none of
+ * three.js is on the critical path. No text is drawn anywhere in the scene.
  */
 export default function TimeCanvas({
   mode,
@@ -171,9 +199,8 @@ export default function TimeCanvas({
   mode: 'always' | 'demand';
   quality: TimeSceneQuality;
 }) {
-  const slices = useMemo(() => generateDemoDays(quality.days), [quality.days]);
   const [factor, setFactor] = useState(1);
-  const dpr = 1 + factor * (quality.maxDpr - 1);
+  const dpr = Math.max(dprFloor(quality.maxDpr), 1 + factor * (quality.maxDpr - 1));
 
   return (
     <Canvas
@@ -199,7 +226,7 @@ export default function TimeCanvas({
         onChange={({ factor: next }) => setFactor(Math.round(next * 4) / 4)}
         onFallback={() => setFactor(0.5)}
       />
-      <Scene quality={quality} slices={slices} />
+      <Scene quality={quality} />
     </Canvas>
   );
 }

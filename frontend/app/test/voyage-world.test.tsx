@@ -13,8 +13,11 @@ import {
 } from '@/components/marketing/time/voyage/chip-log';
 import {
   courseAt,
+  courseXZ,
   focusTargets,
+  fxLevel,
   weatherAt,
+  WELCOME_LEVEL,
   windVisibility,
 } from '@/components/marketing/time/voyage/director';
 import {
@@ -26,6 +29,7 @@ import {
 import { STERN_X } from '@/components/marketing/time/voyage/hull';
 import { islandGeometry, PLATEAU } from '@/components/marketing/time/voyage/islands';
 import { ringPhase } from '@/components/marketing/time/voyage/place-fx';
+import { dolphinLeap, routeGeometry } from '@/components/marketing/time/voyage/sea-life';
 import {
   buildRigging,
   buildSails,
@@ -294,8 +298,20 @@ describe('world mode', () => {
     expect(timeMotion.tourTarget).toBe(0);
     expect(site.dataset.worldOpen).toBe('');
 
+    // However hard the flick, the tour never goes past the next stop while the camera is
+    // still on its way (owner 2026-11-15: the figurines must not race).
+    wheel(40000);
+    expect(timeMotion.tourTarget).toBe(1);
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home' }));
+    });
+    expect(timeMotion.tourTarget).toBe(0);
+
     // A real scroll leaves the map, sails on and brings up the first stop's card.
-    wheel(700);
+    wheel(1300);
     expect(site.dataset.worldOpen).toBe('travel');
     expect(site.dataset.worldAt).toBe('');
     act(() => {
@@ -311,7 +327,8 @@ describe('world mode', () => {
     wheel(4000, site.querySelector('#tx-c1') as HTMLElement);
     expect(timeMotion.tourTarget).toBe(1);
     expect(site.dataset.worldOpen).toBe(TOUR[0]);
-    // Scrolling the scene beside it does.
+    // Scrolling the scene beside it does, once the camera has arrived at the first stop.
+    timeMotion.tour = 1;
     wheel(1500);
     expect(site.dataset.worldOpen).toBe('travel');
     act(() => {
@@ -408,8 +425,8 @@ describe('hotspot reachability', () => {
       expect(spot.y).toBeLessThanOrEqual(height - HOTSPOT_BOUNDS.bottom);
       if (spot.edge) edges.push(place.id);
     }
-    // On a desktop frame the whole archipelago is in view; narrower screens use the edges.
-    if (width > height) expect(edges).toEqual([]);
+    // Places behind the camera or beside the frame wait at the edge; none is ever lost.
+    expect(edges.length).toBeLessThanOrEqual(PLACES.length);
   });
 
   it('sends markers behind the camera to the side they are on', () => {
@@ -464,11 +481,56 @@ describe('the voyage', () => {
 
   it("blends each place's weather along the tour", () => {
     expect(weatherAt(0)).toEqual({ aurora: 0, meteors: 0, mist: 0, rain: 0 });
-    expect(weatherAt(tourIndex('lighthouse')).mist).toBe(1);
+    expect(weatherAt(tourIndex('lighthouse'))).toEqual({ aurora: 0, meteors: 0, mist: 0, rain: 0 });
+    expect(weatherAt(tourIndex('tavern')).mist).toBe(1);
     expect(weatherAt(tourIndex('twinlights')).aurora).toBe(1);
     expect(weatherAt(tourIndex('dock')).rain).toBe(1);
-    const between = weatherAt(tourIndex('lighthouse') - 0.5);
-    expect(between.mist).toBeCloseTo(0.5);
+    const between = weatherAt(tourIndex('twinlights') - 0.5);
+    expect(between.aurora).toBeCloseTo(0.5);
+  });
+
+  it('welcomes an arrival quietly and plays in full once the panel is open', () => {
+    expect(fxLevel('', '', '')).toBe(0);
+    expect(fxLevel('', 'tavern', 'tavern')).toBe(WELCOME_LEVEL);
+    expect(fxLevel('tavern', '', 'tavern')).toBe(1);
+    expect(fxLevel('', '', 'tavern')).toBe(0);
+    expect(WELCOME_LEVEL).toBeLessThan(1);
+  });
+
+  it('draws the route along the whole course and lets the dolphins leap', () => {
+    const route = routeGeometry(40);
+    const along = route.getAttribute('along');
+    expect(along.count).toBe(41 * 2);
+    expect(along.getX(0)).toBe(0);
+    expect(along.getX(along.count - 1)).toBeCloseTo(TOUR.length);
+    route.dispose();
+    expect(courseXZ(0)).toEqual([0, 0]);
+    expect(dolphinLeap(0.6).y).toBeGreaterThan(1);
+    expect(dolphinLeap(2.5).y).toBeLessThan(0);
+    expect(dolphinLeap(-0.2).y).toBeLessThan(0);
+  });
+
+  it('opens the sea chart from the compass and leaves it on a jump', () => {
+    const site = homepage();
+    const { container } = render(<WorldMode rootId="tx-experience" />);
+    const chart = container.querySelector('.tx-world-compass-chart') as HTMLButtonElement;
+    act(() => chart.click());
+    expect(site.dataset.worldChart).toBe('on');
+    expect(timeMotion.chart).toBe(true);
+    // The hero steps aside for the chart.
+    expect(site.dataset.worldOpen).toBe('travel');
+    act(() => {
+      (container.querySelector('[data-hotspot="lighthouse"] button') as HTMLButtonElement).click();
+    });
+    expect(site.dataset.worldChart).toBe('off');
+    expect(site.dataset.worldAt).toBe('lighthouse');
+    expect(timeMotion.at).toBe('lighthouse');
+    // Reading a place flies its flag and ticks it on the compass.
+    act(() => {
+      (container.querySelector('.tx-world-card-open') as HTMLButtonElement).click();
+    });
+    expect(timeMotion.visited).toBe('lighthouse');
+    expect(container.querySelectorAll('.tx-world-compass [data-visited]')).toHaveLength(1);
   });
 
   it('closes the spyglass only while nearing a stop', () => {

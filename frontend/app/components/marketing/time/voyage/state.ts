@@ -36,6 +36,8 @@ export const voyage = {
   shipZ: 0,
   shipHeading: 0,
   way: 4.2,
+  /** The furthest tour position sailed so far: how much of the route is drawn on the sea. */
+  reached: 0,
   /** Weather over the camera, each 0–1, blended between the places of the tour. */
   mist: 0,
   rain: 0,
@@ -89,6 +91,7 @@ export function resetVoyage() {
   voyage.shipZ = 0;
   voyage.shipHeading = 0;
   voyage.way = 4.2;
+  voyage.reached = 0;
   voyage.mist = 0;
   voyage.rain = 0;
   voyage.aurora = 0;

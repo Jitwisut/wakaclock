@@ -1,5 +1,5 @@
 export interface TimeSceneQuality {
-  /** Film-style glow (post-processing). Desktop-class devices only. */
+  /** The miniature lens: ambient occlusion and tilt-shift (post-processing). Desktop only. */
   bloom: boolean;
   /** Days drawn as rings, today included. */
   days: number;

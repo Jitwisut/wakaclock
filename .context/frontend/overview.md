@@ -153,6 +153,37 @@ design change.
 - `components/marketing/cosmos.css` is the design layer, imported last by both marketing
   layouts. It re-points the `--mkt-*` tokens and restyles; it adds no copy. Thai text gets no
   letter-spacing or text-transform. CSS-generated text uses the `content: 'x' / ''` form.
+- **Editor world as a desk diorama** (owner decisions 2026-11-15, branch
+  `claude/editor-world`): the mounted homepage scene is `components/marketing/time/editor/`.
+  One source file is a miniature model on a desk in evening lamplight: every line is a step
+  of the model's base reaching down to the desk (`file-plan.ts`: lines, `lineY`/`lineZ`,
+  gentle `STEP_DROP`, `deskY`, `cursorAt` — pure data). Token bars are lit clay
+  (`MeshStandardMaterial` with the typing patched in via `onBeforeCompile`, plus a matching
+  depth material for shadows) and type themselves in as the cursor passes. Each place is a
+  bar-chart "town" (`charts.ts`: gold human, teal AI stacked — demo shapes) on a floating
+  island (`island.ts`) held on a brass rod. `desk.tsx` has the desk, the lamp (a shadowed
+  spot that follows the camera's view), room light, a 24-hour ring clock and a mini monitor
+  at the head of the file (hero props). The "DEMO DAY" readout also shows a client-only
+  coded-time counter (`codedMinutes`), never in server HTML. Full tier adds ambient occlusion
+  + a gentle tilt-shift (`MiniatureLens` in `scene/time-canvas.tsx`, which then does the
+  drawing and the tone mapping). **No neon**: no additive light; effects use `calm`; no
+  weather; compass and minimap are one widget (cosmos.css). `TimeStill` draws the same file
+  and an island chart as SVG. No text is drawn in the scene.
+- **Story game on the editor world** (owner decisions 2026-11-15): two figurines
+  (`editor/figures.tsx`: the developer with the gold cursor, the AI robot with the teal one)
+  wait by the monitor/clock on the map, hop onto the file when the tour starts, and the
+  speaker of each stop's line waves/hops. Approved dialogue lives in `editor/story.ts`
+  (en/th, client-only — never in server HTML; do not reword without the owner). Hearts to
+  collect (`editor/hearts.tsx`, rules in `editor/play.ts`): two per stretch on the file
+  (collected as the cursor passes), one per island (tap). Tapping uses `editor/pick.tsx`: the
+  canvas is under the page's layers, so a document click not on content/controls is
+  raycast into the scene (`registerPick`). Towers show a demo readout, the monitor types,
+  the clock spins. The room's light runs afternoon → night with the tour (`dayLight`);
+  scrolling past the last stop ends the day (end card, `StoryOverlay`); "start again" resets
+  hearts and typing. The spyglass iris is hidden in the editor world (cosmos.css).
+  `world-mode.tsx` imports only three-free modules (`play`, `story`, `story-overlay`).
+- The **Voyage Log** sea scene described next is kept on `claude/cinematic-marketing` and in
+  `time/voyage/`, but is no longer mounted (ship, ocean, islands, sea life, route).
 - 3D lives on the homepage only: the **Voyage Log** (`components/marketing/time/voyage/`).
   A procedural pirate ship (`hull.ts`, `rig-plan.ts`, `sails.ts`, `ship.tsx`) floats on a
   Gerstner ocean whose wave table is shared by GLSL and JS (`waves.ts`, buoyancy). The sea
@@ -186,6 +217,12 @@ design change.
   Anything that rides with her must use `modelMatrix`, and buoyancy samples the sea at her
   berth. **Weather** is per place (`weather` in `world-places.ts`: mist, rain, aurora,
   meteors), blended along the tour.
+- **Company on the voyage** (`sea-life.tsx`): the sailed route drawn on the sea
+  (`voyage.reached`), dolphins at the bow while under way, a whale far off, gulls over the
+  island ahead. A place's effect plays quietly on arrival (`WELCOME_LEVEL`) and in full once
+  its panel is opened; opened places fly a flag (`timeMotion.visited`) and are ticked on the
+  compass. The **sea chart** (`timeMotion.chart`, the button by the compass) lifts the
+  camera over the whole archipelago with every place named; any scroll or jump leaves it.
 - Effects and weather that hide themselves must stay in the scene until `voyage.shown`, so
   their shaders compile with the rest instead of in the frame they first appear.
 - **Opening effects** (`place-fx.tsx`, `placeFx`/`fxBurst` in `state.ts`): opening a place

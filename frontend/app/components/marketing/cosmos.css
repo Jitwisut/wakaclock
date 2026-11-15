@@ -1445,46 +1445,72 @@
   }
 }
 
-/* The still drawing of the voyage (reduced motion, no WebGL, and the first frame): the
-   sky is a CSS gradient on the stage, so the SVG carries no gradient ids. */
+/* The still drawing of the editor world (reduced motion, no WebGL, and the first frame):
+   the night is a CSS gradient on the stage, so the SVG carries no gradient ids. Muted
+   colours, the same as the 3D scene's: nothing glows. */
 .wakaclock-marketing .tx-root {
   & .tx-night {
     background:
-      radial-gradient(circle at 70% 47%, rgb(255 210 150 / 0.55), transparent 22%),
-      linear-gradient(
-        180deg,
-        #3b4a72 0%,
-        #8a86a8 26%,
-        #d6948a 44%,
-        #f2b27a 55%,
-        #2b4a55 56%,
-        #0f2a33 78%,
-        #0b0f19 100%
-      );
+      radial-gradient(ellipse at 60% 55%, rgb(255 206 150 / 0.14), transparent 50%),
+      linear-gradient(180deg, #14100d 0%, #1d1611 60%, #14100d 100%);
   }
   & .tx-still {
     overflow: visible;
   }
-  & .tx-still-sun circle {
-    fill: #ffd79a;
+  & .tx-still-step {
+    stroke: #36425f;
+    stroke-width: 1;
   }
-  & .tx-still-horizon {
-    stroke: rgb(255 220 170 / 0.5);
-    stroke-width: 1.5;
+  & .tx-still-number {
+    fill: #3a4560;
   }
-  & .tx-still-glint {
-    stroke: #ffe2b0;
-    stroke-width: 3;
-    stroke-linecap: round;
-    opacity: 0.75;
+  & .tx-still-number--here {
+    fill: #d6a35f;
   }
-  & .tx-still-ship path {
-    fill: #120c09;
+  & .tx-still-token {
+    fill: #c4bdb0;
   }
-  & .tx-still-ship .tx-still-spar {
-    fill: none;
-    stroke: #120c09;
-    stroke-width: 7;
+  & .tx-still-token[data-kind='keyword'] {
+    fill: #cf9f60;
+  }
+  & .tx-still-token[data-kind='string'] {
+    fill: #76ada2;
+  }
+  & .tx-still-token[data-kind='number'] {
+    fill: #c98c7c;
+  }
+  & .tx-still-token[data-kind='comment'] {
+    fill: #56627a;
+  }
+  & .tx-still-token[data-ai='true'] {
+    fill: #6f9f97;
+  }
+  & .tx-still-caret[data-kind='human'] {
+    fill: #d6a35f;
+  }
+  & .tx-still-caret[data-kind='ai'] {
+    fill: #5ba89f;
+  }
+  & .tx-still-rock {
+    fill: #3d4252;
+  }
+  & .tx-still-earth {
+    fill: #73573f;
+  }
+  & .tx-still-grass {
+    fill: #55705a;
+  }
+  & .tx-still-tree {
+    fill: #35513f;
+  }
+  & .tx-still-shade {
+    fill: rgb(0 0 0 / 0.28);
+  }
+  & .tx-still-cell {
+    fill: #d6a35f;
+  }
+  & .tx-still-cell[data-kind='ai'] {
+    fill: #5ba89f;
   }
   & .tx-still-wheel .tx-still-hour {
     font-size: 44px;
@@ -2168,6 +2194,68 @@ html:has(.wakaclock-marketing[data-world='on']) {
     letter-spacing: 0;
     font-size: 12.5px;
   }
+  /* Places already read are ticked on the rim. */
+  & .tx-world-compass li button[data-visited]::before {
+    inset: 5px;
+    background: var(--cx-sea);
+    box-shadow: 0 0 8px var(--cx-sea);
+  }
+  & .tx-world-compass-chart {
+    position: absolute;
+    top: -6px;
+    right: -30px;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid rgb(244 237 227 / 0.22);
+    border-radius: 50%;
+    background: rgb(11 15 25 / 0.9);
+    color: var(--cx-ink);
+    cursor: pointer;
+    transition:
+      background 200ms,
+      color 200ms,
+      border-color 200ms;
+  }
+  & .tx-world-compass-chart:is(:hover, :focus-visible, [aria-pressed='true']) {
+    border-color: var(--cx-sun);
+    background: var(--cx-sun);
+    color: #1d1206;
+  }
+
+  /* The sea chart: the archipelago from above, toned like inked parchment, every place
+     named. Markers show even from the map view and at the edges. */
+  & .tx-world-chartveil {
+    position: fixed;
+    z-index: 2;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse at center, transparent 45%, rgb(20 12 4 / 0.7) 100%),
+      repeating-linear-gradient(0deg, rgb(242 179 94 / 0.07) 0 1px, transparent 1px 88px),
+      repeating-linear-gradient(90deg, rgb(242 179 94 / 0.07) 0 1px, transparent 1px 88px),
+      rgb(150 110 60 / 0.14);
+    mix-blend-mode: multiply;
+    transition: opacity 900ms;
+  }
+  &[data-world-chart='on'] .tx-world-chartveil {
+    opacity: 1;
+  }
+  &[data-world-chart='on'] .tx-world-hotspots,
+  &[data-world-chart='on'] .tx-world-hotspots li {
+    opacity: 1;
+    visibility: visible;
+  }
+  &[data-world-chart='on'] .tx-world-hotspots .tx-world-spot {
+    max-width: 260px;
+    gap: 9px;
+    padding: 0 13px 0 10px;
+  }
+  &[data-world-chart='on'] .tx-world-hotspots .tx-world-label {
+    opacity: 1;
+  }
   /* The hero's own scroll cue gives way to the compass's invitation. */
   & .tx-scroll-cue {
     display: none !important;
@@ -2292,5 +2380,447 @@ html:has(.wakaclock-marketing[data-world='on']) {
       rgb(11 15 25 / 0.7) 55%,
       rgb(11 15 25 / 0.2) 100%
     );
+  }
+}
+
+/* ─── Editor world: the instruments, restyled ──────────────────────────────────────────
+   Owner decision 2026-11-15: the homepage world is a source file, so the compass becomes
+   the editor's minimap, the spyglass a plain focus ring and the chart a blueprint grid.
+   Same elements and behaviour as above; only their look changes here. */
+.wakaclock-marketing[data-world='on'] {
+  & .tx-world-compass {
+    --view: 34px;
+    /* Where an editor keeps it: on the right edge, clear of the hero copy. */
+    top: 50%;
+    right: 26px;
+    bottom: auto;
+    left: auto;
+    translate: 0 -50%;
+    width: 58px;
+    height: 250px;
+    border: 1px solid rgb(244 237 227 / 0.16);
+    border-radius: 4px;
+    background: rgb(11 15 25 / 0.88);
+    box-shadow: 0 18px 40px -18px rgb(0 0 0 / 0.8);
+  }
+  /* The file in miniature: faint lines of code, bright where the cursor has been. */
+  & .tx-world-compass-ring {
+    inset: 6px 8px;
+    border-radius: 0;
+    background: repeating-linear-gradient(
+      180deg,
+      rgb(244 237 227 / 0.2) 0 2px,
+      transparent 2px 6px
+    );
+    mask: linear-gradient(90deg, #000 40%, rgb(0 0 0 / 0.35) 75%, transparent);
+    -webkit-mask: linear-gradient(90deg, #000 40%, rgb(0 0 0 / 0.35) 75%, transparent);
+  }
+  & .tx-world-compass-ring::after {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: calc(var(--p) * 100%);
+    background: repeating-linear-gradient(180deg, var(--cx-sun) 0 2px, transparent 2px 6px);
+  }
+  /* The viewport: the part of the file on screen. */
+  & .tx-world-compass-needle {
+    top: calc(var(--p) * (100% - var(--view)));
+    left: 2px;
+    right: 2px;
+    width: auto;
+    height: var(--view);
+    margin: 0;
+    border: 1px solid var(--cx-sun);
+    border-radius: 2px;
+    background: rgb(242 179 94 / 0.14);
+    rotate: none;
+    filter: none;
+  }
+  & .tx-world-compass li {
+    top: calc(var(--i) / var(--n) * (100% - var(--view)) + var(--view) / 2 - 11px);
+    right: auto;
+    left: -26px;
+    margin: 0;
+    rotate: none;
+    transform: none;
+  }
+  & .tx-world-compass-home {
+    top: -46px;
+    left: 0;
+    width: 38px;
+    height: 38px;
+    margin: 0;
+    border-radius: 4px;
+  }
+  & .tx-world-compass-chart {
+    top: -46px;
+    right: auto;
+    left: 46px;
+    width: 38px;
+    height: 38px;
+    border-radius: 4px;
+  }
+  & .tx-world-compass-hint {
+    top: 18px;
+    right: calc(100% + 40px);
+    left: auto;
+    translate: none;
+  }
+  /* The title card stands clear of the minimap. */
+  & .tx-world-card {
+    right: clamp(124px, 10vw, 168px);
+  }
+  & .tx-world-spyglass {
+    background: radial-gradient(
+      circle at var(--sx) var(--sy),
+      transparent calc(var(--sr) - 3px),
+      rgb(242 179 94 / 0.95) calc(var(--sr) - 2px),
+      rgb(242 179 94 / 0.95) var(--sr),
+      rgb(5 7 11 / 0.94) calc(var(--sr) + 1px)
+    );
+  }
+  & .tx-world-chartveil {
+    background:
+      radial-gradient(ellipse at center, transparent 50%, rgb(5 7 11 / 0.6) 100%),
+      repeating-linear-gradient(0deg, rgb(120 150 220 / 0.07) 0 1px, transparent 1px 72px),
+      repeating-linear-gradient(90deg, rgb(120 150 220 / 0.07) 0 1px, transparent 1px 72px);
+    mix-blend-mode: normal;
+  }
+}
+/* The story (owner 2026-11-15): the speech bubble over the speaking figurine, a tapped
+   tower's readout, and the end-of-day card. Client-only chrome; never neon. */
+.wakaclock-marketing[data-world='on'] {
+  & .tx-story {
+    position: fixed;
+    inset: 0;
+    z-index: 34;
+    pointer-events: none;
+  }
+  & .tx-story-bubble {
+    position: absolute;
+    left: var(--sx, -999px);
+    top: var(--sy, -999px);
+    display: grid;
+    gap: 4px;
+    width: max-content;
+    max-width: min(300px, 68vw);
+    margin: 0;
+    padding: 10px 14px 12px;
+    border-radius: 14px;
+    background: rgb(246 239 228 / 0.97);
+    color: #20170f;
+    font-family: var(--cx-text);
+    font-size: 16px;
+    line-height: 1.5;
+    box-shadow: 0 16px 34px -14px rgb(0 0 0 / 0.75);
+    translate: -50% calc(-100% - 16px);
+    transition: opacity 240ms;
+  }
+  & .tx-story-bubble::after {
+    content: '';
+    position: absolute;
+    left: calc(50% + var(--tail, 0px));
+    bottom: -7px;
+    width: 14px;
+    height: 14px;
+    background: inherit;
+    border-radius: 2px;
+    translate: -50% 0;
+    rotate: 45deg;
+  }
+  /* Beside the speaker (when above it would sit under the title card): its bottom level with
+     the head, tail on the right edge pointing at it. */
+  & .tx-story-bubble[data-side='left'] {
+    translate: -50% -100%;
+  }
+  & .tx-story-bubble[data-side='left']::after {
+    left: auto;
+    right: -7px;
+    bottom: 16px;
+    translate: 0 0;
+  }
+  & .tx-story-bubble[data-off='true'] {
+    opacity: 0;
+  }
+  & .tx-story-who {
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9a6b2e;
+  }
+  & .tx-story-bubble[data-speaker='bot'] .tx-story-who {
+    color: #2f7a71;
+  }
+  & .tx-story-bubble:lang(th) .tx-story-who {
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  & .tx-story-text {
+    min-height: 1.45em;
+  }
+  & .tx-story-tip {
+    position: absolute;
+    margin: 0;
+    padding: 6px 10px;
+    border: 1px solid rgb(244 237 227 / 0.2);
+    border-radius: 8px;
+    background: rgb(11 15 25 / 0.92);
+    color: var(--cx-ink);
+    font-family: var(--cx-mono);
+    font-size: 13px;
+    white-space: nowrap;
+    translate: -50% calc(-100% - 14px);
+    animation: tx-story-tip 2.6s var(--cx-ease) both;
+  }
+  & .tx-story-end {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: min(420px, calc(100vw - 32px));
+    padding: 28px 28px 24px;
+    border: 1px solid rgb(244 237 227 / 0.16);
+    border-radius: 18px;
+    background: rgb(14 18 28 / 0.94);
+    box-shadow: 0 30px 80px -30px rgb(0 0 0 / 0.9);
+    color: var(--cx-ink);
+    translate: -50% -50%;
+    pointer-events: auto;
+    animation: tx-story-end 700ms var(--cx-ease) both;
+  }
+  & .tx-story-end h2 {
+    margin: 0 0 18px;
+    font-family: var(--cx-display);
+    font-size: 28px;
+  }
+  & .tx-story-end dl {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 18px;
+    margin: 0;
+  }
+  & .tx-story-end dt {
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cx-muted);
+  }
+  & .tx-story-end:lang(th) dt {
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: var(--cx-text);
+    font-size: 13px;
+  }
+  & .tx-story-end dd {
+    margin: 2px 0 0;
+    font-family: var(--cx-mono);
+    font-size: 22px;
+    color: var(--cx-ink);
+  }
+  & .tx-story-end [data-kind='human'] dd {
+    color: #d6a35f;
+  }
+  & .tx-story-end [data-kind='ai'] dd {
+    color: #5ba89f;
+  }
+  & .tx-story-end [data-kind='hearts'] dd {
+    color: #e3a08f;
+  }
+  & .tx-story-note {
+    margin: 18px 0 16px;
+    color: var(--cx-muted);
+    font-size: 13px;
+  }
+  & .tx-story-again {
+    padding: 12px 18px;
+    border: 0;
+    border-radius: 4px;
+    background: var(--cx-sun);
+    color: var(--mkt-accent-fg);
+    font-family: var(--cx-mono);
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+  & .tx-story-again:lang(th) {
+    letter-spacing: 0;
+  }
+}
+@keyframes tx-story-tip {
+  0% {
+    opacity: 0;
+    translate: -50% calc(-100% - 4px);
+  }
+  12%,
+  80% {
+    opacity: 1;
+    translate: -50% calc(-100% - 14px);
+  }
+  100% {
+    opacity: 0;
+    translate: -50% calc(-100% - 20px);
+  }
+}
+@keyframes tx-story-end {
+  from {
+    opacity: 0;
+    translate: -50% -44%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wakaclock-marketing[data-world='on'] :is(.tx-story-tip, .tx-story-end) {
+    animation: none;
+  }
+}
+
+/* The demo clock, coded time and hearts sit on a dark backing, so they read over any part of
+   the model (owner 2026-11-15). */
+.wakaclock-marketing[data-world='on'] .tx-root .tx-clock {
+  padding: 8px 16px;
+  border: 1px solid rgb(244 237 227 / 0.12);
+  border-radius: 12px;
+  background: rgb(11 15 25 / 0.8);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.wakaclock-marketing[data-world='on'] .tx-root .tx-clock-label {
+  color: rgb(244 237 227 / 0.72);
+}
+/* Thai is never letter-spaced or case-transformed. */
+.wakaclock-marketing .tx-root .tx-clock-label:lang(th) {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* No spyglass on arrival in the editor world (owner 2026-11-15): the view stays full-frame. */
+.wakaclock-marketing[data-world='on'] .tx-world-spyglass {
+  display: none;
+}
+
+/* One instrument, not two (owner 2026-11-15, "less clutter"): the stop marks live inside
+   the minimap as ticks on its left edge, and the home and whole-file buttons sit in its
+   header. Same elements and behaviour; only the layout changes. */
+.wakaclock-marketing[data-world='on'] {
+  & .tx-world-compass {
+    --head: 40px;
+    width: 64px;
+    height: 296px;
+  }
+  & .tx-world-compass-ring {
+    inset: calc(var(--head) + 6px) 8px 8px 14px;
+  }
+  & .tx-world-compass-needle {
+    top: calc(var(--head) + 6px + var(--p) * (100% - var(--head) - 14px - var(--view)));
+    left: 10px;
+    right: 4px;
+  }
+  & .tx-world-compass li {
+    top: calc(
+      var(--head) + 6px + var(--i) / var(--n) * (100% - var(--head) - 14px - var(--view)) +
+        var(--view) / 2 - 7px
+    );
+    left: 0;
+    width: 100%;
+    height: 14px;
+  }
+  & .tx-world-compass li button {
+    width: 100%;
+    height: 14px;
+  }
+  & .tx-world-compass li button::before {
+    inset: 5px auto 5px 3px;
+    width: 7px;
+    border-radius: 2px;
+    background: rgb(244 237 227 / 0.35);
+  }
+  & .tx-world-compass li button:is(:hover, :focus-visible, [aria-current])::before {
+    inset: 4px auto 4px 2px;
+    width: 9px;
+    background: var(--cx-sun);
+    box-shadow: none;
+  }
+  & .tx-world-compass li button[data-visited]::before {
+    background: rgb(214 163 95 / 0.6);
+  }
+  & .tx-world-compass-home,
+  & .tx-world-compass-chart {
+    top: 6px;
+    width: 26px;
+    height: 26px;
+    font-size: 11px;
+  }
+  & .tx-world-compass-home {
+    left: 5px;
+  }
+  & .tx-world-compass-chart {
+    left: 33px;
+  }
+  & .tx-world-compass-chart svg {
+    width: 13px;
+    height: 13px;
+  }
+  & .tx-world-compass-hint {
+    top: 10px;
+    right: calc(100% + 14px);
+  }
+  & .tx-world-card {
+    right: clamp(104px, 9vw, 148px);
+  }
+}
+@media (max-width: 767px) {
+  .wakaclock-marketing[data-world='on'] {
+    & .tx-world-compass {
+      --view: 22px;
+      top: auto;
+      right: auto;
+      left: 16px;
+      bottom: 20px;
+      translate: none;
+      width: 40px;
+      height: 150px;
+    }
+    & .tx-world-compass-needle {
+      height: var(--view);
+      margin-top: 0;
+    }
+    & .tx-world-compass-home,
+    & .tx-world-compass-chart {
+      top: -40px;
+      width: 32px;
+      height: 32px;
+      margin: 0;
+    }
+    & .tx-world-compass-chart {
+      left: 38px;
+    }
+    & .tx-world-compass {
+      --head: 32px;
+      width: 52px;
+      height: 190px;
+    }
+    & .tx-world-compass li {
+      right: auto;
+      left: 0;
+    }
+    & .tx-world-compass-home,
+    & .tx-world-compass-chart {
+      top: 4px;
+      width: 22px;
+      height: 22px;
+    }
+    & .tx-world-compass-home {
+      left: 3px;
+    }
+    & .tx-world-compass-chart {
+      left: 27px;
+    }
+    & .tx-world-compass-hint {
+      right: auto;
+      left: calc(100% + 14px);
+    }
+    & .tx-world-card {
+      right: 16px;
+    }
   }
 }

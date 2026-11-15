@@ -5,9 +5,9 @@ import { useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { type Camera, Vector3 } from 'three';
 
+import { STOP_GAP } from '../editor/file-plan';
 import { timeMotion } from '../time-store';
 
-import { voyage } from './state';
 import { landmark, type Place, placeById, PLACES, TOUR, tourStop } from './world-places';
 
 const point = new Vector3();
@@ -97,13 +97,9 @@ export function spyglassAmount(at: number, target: number) {
 const anchor = new Vector3();
 const glass = { amount: 0 };
 
-/** The landmark of a place in the world; the ship's moves with her. */
+/** The landmark of a place in the world. */
 function landmarkOf(place: Place, out: Vector3) {
   out.set(...landmark(place));
-  if (place.building === 'ship') {
-    out.x = voyage.shipX;
-    out.z = voyage.shipZ;
-  }
   return out;
 }
 
@@ -119,7 +115,7 @@ function driveSpyglass(element: HTMLElement | null, { at, camera, delta, height,
   const size = { height, width };
   // The spyglass closes round the place the voyage is nearing.
   const near = placeById(tourStop(Math.round(at)));
-  const wanted = spyglassAmount(at, timeMotion.tourTarget);
+  const wanted = timeMotion.chart ? 0 : spyglassAmount(at, timeMotion.tourTarget);
   glass.amount += (wanted - glass.amount) * (1 - Math.exp(-7 * delta));
   if (element) {
     const shown = glass.amount > 0.004 && near;
@@ -226,7 +222,10 @@ export function HotspotProjector() {
       point.y += 2.5;
       point.project(camera);
       const spot = hotspotPosition(point.x, point.y, point.z > 1, size.width, size.height);
-      element.dataset.visible = 'true';
+      // Along a file every place lies in one line of sight: only the ones near the cursor
+      // wear a marker (all of them from the whole-file view).
+      const stops = Math.abs(-place.at[1] / STOP_GAP - timeMotion.tour);
+      element.dataset.visible = String(timeMotion.chart || stops < 1.35);
       element.dataset.edge = spot.edge;
       const label = element.firstElementChild as HTMLElement | null;
       boxes.push({
