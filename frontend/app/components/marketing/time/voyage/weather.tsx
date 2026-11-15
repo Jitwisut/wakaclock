@@ -59,7 +59,7 @@ void main() {
 }
 `;
 
-function Rain({ count }: { count: number }) {
+function Rain({ count, level = 1 }: { count: number; level?: number }) {
   const lines = useRef<LineSegments>(null);
   const material = useRef<ShaderMaterial>(null);
   const geometry = useMemo(() => {
@@ -87,7 +87,7 @@ function Rain({ count }: { count: number }) {
     rain.visible = voyage.rain > 0.01 || !voyage.shown;
     if (!rain.visible) return;
     live.uTime.value = voyage.time;
-    live.uOpacity.value = voyage.rain * 0.75;
+    live.uOpacity.value = voyage.rain * 0.75 * level;
   });
   return (
     <lineSegments frustumCulled={false} geometry={geometry} ref={lines}>
@@ -137,7 +137,7 @@ void main() {
 }
 `;
 
-function Aurora() {
+function Aurora({ level = 1 }: { level?: number }) {
   const mesh = useRef<Mesh>(null);
   const material = useRef<ShaderMaterial>(null);
   const uniforms = useMemo(() => ({ uTime: { value: 0 }, uOpacity: { value: 0 } }), []);
@@ -150,7 +150,7 @@ function Aurora() {
     curtain.position.set(camera.position.x, 230, camera.position.z);
     live.uTime.value = voyage.time;
     // It needs a dark sky to show against.
-    live.uOpacity.value = voyage.aurora * (0.6 + 0.4 * (1 - voyage.daylight)) * 0.85;
+    live.uOpacity.value = voyage.aurora * (0.6 + 0.4 * (1 - voyage.daylight)) * 0.85 * level;
   });
   return (
     <mesh frustumCulled={false} ref={mesh} renderOrder={-8}>
@@ -249,12 +249,13 @@ function Meteors({ count }: { count: number }) {
   );
 }
 
-export function Weather({ drops }: { drops: number }) {
+/** `calm` dims the aurora and the rain to a hint, for scenes that should not glow. */
+export function Weather({ calm = false, drops }: { calm?: boolean; drops: number }) {
   return (
     <>
-      <Aurora />
+      <Aurora level={calm ? 0.4 : 1} />
       <Meteors count={14} />
-      <Rain count={drops} />
+      <Rain count={drops} level={calm ? 0.55 : 1} />
     </>
   );
 }

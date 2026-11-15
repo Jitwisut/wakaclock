@@ -1445,46 +1445,70 @@
   }
 }
 
-/* The still drawing of the voyage (reduced motion, no WebGL, and the first frame): the
-   sky is a CSS gradient on the stage, so the SVG carries no gradient ids. */
+/* The still drawing of the editor world (reduced motion, no WebGL, and the first frame):
+   the night is a CSS gradient on the stage, so the SVG carries no gradient ids. Muted
+   colours, the same as the 3D scene's: nothing glows. */
 .wakaclock-marketing .tx-root {
   & .tx-night {
     background:
-      radial-gradient(circle at 70% 47%, rgb(255 210 150 / 0.55), transparent 22%),
-      linear-gradient(
-        180deg,
-        #3b4a72 0%,
-        #8a86a8 26%,
-        #d6948a 44%,
-        #f2b27a 55%,
-        #2b4a55 56%,
-        #0f2a33 78%,
-        #0b0f19 100%
-      );
+      radial-gradient(ellipse at 62% 62%, rgb(214 163 95 / 0.08), transparent 45%),
+      radial-gradient(ellipse at 22% 30%, rgb(91 168 159 / 0.06), transparent 40%),
+      linear-gradient(180deg, #070a12 0%, #0b1020 60%, #070a12 100%);
   }
   & .tx-still {
     overflow: visible;
   }
-  & .tx-still-sun circle {
-    fill: #ffd79a;
+  & .tx-still-step {
+    stroke: #36425f;
+    stroke-width: 1;
   }
-  & .tx-still-horizon {
-    stroke: rgb(255 220 170 / 0.5);
-    stroke-width: 1.5;
+  & .tx-still-number {
+    fill: #3a4560;
   }
-  & .tx-still-glint {
-    stroke: #ffe2b0;
-    stroke-width: 3;
-    stroke-linecap: round;
-    opacity: 0.75;
+  & .tx-still-number--here {
+    fill: #d6a35f;
   }
-  & .tx-still-ship path {
-    fill: #120c09;
+  & .tx-still-token {
+    fill: #c4bdb0;
   }
-  & .tx-still-ship .tx-still-spar {
-    fill: none;
-    stroke: #120c09;
-    stroke-width: 7;
+  & .tx-still-token[data-kind='keyword'] {
+    fill: #cf9f60;
+  }
+  & .tx-still-token[data-kind='string'] {
+    fill: #76ada2;
+  }
+  & .tx-still-token[data-kind='number'] {
+    fill: #c98c7c;
+  }
+  & .tx-still-token[data-kind='comment'] {
+    fill: #56627a;
+  }
+  & .tx-still-token[data-ai='true'] {
+    fill: #6f9f97;
+  }
+  & .tx-still-caret[data-kind='human'] {
+    fill: #d6a35f;
+  }
+  & .tx-still-caret[data-kind='ai'] {
+    fill: #5ba89f;
+  }
+  & .tx-still-rock {
+    fill: #3d4252;
+  }
+  & .tx-still-earth {
+    fill: #73573f;
+  }
+  & .tx-still-grass {
+    fill: #55705a;
+  }
+  & .tx-still-tree {
+    fill: #35513f;
+  }
+  & .tx-still-shade {
+    fill: rgb(0 0 0 / 0.28);
+  }
+  & .tx-still-cell {
+    fill: #d6a35f;
   }
   & .tx-still-wheel .tx-still-hour {
     font-size: 44px;

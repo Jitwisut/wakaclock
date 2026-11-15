@@ -116,10 +116,20 @@ function Scene({ quality }: { quality: TimeSceneQuality }) {
       <CodeFile />
       {stage >= 1 ? <Cursors /> : null}
       {stage >= 2 ? <Landmarks particles={quality.fxParticles} /> : null}
-      {stage >= 3 ? <Weather drops={quality.fxParticles * 5} /> : null}
+      {stage >= 3 ? <Weather calm drops={quality.fxParticles * 5} /> : null}
       <HotspotProjector />
     </>
   );
+}
+
+/**
+ * The lowest pixel ratio the performance monitor may drop to. On a high-density screen the
+ * full tier never goes below 1.5: at 1 or 1.25 the token bars' edges and the glyphs went
+ * visibly soft (owner asked for a sharper scene, 2026-11-15).
+ */
+export function dprFloor(maxDpr: number, deviceRatio = globalThis.devicePixelRatio ?? 1) {
+  if (maxDpr < 2 || deviceRatio < 2) return 1;
+  return 1.5;
 }
 
 /**
@@ -135,7 +145,7 @@ export default function TimeCanvas({
   quality: TimeSceneQuality;
 }) {
   const [factor, setFactor] = useState(1);
-  const dpr = 1 + factor * (quality.maxDpr - 1);
+  const dpr = Math.max(dprFloor(quality.maxDpr), 1 + factor * (quality.maxDpr - 1));
 
   return (
     <Canvas

@@ -159,7 +159,14 @@ design change.
   (`file-plan.ts`: lines, `lineY`/`lineZ`, `cursorAt`, landmark glyphs — pure data). The
   visitor travels with a gold cursor; the AI's teal cursor works `AI_LEAD` lines ahead; token
   bars type themselves in as the cursor passes and stay typed (`scene.tsx`). Each place is a
-  glyph of cubes in the left margin that gathers on arrival and burns bright when opened. No
+  glyph of rounded cubes standing on a floating island in the left margin (`island.ts`: one
+  merged, vertex-coloured mesh per place) that gathers on arrival and brightens when opened.
+  The gutter shows line numbers as one block per digit (`lineNumberBlocks`), and the steps
+  carry faint token reflections (a mirrored token pass drawn with depth test "greater").
+  **No neon** (owner 2026-11-15): cursors are solid, lit bars with a small flag (no additive
+  halo); effects use `calm` (normal blending) from `place-fx.tsx`, weather runs `calm`; the
+  glyph shade is capped (`glyphShade`). `dprFloor` keeps the full tier at ≥1.5× on
+  high-density screens for sharpness. `TimeStill` draws the same file + island as SVG. No
   text is drawn in the scene. The tour, title cards, panel, effects, weather and whole-file
   view below are shared with the sea scene; the compass is styled as the editor's minimap on
   the right edge. `world-places.ts` now lays places out along the file (`inEditor`).

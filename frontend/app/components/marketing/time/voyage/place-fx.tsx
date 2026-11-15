@@ -14,6 +14,7 @@ import {
   type Group,
   type Mesh,
   type MeshBasicMaterial,
+  NormalBlending,
   type Points,
   type ShaderMaterial,
 } from 'three';
@@ -96,6 +97,8 @@ void main() {
 `;
 
 export interface FxPointsProps {
+  /** Ordinary blending instead of additive light: the effect reads as matter, not neon. */
+  calm?: boolean;
   colors: [string, string];
   count: number;
   /** Downward pull (m/s²): 0 floats, 9 falls like a spark. */
@@ -119,6 +122,7 @@ export interface FxPointsProps {
 
 /** A looping cloud of lit particles that exists only while its place is open. */
 export function FxPoints({
+  calm = false,
   colors,
   count,
   gravity = 0,
@@ -180,7 +184,7 @@ export function FxPoints({
   return (
     <points frustumCulled={false} geometry={geometry} position={position} ref={points}>
       <shaderMaterial
-        blending={AdditiveBlending}
+        blending={calm ? NormalBlending : AdditiveBlending}
         depthWrite={false}
         fragmentShader={POINTS_FRAGMENT}
         ref={material}
@@ -205,6 +209,7 @@ export function ringPhase(time: number, period: number, index: number, count: nu
  * a wall. They loop while the place is open.
  */
 export function FxRings({
+  calm = false,
   color,
   count = 3,
   id,
@@ -213,6 +218,7 @@ export function FxRings({
   reach,
   upright = false,
 }: {
+  calm?: boolean;
   color: string;
   count?: number;
   id: string;
@@ -235,7 +241,7 @@ export function FxRings({
       const phase = ringPhase(voyage.time, period, index, count);
       const mesh = child as Mesh;
       mesh.scale.setScalar(0.04 + phase * reach);
-      (mesh.material as MeshBasicMaterial).opacity = (1 - phase) ** 1.6 * level;
+      (mesh.material as MeshBasicMaterial).opacity = (1 - phase) ** 1.6 * level * (calm ? 0.55 : 1);
     }
   });
   return (
@@ -244,12 +250,12 @@ export function FxRings({
         <mesh key={index}>
           <ringGeometry args={[0.93, 1, 72]} />
           <meshBasicMaterial
-            blending={AdditiveBlending}
+            blending={calm ? NormalBlending : AdditiveBlending}
             color={tint}
             depthWrite={false}
             opacity={0}
             side={DoubleSide}
-            toneMapped={false}
+            toneMapped={calm}
             transparent
           />
         </mesh>
@@ -261,12 +267,14 @@ export function FxRings({
 /* ---------- a column of light ---------- */
 
 export function FxBeam({
+  calm = false,
   color,
   height,
   id,
   position,
   radius,
 }: {
+  calm?: boolean;
   color: string;
   height: number;
   id: string;
@@ -285,20 +293,20 @@ export function FxBeam({
     const grown = Math.min(1, age / 0.9);
     beam.scale.set(1, 0.05 + 0.95 * (1 - (1 - grown) ** 3), 1);
     material.current.opacity =
-      on * (0.1 + 0.03 * Math.sin(voyage.time * 2.4) + 0.22 * fxBurst(age, 2.5));
+      on * (0.1 + 0.03 * Math.sin(voyage.time * 2.4) + 0.22 * fxBurst(age, 2.5)) * (calm ? 0.6 : 1);
   });
   return (
     <group position={position}>
       <mesh position={[0, 0, 0]} ref={mesh}>
         <cylinderGeometry args={[radius * 0.55, radius, height, 20, 1, true]} />
         <meshBasicMaterial
-          blending={AdditiveBlending}
+          blending={calm ? NormalBlending : AdditiveBlending}
           color={color}
           depthWrite={false}
           opacity={0}
           ref={material}
           side={DoubleSide}
-          toneMapped={false}
+          toneMapped={calm}
           transparent
         />
       </mesh>

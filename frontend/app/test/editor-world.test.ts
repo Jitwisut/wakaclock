@@ -7,12 +7,14 @@ import {
   GLYPH_ROWS,
   glyphCells,
   GLYPHS,
+  GUTTER_RIGHT,
   INDENT,
   LANDMARK_X,
   LINE_COUNT,
   LINE_GAP,
   lineAtTour,
   LINES,
+  lineNumberBlocks,
   LINES_PER_STOP,
   lineY,
   lineZ,
@@ -21,7 +23,20 @@ import {
   TEXT_LEFT,
   TEXT_RIGHT,
 } from '@/components/marketing/time/editor/file-plan';
-import { AI_LEAD, caretBlink, tealCell } from '@/components/marketing/time/editor/scene';
+import {
+  buildIsland,
+  ISLAND_RADIUS,
+  ISLAND_TOP,
+  looseRocks,
+  rimWobble,
+} from '@/components/marketing/time/editor/island';
+import {
+  AI_LEAD,
+  caretBlink,
+  glyphShade,
+  tealCell,
+} from '@/components/marketing/time/editor/scene';
+import { dprFloor } from '@/components/marketing/time/scene/time-canvas';
 import {
   landmark,
   placeById,
@@ -140,5 +155,83 @@ describe('landmarks', () => {
       expect(key.pos[2]).toBeGreaterThan(key.center[2]);
       expect(key.pos[1]).toBeGreaterThan(key.center[1] - 20);
     }
+  });
+});
+
+describe('the gutter', () => {
+  it('right-aligns one block per digit of the line number, a narrow one for a 1', () => {
+    expect(lineNumberBlocks(0)).toHaveLength(1); // line 1
+    expect(lineNumberBlocks(8)).toHaveLength(1); // line 9
+    expect(lineNumberBlocks(9)).toHaveLength(2); // line 10
+    expect(lineNumberBlocks(99)).toHaveLength(3); // line 100
+    const ten = lineNumberBlocks(9);
+    expect(ten[0]?.width).toBeLessThan(ten[1]?.width ?? 0);
+    // Every number ends at the same right edge, left of the text.
+    for (const index of [0, 9, 120, LINE_COUNT - 1]) {
+      const last = lineNumberBlocks(index).at(-1);
+      expect(last?.centre).toBeLessThan(GUTTER_RIGHT);
+      expect(GUTTER_RIGHT).toBeLessThan(TEXT_LEFT);
+    }
+    expect(lineNumberBlocks(0).at(-1)?.centre).toBeCloseTo(
+      lineNumberBlocks(120).at(-1)?.centre ?? 0
+    );
+  });
+});
+
+describe('the floating islands', () => {
+  it('builds the same island for the same place, and a different one for another', () => {
+    const one = buildIsland(38);
+    const again = buildIsland(38);
+    const other = buildIsland(69);
+    const position = one.getAttribute('position');
+    expect(position.count).toBeGreaterThan(300);
+    expect(Array.from(again.getAttribute('position').array)).toEqual(Array.from(position.array));
+    expect(
+      other.getAttribute('position').count === position.count &&
+        Array.from(other.getAttribute('position').array).every((v, i) => v === position.array[i])
+    ).toBe(false);
+    // Coloured per vertex and lit with flat facets: no uvs, nothing left undefined.
+    expect(one.getAttribute('color').count).toBe(position.count);
+    expect(one.getAttribute('normal').count).toBe(position.count);
+    expect(one.getAttribute('uv')).toBeUndefined();
+    let top = -Infinity;
+    let bottom = Infinity;
+    for (let index = 0; index < position.count; index += 1) {
+      const x = position.getX(index);
+      const y = position.getY(index);
+      expect(Number.isFinite(x) && Number.isFinite(y)).toBe(true);
+      top = Math.max(top, y);
+      bottom = Math.min(bottom, y);
+    }
+    // Trees stand above the grass; the rock hangs well below it.
+    expect(top).toBeGreaterThan(ISLAND_TOP + 2);
+    expect(bottom).toBeLessThan(ISLAND_TOP - 12);
+    for (const geometry of [one, again, other]) geometry.dispose();
+  });
+
+  it('keeps the rim wobble gentle and the loose rocks under the island', () => {
+    for (let angle = 0; angle < Math.PI * 2; angle += 0.3) {
+      expect(Math.abs(rimWobble(angle, 1.2))).toBeLessThanOrEqual(1);
+    }
+    for (const [x, y, z, size] of looseRocks(3)) {
+      expect(y).toBeLessThan(ISLAND_TOP - 5);
+      expect(Math.hypot(x, z)).toBeLessThan(ISLAND_RADIUS * 1.3);
+      expect(size).toBeGreaterThan(0);
+    }
+  });
+
+  it('never lets a glyph burn past a lit, matte gold', () => {
+    expect(glyphShade(0, 0, 0)).toBeCloseTo(1);
+    expect(glyphShade(1, 1, 1)).toBeLessThanOrEqual(1.55);
+    expect(glyphShade(1, 0, 0)).toBeGreaterThan(glyphShade(0, 0, 0));
+  });
+});
+
+describe('sharpness', () => {
+  it('keeps a high-density screen at 1.5x or more on the full tier only', () => {
+    expect(dprFloor(2, 2)).toBe(1.5);
+    expect(dprFloor(2, 3)).toBe(1.5);
+    expect(dprFloor(2, 1)).toBe(1);
+    expect(dprFloor(1.5, 3)).toBe(1);
   });
 });

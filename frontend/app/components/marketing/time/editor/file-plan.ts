@@ -140,6 +140,29 @@ export function stopBase(stop: number): [number, number, number] {
   return [LANDMARK_X, lineY(line), lineZ(line)];
 }
 
+/** Right edge of the line numbers in the gutter, and the space one digit takes. */
+export const GUTTER_RIGHT = TEXT_LEFT - 2.2;
+export const DIGIT_STEP = 0.6;
+
+export interface NumberBlock {
+  /** Centre of the digit's block along the line (world x). */
+  centre: number;
+  /** A "1" is narrow, as in a real font. */
+  width: number;
+}
+
+/**
+ * Line `index`'s number (lines count from 1) as one block per digit, right-aligned in the
+ * gutter. Not text: it reads as line numbers the way an editor's minimap reads as code.
+ */
+export function lineNumberBlocks(index: number): NumberBlock[] {
+  const digits = String(index + 1);
+  return [...digits].map((digit, place) => ({
+    centre: GUTTER_RIGHT - (digits.length - 1 - place) * DIGIT_STEP - DIGIT_STEP / 2,
+    width: digit === '1' ? 0.2 : 0.44,
+  }));
+}
+
 /* ---------- landmarks: one glyph per place, built from cubes ---------- */
 
 export const GLYPH_COLUMNS = 7;

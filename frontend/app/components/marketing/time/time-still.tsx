@@ -1,3 +1,4 @@
+import { glyphCells, lineNumberBlocks, LINES } from './editor/file-plan';
 import { arcPath, generateDemoDays, MINUTES_PER_DAY, pointOnRing, sliceRuns } from './time-data';
 
 const C = 400;
@@ -5,54 +6,142 @@ const R = 300;
 const SLICES = generateDemoDays(1);
 const TODAY_RUNS = sliceRuns(SLICES, 0);
 
-/** Sun glints on the water under the low sun: [x, y, length]. */
-const GLINTS: readonly [number, number, number][] = [
-  [548, 452, 46],
-  [576, 468, 30],
-  [532, 486, 64],
-  [590, 502, 38],
-  [520, 524, 86],
-  [600, 548, 52],
-  [506, 572, 110],
-  [618, 604, 64],
-];
+/*
+ * The editor world, drawn flat: the first lines of the file receding up the page, the
+ * visitor's gold cursor and the AI's teal one, and the first place's glyph on its floating
+ * island. Same plan as the 3D scene (file-plan.ts), so the hand-off does not jump in kind.
+ */
+
+const STILL_LINES = LINES.slice(0, 24);
+const FAR = 250;
+const NEAR = 770;
+
+/** Where row `row` of the still sits: its baseline, its scale, and the x of file position `x`. */
+function rowAt(row: number) {
+  const t = row / (STILL_LINES.length - 1);
+  const scale = 0.42 + 0.58 * t ** 1.15;
+  const y = FAR + (NEAR - FAR) * t ** 1.35;
+  return { scale, x: (at: number) => 470 + (at - 3) * 9.6 * scale, y };
+}
+
+const CARET_ROW = 15;
+const AI_ROW = 9;
+
+/** The island's glyph (the first place, heartbeats), as cells of the still's own size. */
+const STILL_GLYPH = glyphCells('lighthouse');
 
 /**
- * Server-rendered still of the Voyage Log: the ship under sail against a low sun, with the
- * ship's wheel — today's demo day as a 24-hour ring — in the corner. It is the whole visual
- * for reduced motion, data saver and devices without WebGL, and the first frame for
- * everyone else until the 3D scene has painted over it.
+ * Server-rendered still of the editor world. It is the whole visual for reduced motion,
+ * data saver and devices without WebGL, and the first frame for everyone else until the
+ * 3D scene has painted over it.
  */
 export function TimeStill() {
   const ticks = Array.from({ length: 96 }, (_, index) => index * (MINUTES_PER_DAY / 96));
+  const caret = rowAt(CARET_ROW);
+  const caretLine = STILL_LINES[CARET_ROW];
+  const ai = rowAt(AI_ROW);
+  const aiLine = STILL_LINES[AI_ROW];
   return (
     <svg className="tx-still" viewBox="0 0 800 800">
-      <g className="tx-still-sea">
-        <g className="tx-still-sun">
-          {[110, 76, 52].map((radius, index) => (
-            <circle cx="560" cy="380" key={radius} opacity={0.12 + index * 0.12} r={radius} />
-          ))}
+      {/* The file: one step per line, coloured token bars, numbers in the gutter. */}
+      <g className="tx-still-file">
+        {STILL_LINES.map((line, row) => {
+          const { scale, x, y } = rowAt(row);
+          const height = 9 * scale;
+          return (
+            <g key={line.index}>
+              <path
+                className="tx-still-step"
+                d={`M${x(-25).toFixed(1)} ${(y + height * 0.9).toFixed(1)}H${x(35).toFixed(1)}`}
+              />
+              {lineNumberBlocks(line.index).map((block) => (
+                <rect
+                  className={
+                    row === CARET_ROW ? 'tx-still-number tx-still-number--here' : 'tx-still-number'
+                  }
+                  height={(height * 0.4).toFixed(1)}
+                  key={block.centre}
+                  width={(block.width * 9.6 * scale).toFixed(1)}
+                  x={x(block.centre - block.width / 2).toFixed(1)}
+                  y={(y + height * 0.3).toFixed(1)}
+                />
+              ))}
+              {line.tokens.map((token) => (
+                <rect
+                  className="tx-still-token"
+                  data-ai={line.ai ? 'true' : undefined}
+                  data-kind={token.kind}
+                  height={(token.kind === 'comment' ? height * 0.6 : height).toFixed(1)}
+                  key={token.x}
+                  rx={(1.4 * scale).toFixed(1)}
+                  width={(token.width * 9.6 * scale).toFixed(1)}
+                  x={x(token.x).toFixed(1)}
+                  y={(
+                    y -
+                    (token.kind === 'comment' ? height * 0.6 : height) +
+                    height * 0.8
+                  ).toFixed(1)}
+                />
+              ))}
+            </g>
+          );
+        })}
+        {/* The visitor's cursor at the end of its line; the AI's a few lines ahead. */}
+        <g className="tx-still-caret" data-kind="human">
+          <rect
+            height={34 * caret.scale}
+            width={3.4 * caret.scale}
+            x={caret.x(caretLine?.end ?? 0) + 3}
+            y={caret.y - 30 * caret.scale}
+          />
+          <rect
+            height={7 * caret.scale}
+            width={13 * caret.scale}
+            x={caret.x(caretLine?.end ?? 0) + 3}
+            y={caret.y - 30 * caret.scale}
+          />
         </g>
-        <path className="tx-still-horizon" d="M0 440H800" />
-        {GLINTS.map(([x, y, length]) => (
-          <path
-            className="tx-still-glint"
-            d={`M${x - length / 2} ${y}h${length}`}
-            key={`${x}:${y}`}
+        <g className="tx-still-caret" data-kind="ai">
+          <rect
+            height={34 * ai.scale}
+            width={3.4 * ai.scale}
+            x={ai.x(aiLine?.end ?? 0) + 3}
+            y={ai.y - 30 * ai.scale}
+          />
+          <rect
+            height={7 * ai.scale}
+            width={13 * ai.scale}
+            x={ai.x(aiLine?.end ?? 0) + 3}
+            y={ai.y - 30 * ai.scale}
+          />
+        </g>
+      </g>
+      {/* The first place: its glyph on a floating island in the margin. */}
+      <g className="tx-still-island" transform="translate(650 120) scale(0.85)">
+        <path
+          className="tx-still-rock"
+          d="M-118 92 L-96 132 L-60 170 L-18 236 L6 196 L40 214 L70 150 L104 120 L120 94 Z"
+        />
+        <path className="tx-still-earth" d="M-122 84 Q0 120 124 86 L120 98 Q0 136 -118 98 Z" />
+        <ellipse className="tx-still-grass" cx="0" cy="80" rx="124" ry="26" />
+        <path
+          className="tx-still-tree"
+          d="M-92 70 L-80 30 L-68 70 Z M74 66 L88 22 L102 66 Z M-60 66 L-52 40 L-44 66 Z"
+        />
+        <ellipse className="tx-still-shade" cx="0" cy="80" rx="62" ry="10" />
+        {STILL_GLYPH.map(([column, row]) => (
+          <rect
+            className="tx-still-cell"
+            height="15"
+            key={`${column}:${row}`}
+            rx="2"
+            width="15"
+            x={(column - 3) * 17 - 7.5}
+            y={62 - row * 17}
           />
         ))}
       </g>
-      {/* The ship in silhouette: hull, three masts, square sails and a jib. */}
-      <g className="tx-still-ship">
-        <path d="M150 512 L196 548 L520 548 L566 500 L590 470 L548 486 L520 492 L196 492 L168 470 Z" />
-        <path d="M168 470 L196 470 L196 492 L168 492 Z" />
-        <path className="tx-still-spar" d="M262 492V196M386 492V150M492 492V214M560 486L700 410" />
-        <path d="M226 236h72v66h-72zM214 312h96v80h-96zM206 402h112v70h-112z" />
-        <path d="M344 190h84v70h-84zM330 270h112v84h-112zM318 364h136v96h-136z" />
-        <path d="M462 252h60v56h-60zM452 318h80v68h-80zM444 396h96v64h-96z" />
-        <path d="M546 300L690 414L560 470Z" />
-      </g>
-      {/* The ship's wheel: today's ring, midnight at the top, the hand at the scrolled time. */}
+      {/* The day ring: today's ring, midnight at the top, the hand at the scrolled time. */}
       <g className="tx-still-wheel" transform="translate(40 560) scale(0.28)">
         <circle className="tx-still-ring tx-still-ring--today" cx={C} cy={C} r={R} />
         {ticks.map((minute) => {
