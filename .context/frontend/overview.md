@@ -153,23 +153,35 @@ design change.
 - `components/marketing/cosmos.css` is the design layer, imported last by both marketing
   layouts. It re-points the `--mkt-*` tokens and restyles; it adds no copy. Thai text gets no
   letter-spacing or text-transform. CSS-generated text uses the `content: 'x' / ''` form.
-- **Editor world** (owner decision 2026-11-15, branch `claude/editor-world`): the mounted
-  homepage scene is `components/marketing/time/editor/`. One source file is the landscape:
-  every line is a step going down the file, block bodies sit in valleys
-  (`file-plan.ts`: lines, `lineY`/`lineZ`, `cursorAt`, landmark glyphs — pure data). The
-  visitor travels with a gold cursor; the AI's teal cursor works `AI_LEAD` lines ahead; token
-  bars type themselves in as the cursor passes and stay typed (`scene.tsx`). Each place is a
-  glyph of rounded cubes standing on a floating island in the left margin (`island.ts`: one
-  merged, vertex-coloured mesh per place) that gathers on arrival and brightens when opened.
-  The gutter shows line numbers as one block per digit (`lineNumberBlocks`), and the steps
-  carry faint token reflections (a mirrored token pass drawn with depth test "greater").
-  **No neon** (owner 2026-11-15): cursors are solid, lit bars with a small flag (no additive
-  halo); effects use `calm` (normal blending) from `place-fx.tsx`, weather runs `calm`; the
-  glyph shade is capped (`glyphShade`). `dprFloor` keeps the full tier at ≥1.5× on
-  high-density screens for sharpness. `TimeStill` draws the same file + island as SVG. No
-  text is drawn in the scene. The tour, title cards, panel, effects, weather and whole-file
-  view below are shared with the sea scene; the compass is styled as the editor's minimap on
-  the right edge. `world-places.ts` now lays places out along the file (`inEditor`).
+- **Editor world as a desk diorama** (owner decisions 2026-11-15, branch
+  `claude/editor-world`): the mounted homepage scene is `components/marketing/time/editor/`.
+  One source file is a miniature model on a desk in evening lamplight: every line is a step
+  of the model's base reaching down to the desk (`file-plan.ts`: lines, `lineY`/`lineZ`,
+  gentle `STEP_DROP`, `deskY`, `cursorAt` — pure data). Token bars are lit clay
+  (`MeshStandardMaterial` with the typing patched in via `onBeforeCompile`, plus a matching
+  depth material for shadows) and type themselves in as the cursor passes. Each place is a
+  bar-chart "town" (`charts.ts`: gold human, teal AI stacked — demo shapes) on a floating
+  island (`island.ts`) held on a brass rod. `desk.tsx` has the desk, the lamp (a shadowed
+  spot that follows the camera's view), room light, a 24-hour ring clock and a mini monitor
+  at the head of the file (hero props). The "DEMO DAY" readout also shows a client-only
+  coded-time counter (`codedMinutes`), never in server HTML. Full tier adds ambient occlusion
+  + a gentle tilt-shift (`MiniatureLens` in `scene/time-canvas.tsx`, which then does the
+  drawing and the tone mapping). **No neon**: no additive light; effects use `calm`; no
+  weather; compass and minimap are one widget (cosmos.css). `TimeStill` draws the same file
+  and an island chart as SVG. No text is drawn in the scene.
+- **Story game on the editor world** (owner decisions 2026-11-15): two figurines
+  (`editor/figures.tsx`: the developer with the gold cursor, the AI robot with the teal one)
+  wait by the monitor/clock on the map, hop onto the file when the tour starts, and the
+  speaker of each stop's line waves/hops. Approved dialogue lives in `editor/story.ts`
+  (en/th, client-only — never in server HTML; do not reword without the owner). Hearts to
+  collect (`editor/hearts.tsx`, rules in `editor/play.ts`): two per stretch on the file
+  (collected as the cursor passes), one per island (tap). Tapping uses `editor/pick.tsx`: the
+  canvas is under the page's layers, so a document click not on content/controls is
+  raycast into the scene (`registerPick`). Towers show a demo readout, the monitor types,
+  the clock spins. The room's light runs afternoon → night with the tour (`dayLight`);
+  scrolling past the last stop ends the day (end card, `StoryOverlay`); "start again" resets
+  hearts and typing. The spyglass iris is hidden in the editor world (cosmos.css).
+  `world-mode.tsx` imports only three-free modules (`play`, `story`, `story-overlay`).
 - The **Voyage Log** sea scene described next is kept on `claude/cinematic-marketing` and in
   `time/voyage/`, but is no longer mounted (ship, ocean, islands, sea life, route).
 - 3D lives on the homepage only: the **Voyage Log** (`components/marketing/time/voyage/`).

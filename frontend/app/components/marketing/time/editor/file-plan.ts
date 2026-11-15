@@ -26,8 +26,11 @@ export const LINE_COUNT = STOP_COUNT * LINES_PER_STOP + TAIL_LINES;
 export const TEXT_LEFT = -20;
 export const TEXT_RIGHT = 26;
 export const INDENT = 3.2;
-/** Each line is a step this much lower than the one before; each indent level sinks it more. */
-export const STEP_DROP = 0.2;
+/**
+ * Each line is a step this much lower than the one before; each indent level sinks it more.
+ * Gentle, so the whole file sits on its model base on the desk (owner decision 2026-11-15).
+ */
+export const STEP_DROP = 0.05;
 export const VALLEY_DROP = 0.85;
 /** Landmarks stand in the left margin, beyond the gutter. */
 export const LANDMARK_X = -38;
@@ -163,142 +166,27 @@ export function lineNumberBlocks(index: number): NumberBlock[] {
   }));
 }
 
-/* ---------- landmarks: one glyph per place, built from cubes ---------- */
+/* ---------- the model on the desk ---------- */
 
-export const GLYPH_COLUMNS = 7;
-export const GLYPH_ROWS = 9;
-/** Edge of one cube of a landmark glyph. */
-export const GLYPH_CUBE = 2.1;
+/** How far below a line's steps the desk lies (m): the model base's thickness. */
+export const BASE_DEPTH = 7;
 
 /**
- * Seven by nine cells, top row first. Each place's landmark is a sign an editor would
- * recognise, not a word: a pulse, a dial, two carets, a grid of panels, run, a prompt,
- * info, a split view, braces, a question.
+ * Height of the desk under file position `z`. It follows the file's average slope (under two
+ * degrees, invisible at the horizon), so the base is equally thick from the first line to the
+ * last.
  */
-export const GLYPHS: Record<string, readonly string[]> = {
-  lighthouse: [
-    '...#...',
-    '...#...',
-    '..#.#..',
-    '..#.#..',
-    '##..#.#',
-    '....#.#',
-    '....##.',
-    '.....#.',
-    '.......',
-  ],
-  clocktower: [
-    '.#####.',
-    '#.....#',
-    '#..#..#',
-    '#..#..#',
-    '#..###.',
-    '#.....#',
-    '#.....#',
-    '#.....#',
-    '.#####.',
-  ],
-  twinlights: [
-    '###.###',
-    '.#...#.',
-    '.#...#.',
-    '.#...#.',
-    '.#...#.',
-    '.#...#.',
-    '.#...#.',
-    '.#...#.',
-    '###.###',
-  ],
-  market: [
-    '###.###',
-    '###.###',
-    '###.###',
-    '.......',
-    '###.###',
-    '###.###',
-    '###.###',
-    '.......',
-    '#######',
-  ],
-  ship: [
-    '#......',
-    '##.....',
-    '###....',
-    '####...',
-    '#####..',
-    '####...',
-    '###....',
-    '##.....',
-    '#......',
-  ],
-  dock: [
-    '#......',
-    '.#.....',
-    '..#....',
-    '...#...',
-    '..#....',
-    '.#.....',
-    '#......',
-    '.......',
-    '...####',
-  ],
-  library: [
-    '...#...',
-    '.......',
-    '..##...',
-    '...#...',
-    '...#...',
-    '...#...',
-    '...#...',
-    '...#...',
-    '..###..',
-  ],
-  signal: [
-    '###.###',
-    '#.#.#.#',
-    '#.#.#.#',
-    '#.#.#.#',
-    '#.#.#.#',
-    '#.#.#.#',
-    '#.#.#.#',
-    '#.#.#.#',
-    '###.###',
-  ],
-  trading: [
-    '..#.#..',
-    '.#...#.',
-    '.#...#.',
-    '.#...#.',
-    '#.....#',
-    '.#...#.',
-    '.#...#.',
-    '.#...#.',
-    '..#.#..',
-  ],
-  tavern: [
-    '.#####.',
-    '#.....#',
-    '......#',
-    '.....#.',
-    '....#..',
-    '...#...',
-    '...#...',
-    '.......',
-    '...#...',
-  ],
-};
-
-/** Cells of a glyph as [column, row-from-the-bottom], left to right, bottom to top. */
-export function glyphCells(id: string): [number, number][] {
-  const rows = GLYPHS[id] ?? [];
-  const cells: [number, number][] = [];
-  for (const [row, text] of rows.entries()) {
-    for (let column = 0; column < text.length; column += 1) {
-      if (text[column] === '#') cells.push([column, rows.length - 1 - row]);
-    }
-  }
-  return cells;
+export function deskY(z: number) {
+  return (z / LINE_GAP) * STEP_DROP - BASE_DEPTH;
 }
 
-/** Height of a landmark above its base: the glyph on its plinth. */
-export const LANDMARK_HEIGHT = GLYPH_ROWS * GLYPH_CUBE + 3;
+/* ---------- landmarks: a bar chart on a floating island per place ---------- */
+
+/** The island's grass above its own origin, and how high it floats over its line (m). */
+export const ISLAND_TOP = 2.9;
+export const ISLAND_LIFT = 9;
+/** The tallest a place's chart may stand on its island (m). */
+export const CHART_HEIGHT = 15;
+
+/** Height of a landmark above its line: lift, island and chart. */
+export const LANDMARK_HEIGHT = ISLAND_LIFT + ISLAND_TOP + CHART_HEIGHT;

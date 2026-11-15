@@ -9,6 +9,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 import { seededRandom } from '../time-data';
 
+import { ISLAND_TOP } from './file-plan';
+
 /**
  * The floating island every landmark stands on (owner decision 2026-11-15): a grassy cap, a
  * band of earth, a rocky underside that tapers to a point, a few stones and low trees. Built
@@ -16,9 +18,8 @@ import { seededRandom } from '../time-data';
  * ten draw calls. Colours stay muted, in the site's dusk tones: nothing here glows.
  */
 
-/** Radius of the island's grassy top, and the height of its surface above the base. */
+/** Radius of the island's grassy top. Its surface height is `ISLAND_TOP` in file-plan. */
 export const ISLAND_RADIUS = 12.5;
-export const ISLAND_TOP = 2.9;
 
 const GRASS = '#55705a';
 const GRASS_EDGE = '#456049';
@@ -102,7 +103,8 @@ export function buildIsland(seed: number): BufferGeometry {
   parts.push(finish(earth, solid(EARTH)));
 
   // The rocky underside, tapering to a blunt point and a little crooked.
-  const depth = 13 + random() * 5;
+  // Shallow enough to float clear of the desk on its rod.
+  const depth = 6.5 + random() * 2.5;
   const under = new CylinderGeometry(ISLAND_RADIUS - 1.6, 0.8, depth, 14, 5);
   wobble(under, 0.18, phase + 1.1, 0.35);
   const lean = (random() - 0.5) * 0.25;
@@ -154,19 +156,4 @@ export function buildIsland(seed: number): BufferGeometry {
   const merged = mergeGeometries(parts, false);
   for (const part of parts) part.dispose();
   return merged as BufferGeometry;
-}
-
-/** Small rocks that hang in the air under an island: [x, y, z, size], in the island's frame. */
-export function looseRocks(seed: number): [number, number, number, number][] {
-  const random = seededRandom(seed * 7 + 1);
-  return Array.from({ length: 3 }, () => {
-    const angle = random() * Math.PI * 2;
-    const reach = ISLAND_RADIUS * (0.75 + random() * 0.45);
-    return [
-      Math.cos(angle) * reach,
-      ISLAND_TOP - 6 - random() * 7,
-      Math.sin(angle) * reach,
-      0.8 + random() * 1.2,
-    ];
-  });
 }

@@ -1,4 +1,11 @@
-import { LANDMARK_HEIGHT, LINE_GAP, lineY, STOP_GAP, stopBase } from '../editor/file-plan';
+import {
+  ISLAND_LIFT,
+  LANDMARK_HEIGHT,
+  LINE_GAP,
+  lineY,
+  STOP_GAP,
+  stopBase,
+} from '../editor/file-plan';
 
 /**
  * The archipelago (owner decision 2026-11-14): the homepage as a world of places around the
@@ -71,7 +78,7 @@ export interface Place {
 }
 
 /** The view of the whole archipelago with the ship in front: the hero's composition. */
-export const HOME_POSE: { look: Vec3; pos: Vec3 } = { pos: [-24, 13, 30], look: [12, -5, -44] };
+export const HOME_POSE: { look: Vec3; pos: Vec3 } = { pos: [-22, 42, 84], look: [34, -7, -40] };
 /** The whole file from above: the camera high over its middle, tilted a little. */
 export const CHART_POSE: { look: Vec3; pos: Vec3 } = {
   pos: [2, 930, -STOP_GAP * 3.7],
@@ -408,8 +415,9 @@ export function visitPose(place: Place): { center: Vec3; look: Vec3; pos: Vec3 }
   const ground = groundAt(place);
   // Behind and above the cursor's line, turned a little toward the landmark in the margin:
   // it fills the left of the frame and leaves the right for the title card and the panel.
-  const pos: Vec3 = [24, ground + 21, z + 54];
-  const look: Vec3 = [x + 22, ground + 9, z - 4];
+  // The islands float ISLAND_LIFT over the model on their rods: the camera rises with them.
+  const pos: Vec3 = [24, ground + 21 + ISLAND_LIFT * 0.7, z + 56];
+  const look: Vec3 = [x + 22, ground + 9 + ISLAND_LIFT * 0.65, z - 4];
   return { pos, look, center: [x, ground + LANDMARK_HEIGHT * 0.55, z] };
 }
 

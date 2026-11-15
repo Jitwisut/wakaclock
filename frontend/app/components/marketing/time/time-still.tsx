@@ -1,4 +1,5 @@
-import { glyphCells, lineNumberBlocks, LINES } from './editor/file-plan';
+import { chartBars } from './editor/charts';
+import { lineNumberBlocks, LINES } from './editor/file-plan';
 import { arcPath, generateDemoDays, MINUTES_PER_DAY, pointOnRing, sliceRuns } from './time-data';
 
 const C = 400;
@@ -8,7 +9,7 @@ const TODAY_RUNS = sliceRuns(SLICES, 0);
 
 /*
  * The editor world, drawn flat: the first lines of the file receding up the page, the
- * visitor's gold cursor and the AI's teal one, and the first place's glyph on its floating
+ * visitor's gold cursor and the AI's teal one, and the first place's chart on its floating
  * island. Same plan as the 3D scene (file-plan.ts), so the hand-off does not jump in kind.
  */
 
@@ -27,8 +28,9 @@ function rowAt(row: number) {
 const CARET_ROW = 15;
 const AI_ROW = 9;
 
-/** The island's glyph (the first place, heartbeats), as cells of the still's own size. */
-const STILL_GLYPH = glyphCells('lighthouse');
+/** The island's chart (a week of coding, gold human with the AI's teal on top), 8 px a metre. */
+const STILL_BARS = chartBars('market');
+const STILL_SCALE = 8;
 
 /**
  * Server-rendered still of the editor world. It is the whole visual for reduced motion,
@@ -116,7 +118,7 @@ export function TimeStill() {
           />
         </g>
       </g>
-      {/* The first place: its glyph on a floating island in the margin. */}
+      {/* A place: its chart on a floating island in the margin. */}
       <g className="tx-still-island" transform="translate(650 120) scale(0.85)">
         <path
           className="tx-still-rock"
@@ -129,16 +131,26 @@ export function TimeStill() {
           d="M-92 70 L-80 30 L-68 70 Z M74 66 L88 22 L102 66 Z M-60 66 L-52 40 L-44 66 Z"
         />
         <ellipse className="tx-still-shade" cx="0" cy="80" rx="62" ry="10" />
-        {STILL_GLYPH.map(([column, row]) => (
-          <rect
-            className="tx-still-cell"
-            height="15"
-            key={`${column}:${row}`}
-            rx="2"
-            width="15"
-            x={(column - 3) * 17 - 7.5}
-            y={62 - row * 17}
-          />
+        {STILL_BARS.map((bar) => (
+          <g key={bar.x}>
+            <rect
+              className="tx-still-cell"
+              height={bar.human * STILL_SCALE}
+              rx="2"
+              width={bar.width * STILL_SCALE}
+              x={(bar.x - bar.width / 2) * STILL_SCALE}
+              y={78 - bar.human * STILL_SCALE}
+            />
+            <rect
+              className="tx-still-cell"
+              data-kind="ai"
+              height={bar.ai * STILL_SCALE}
+              rx="2"
+              width={bar.width * STILL_SCALE}
+              x={(bar.x - bar.width / 2) * STILL_SCALE}
+              y={78 - (bar.human + bar.ai) * STILL_SCALE}
+            />
+          </g>
         ))}
       </g>
       {/* The day ring: today's ring, midnight at the top, the hand at the scrolled time. */}

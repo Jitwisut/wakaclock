@@ -298,6 +298,18 @@ describe('world mode', () => {
     expect(timeMotion.tourTarget).toBe(0);
     expect(site.dataset.worldOpen).toBe('');
 
+    // However hard the flick, the tour never goes past the next stop while the camera is
+    // still on its way (owner 2026-11-15: the figurines must not race).
+    wheel(40000);
+    expect(timeMotion.tourTarget).toBe(1);
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home' }));
+    });
+    expect(timeMotion.tourTarget).toBe(0);
+
     // A real scroll leaves the map, sails on and brings up the first stop's card.
     wheel(1300);
     expect(site.dataset.worldOpen).toBe('travel');
@@ -315,7 +327,8 @@ describe('world mode', () => {
     wheel(4000, site.querySelector('#tx-c1') as HTMLElement);
     expect(timeMotion.tourTarget).toBe(1);
     expect(site.dataset.worldOpen).toBe(TOUR[0]);
-    // Scrolling the scene beside it does.
+    // Scrolling the scene beside it does, once the camera has arrived at the first stop.
+    timeMotion.tour = 1;
     wheel(1500);
     expect(site.dataset.worldOpen).toBe('travel');
     act(() => {

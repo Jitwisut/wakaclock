@@ -4,13 +4,19 @@ import { useEffect, useRef, useState } from 'react';
 
 import { PerformanceMonitor } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { EffectComposer, N8AO, TiltShift2, ToneMapping } from '@react-three/postprocessing';
+import { ToneMappingMode } from 'postprocessing';
 import { ACESFilmicToneMapping, PCFSoftShadowMap, SRGBColorSpace } from 'three';
 
-import { CodeFile, Cursors, EditorDirector, Landmarks, Starfield } from '../editor/scene';
+import { Desk, Lamp, Monitor, RingClock, RoomGlow, RoomLight } from '../editor/desk';
+import { Figures, StoryProjector } from '../editor/figures';
+import { RouteHearts } from '../editor/hearts';
+import { ScenePicker } from '../editor/pick';
+import { CodeFile, Cursors, EditorDirector, Landmarks } from '../editor/scene';
 import { setTimeUi, timeMotion } from '../time-store';
 import { HotspotProjector } from '../voyage/hotspot-projector';
 import { voyage } from '../voyage/state';
-import { Weather } from '../voyage/weather';
+import { TOUR } from '../voyage/world-places';
 
 import { TimeRig } from './time-rig';
 
@@ -33,15 +39,21 @@ const STAGES = 4;
  * first frame draw and the still fade out. Rendering is taken over (priority 1) so that
  * nothing is drawn, and so nothing compiles synchronously, before that.
  */
-function useStagedScene() {
+function useStagedScene(post: boolean) {
   const [stage, setStage] = useState(0);
+  /** All shaders compiled: drawing may begin (state, so the effect pass can switch on). */
+  const [ready, setReady] = useState(false);
   const compiled = useRef(false);
   const compiling = useRef(false);
   const shown = useRef(0);
   const waited = useRef(0);
   useFrame(({ camera, clock, gl, scene }) => {
     if (compiled.current) {
-      gl.render(scene, camera);
+      // With the effect pass on, it draws the frame (at the same priority); not us as well.
+      if (!post) gl.render(scene, camera);
+      // The effect pass switches on with the `ready` commit and compiles its own shaders on
+      // its first frame: count frames toward the reveal only once it is drawing.
+      else if (!ready) return;
       // The first draw uploads every buffer and texture: let it pass unseen, and reveal the
       // scene (and start its opening move) on the clean frame after it.
       if (shown.current === 1) {
@@ -64,6 +76,7 @@ function useStagedScene() {
     compiling.current = true;
     const finish = () => {
       compiled.current = true;
+      setReady(true);
     };
     // Older three builds and test renderers have no async compile: fall back to drawing.
     const compile = (gl as { compileAsync?: (scene: unknown, camera: unknown) => Promise<unknown> })
@@ -71,7 +84,31 @@ function useStagedScene() {
     if (compile) void compile.call(gl, scene, camera).then(finish, finish);
     else finish();
   }, 1);
-  return stage;
+  return { ready, stage };
+}
+
+/**
+ * The miniature's lens (owner decision 2026-11-15, full tier only): soft ambient occlusion
+ * where parts meet, a gentle tilt-shift that softens only the far edge of the frame (the
+ * band with the islands and the figurines stays sharp — uv y 0.4, low on the screen), and the tone mapping the renderer gives up to the pass.
+ * Off until the scene has compiled; its own shaders compile on its first frame, and the
+ * staged loader holds the reveal until after that frame (measured: ~120 ms, unseen).
+ */
+function MiniatureLens({ on }: { on: boolean }) {
+  return (
+    <EffectComposer enabled={on} enableNormalPass={false} multisampling={4}>
+      <N8AO
+        aoRadius={2.6}
+        color="#120c08"
+        distanceFalloff={1.2}
+        halfRes
+        intensity={2.4}
+        quality="medium"
+      />
+      <TiltShift2 blur={0.05} end={[1, 0.4]} start={[0, 0.4]} taper={0.75} />
+      <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
+    </EffectComposer>
+  );
 }
 
 /**
@@ -106,18 +143,36 @@ function Invalidator() {
 }
 
 function Scene({ quality }: { quality: TimeSceneQuality }) {
-  const stage = useStagedScene();
+  const post = quality.bloom;
+  const { ready, stage } = useStagedScene(post);
   return (
     <>
       <TimeRig parallax={quality.parallax} />
       <EditorDirector />
       <Invalidator />
-      <Starfield />
+      <RoomLight stops={TOUR.length} />
+      <ScenePicker />
+      <Lamp shadows={quality.shadows} />
+      <RoomGlow />
+      <Desk />
       <CodeFile />
-      {stage >= 1 ? <Cursors /> : null}
+      {stage >= 1 ? (
+        <>
+          <Cursors />
+          <Figures />
+          <RouteHearts />
+        </>
+      ) : null}
       {stage >= 2 ? <Landmarks particles={quality.fxParticles} /> : null}
-      {stage >= 3 ? <Weather calm drops={quality.fxParticles * 5} /> : null}
+      {stage >= 3 ? (
+        <>
+          <RingClock stops={TOUR.length} />
+          <Monitor />
+        </>
+      ) : null}
       <HotspotProjector />
+      <StoryProjector />
+      {post ? <MiniatureLens on={ready} /> : null}
     </>
   );
 }

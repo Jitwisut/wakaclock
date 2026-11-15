@@ -1,8 +1,18 @@
 'use client';
 
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 
 import { NAV_LINKS } from '../../nav-links.data';
+import { endDay, play, resetDay, subscribePlay } from '../editor/play';
+import { StoryOverlay } from '../editor/story-overlay';
 import { timeMotion } from '../time-store';
 
 import { PLACE_ATTRIBUTE, PLACES, TOUR, tourIndex, tourStop } from './world-places';
@@ -147,9 +157,15 @@ export function WorldMode({ rootId }: { rootId: string }) {
     };
   }, [rootId]);
 
+  /** The day is over (the end card is up): the title card stands aside for it. */
+  const ended = useSyncExternalStore(
+    subscribePlay,
+    () => play.ended,
+    () => false
+  );
   const atHome = stop === 0 && !moving;
   /** The place the tour rests at with its title card up (no panel open yet). */
-  const arrived = !moving && !open && !chart ? tourStop(stop) : '';
+  const arrived = !moving && !open && !chart && !ended ? tourStop(stop) : '';
 
   // Show what the tour is on: the hero on the map, a place's sections when its panel is
   // open, nothing while sailing or while a title card is up.
@@ -210,6 +226,8 @@ export function WorldMode({ rootId }: { rootId: string }) {
   const lockTo = useCallback(
     (index: number, thenOpen = false) => {
       const next = Math.min(TOUR.length, Math.max(0, index));
+      // Going back to any stop before the last puts the day's end away.
+      if (next < TOUR.length) endDay(false);
       base.current = next;
       timeMotion.tourTarget = next;
       window.clearTimeout(settleTimer.current);
@@ -248,8 +266,23 @@ export function WorldMode({ rootId }: { rootId: string }) {
       if (Math.abs(moved) > 1) next = Math.round(timeMotion.tourTarget);
       lockTo(next);
     };
+    /** How far the scroll has pushed past the last stop: enough of it ends the day. */
+    let overshoot = 0;
     const advance = (amount: number) => {
-      const next = Math.min(TOUR.length, Math.max(0, timeMotion.tourTarget + amount));
+      if (amount > 0 && base.current === TOUR.length && timeMotion.tourTarget >= TOUR.length) {
+        overshoot += amount;
+        if (overshoot > 0.15) endDay();
+        return;
+      }
+      overshoot = 0;
+      if (amount < 0 && play.ended) endDay(false);
+      // One stop at a time, however hard the scroll: never more than one place past where
+      // the camera actually is, so a flick's momentum is spent while it travels.
+      const here = Math.round(timeMotion.tour);
+      const next = Math.min(
+        TOUR.length,
+        Math.max(0, here - 1, Math.min(here + 1, timeMotion.tourTarget + amount))
+      );
       if (next === timeMotion.tourTarget) return;
       timeMotion.tourTarget = next;
       setChart(false);
@@ -307,7 +340,8 @@ export function WorldMode({ rootId }: { rootId: string }) {
       else if (forward || back) {
         // With the panel open the arrow keys read it; they do not leave the island.
         if (heldByPanel(document.activeElement)) return;
-        lockTo(base.current + (forward ? 1 : -1));
+        if (forward && base.current === TOUR.length) endDay();
+        else lockTo(base.current + (forward ? 1 : -1));
       } else return;
       event.preventDefault();
     };
@@ -374,6 +408,14 @@ export function WorldMode({ rootId }: { rootId: string }) {
     [hotspots]
   );
   const card = hotspots.find((spot) => spot.id === arrived);
+  /** The figurines' line: the map's on the map, each place's on arrival, none while reading. */
+  let storyLine = -1;
+  if (atHome && !chart && !open) storyLine = 0;
+  else if (arrived) storyLine = tourIndex(arrived);
+  const restart = useCallback(() => {
+    resetDay();
+    lockTo(0);
+  }, [lockTo]);
   const total = String(TOUR.length).padStart(2, '0');
   return (
     <>
@@ -488,6 +530,8 @@ export function WorldMode({ rootId }: { rootId: string }) {
           </p>
         ) : null}
       </nav>
+
+      <StoryOverlay line={storyLine} locale={locale} onRestart={restart} />
 
       {open ? (
         <button

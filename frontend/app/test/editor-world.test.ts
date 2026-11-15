@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   cursorAt,
   generateLines,
-  GLYPH_COLUMNS,
-  GLYPH_ROWS,
-  glyphCells,
-  GLYPHS,
+  BASE_DEPTH,
+  CHART_HEIGHT,
+  deskY,
+  ISLAND_LIFT,
+  ISLAND_TOP,
+  LANDMARK_HEIGHT,
   GUTTER_RIGHT,
   INDENT,
   LANDMARK_X,
@@ -23,19 +25,17 @@ import {
   TEXT_LEFT,
   TEXT_RIGHT,
 } from '@/components/marketing/time/editor/file-plan';
+import { buildIsland, ISLAND_RADIUS, rimWobble } from '@/components/marketing/time/editor/island';
+import { AI_LEAD, caretBlink, chartGrowth } from '@/components/marketing/time/editor/scene';
 import {
-  buildIsland,
-  ISLAND_RADIUS,
-  ISLAND_TOP,
-  looseRocks,
-  rimWobble,
-} from '@/components/marketing/time/editor/island';
-import {
-  AI_LEAD,
-  caretBlink,
-  glyphShade,
-  tealCell,
-} from '@/components/marketing/time/editor/scene';
+  chartBars,
+  chartTop,
+  codedMinutes,
+  dayTotals,
+  DEMO_HOURS,
+  formatCoded,
+} from '@/components/marketing/time/editor/charts';
+import { demoMinute } from '@/components/marketing/time/editor/desk';
 import { dprFloor } from '@/components/marketing/time/scene/time-canvas';
 import {
   landmark,
@@ -112,23 +112,47 @@ describe('the cursor', () => {
 });
 
 describe('landmarks', () => {
-  it('gives every place of the tour a glyph that fits its grid', () => {
+  it('gives every place of the tour a bar chart that fits on its island', () => {
     for (const id of TOUR) {
-      const rows = GLYPHS[id] as readonly string[];
-      expect(rows, id).toHaveLength(GLYPH_ROWS);
-      for (const row of rows) expect(row).toHaveLength(GLYPH_COLUMNS);
-      const cells = glyphCells(id);
-      expect(cells.length).toBeGreaterThan(6);
-      for (const [column, row] of cells) {
-        expect(column).toBeLessThan(GLYPH_COLUMNS);
-        expect(row).toBeLessThan(GLYPH_ROWS);
+      const bars = chartBars(id);
+      expect(bars.length, id).toBeGreaterThan(1);
+      expect(chartTop(bars), id).toBeLessThanOrEqual(CHART_HEIGHT);
+      for (const bar of bars) {
+        // Inside the grass, with room to spare for the trees at the rim.
+        const reach = Math.hypot(Math.abs(bar.x) + bar.width / 2, Math.abs(bar.z) + bar.depth / 2);
+        expect(reach, id).toBeLessThan(ISLAND_RADIUS - 1.5);
+        expect(bar.human + bar.ai, id).toBeGreaterThan(0);
+        expect(Math.min(bar.human, bar.ai, bar.width, bar.depth)).toBeGreaterThanOrEqual(0);
       }
     }
-    expect(glyphCells('nowhere')).toEqual([]);
-    // Human and AI share the two-part glyphs: gold on the left, teal on the right.
-    expect(tealCell('twinlights', 0)).toBe(false);
-    expect(tealCell('twinlights', 6)).toBe(true);
-    expect(tealCell('tavern', 6)).toBe(false);
+    // The AI's share shows on the charts about it, and the human's everywhere.
+    expect(chartBars('twinlights').some((bar) => bar.ai > 0)).toBe(true);
+    expect(chartBars('market').every((bar) => bar.human > bar.ai)).toBe(true);
+    expect(chartBars('nowhere')).toEqual([]);
+    expect(DEMO_HOURS).toHaveLength(24);
+  });
+
+  it('raises a chart as the tour arrives at its stop', () => {
+    expect(chartGrowth(3, 3)).toBe(1);
+    expect(chartGrowth(1, 3)).toBe(0);
+    expect(chartGrowth(2.6, 3)).toBeGreaterThan(0);
+    expect(chartGrowth(2.6, 3)).toBeLessThan(1);
+  });
+
+  it('stands the model on a desk, with every island held clear above the base', () => {
+    // The desk lies under every line, well below the deepest valley.
+    for (const line of LINES) expect(deskY(lineZ(line.index))).toBeLessThan(lineY(line.index) - 3);
+    // Under the head of every block (no valley there) it is exactly the base's depth down.
+    for (let stop = 0; stop <= STOP_COUNT; stop += 1) {
+      const head = stop * LINES_PER_STOP;
+      expect(deskY(lineZ(head))).toBeCloseTo(lineY(head) - BASE_DEPTH);
+    }
+    expect(LANDMARK_HEIGHT).toBe(ISLAND_LIFT + ISLAND_TOP + CHART_HEIGHT);
+    expect(demoMinute(0, TOUR.length)).toBe(9 * 60);
+    expect(demoMinute(TOUR.length, TOUR.length)).toBe(22 * 60);
+    expect(demoMinute(99, TOUR.length)).toBe(22 * 60);
+    // The readout's coded time at the end of the tour is the end card's total.
+    expect(codedMinutes(demoMinute(TOUR.length, TOUR.length))).toBe(dayTotals().total);
   });
 
   it('stands each place in the margin beside the head of its block', () => {
@@ -203,27 +227,30 @@ describe('the floating islands', () => {
       top = Math.max(top, y);
       bottom = Math.min(bottom, y);
     }
-    // Trees stand above the grass; the rock hangs well below it.
+    // Trees stand above the grass; the rock hangs below it, but clear of the desk on its rod.
     expect(top).toBeGreaterThan(ISLAND_TOP + 2);
-    expect(bottom).toBeLessThan(ISLAND_TOP - 12);
+    expect(bottom).toBeLessThan(ISLAND_TOP - 6);
+    expect(ISLAND_LIFT + bottom).toBeGreaterThan(-BASE_DEPTH + 2);
     for (const geometry of [one, again, other]) geometry.dispose();
   });
 
-  it('keeps the rim wobble gentle and the loose rocks under the island', () => {
+  it('keeps the rim wobble gentle', () => {
     for (let angle = 0; angle < Math.PI * 2; angle += 0.3) {
       expect(Math.abs(rimWobble(angle, 1.2))).toBeLessThanOrEqual(1);
     }
-    for (const [x, y, z, size] of looseRocks(3)) {
-      expect(y).toBeLessThan(ISLAND_TOP - 5);
-      expect(Math.hypot(x, z)).toBeLessThan(ISLAND_RADIUS * 1.3);
-      expect(size).toBeGreaterThan(0);
-    }
   });
+});
 
-  it('never lets a glyph burn past a lit, matte gold', () => {
-    expect(glyphShade(0, 0, 0)).toBeCloseTo(1);
-    expect(glyphShade(1, 1, 1)).toBeLessThanOrEqual(1.55);
-    expect(glyphShade(1, 0, 0)).toBeGreaterThan(glyphShade(0, 0, 0));
+describe('the demo day counter', () => {
+  it('counts only the active hours up to the clock, as a duration', () => {
+    expect(codedMinutes(0)).toBe(0);
+    expect(codedMinutes(9 * 60)).toBe(0); // nothing before nine
+    expect(codedMinutes(9 * 60 + 30)).toBe(30);
+    expect(codedMinutes(12 * 60 + 30)).toBe(180); // 09–12, lunch is idle
+    expect(codedMinutes(24 * 60)).toBe(10 * 60); // 3 + 5 + 2 active hours
+    expect(formatCoded(0)).toBe('0h 00m');
+    expect(formatCoded(185)).toBe('3h 05m');
+    expect(formatCoded(-4)).toBe('0h 00m');
   });
 });
 

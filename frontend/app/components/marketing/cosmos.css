@@ -1451,9 +1451,8 @@
 .wakaclock-marketing .tx-root {
   & .tx-night {
     background:
-      radial-gradient(ellipse at 62% 62%, rgb(214 163 95 / 0.08), transparent 45%),
-      radial-gradient(ellipse at 22% 30%, rgb(91 168 159 / 0.06), transparent 40%),
-      linear-gradient(180deg, #070a12 0%, #0b1020 60%, #070a12 100%);
+      radial-gradient(ellipse at 60% 55%, rgb(255 206 150 / 0.14), transparent 50%),
+      linear-gradient(180deg, #14100d 0%, #1d1611 60%, #14100d 100%);
   }
   & .tx-still {
     overflow: visible;
@@ -1509,6 +1508,9 @@
   }
   & .tx-still-cell {
     fill: #d6a35f;
+  }
+  & .tx-still-cell[data-kind='ai'] {
+    fill: #5ba89f;
   }
   & .tx-still-wheel .tx-still-hour {
     font-size: 44px;
@@ -2485,6 +2487,287 @@ html:has(.wakaclock-marketing[data-world='on']) {
     mix-blend-mode: normal;
   }
 }
+/* The story (owner 2026-11-15): the speech bubble over the speaking figurine, a tapped
+   tower's readout, and the end-of-day card. Client-only chrome; never neon. */
+.wakaclock-marketing[data-world='on'] {
+  & .tx-story {
+    position: fixed;
+    inset: 0;
+    z-index: 34;
+    pointer-events: none;
+  }
+  & .tx-story-bubble {
+    position: absolute;
+    left: var(--sx, -999px);
+    top: var(--sy, -999px);
+    display: grid;
+    gap: 4px;
+    width: max-content;
+    max-width: min(300px, 68vw);
+    margin: 0;
+    padding: 10px 14px 12px;
+    border-radius: 14px;
+    background: rgb(246 239 228 / 0.97);
+    color: #20170f;
+    font-family: var(--cx-text);
+    font-size: 16px;
+    line-height: 1.5;
+    box-shadow: 0 16px 34px -14px rgb(0 0 0 / 0.75);
+    translate: -50% calc(-100% - 16px);
+    transition: opacity 240ms;
+  }
+  & .tx-story-bubble::after {
+    content: '';
+    position: absolute;
+    left: calc(50% + var(--tail, 0px));
+    bottom: -7px;
+    width: 14px;
+    height: 14px;
+    background: inherit;
+    border-radius: 2px;
+    translate: -50% 0;
+    rotate: 45deg;
+  }
+  /* Beside the speaker (when above it would sit under the title card): its bottom level with
+     the head, tail on the right edge pointing at it. */
+  & .tx-story-bubble[data-side='left'] {
+    translate: -50% -100%;
+  }
+  & .tx-story-bubble[data-side='left']::after {
+    left: auto;
+    right: -7px;
+    bottom: 16px;
+    translate: 0 0;
+  }
+  & .tx-story-bubble[data-off='true'] {
+    opacity: 0;
+  }
+  & .tx-story-who {
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9a6b2e;
+  }
+  & .tx-story-bubble[data-speaker='bot'] .tx-story-who {
+    color: #2f7a71;
+  }
+  & .tx-story-bubble:lang(th) .tx-story-who {
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  & .tx-story-text {
+    min-height: 1.45em;
+  }
+  & .tx-story-tip {
+    position: absolute;
+    margin: 0;
+    padding: 6px 10px;
+    border: 1px solid rgb(244 237 227 / 0.2);
+    border-radius: 8px;
+    background: rgb(11 15 25 / 0.92);
+    color: var(--cx-ink);
+    font-family: var(--cx-mono);
+    font-size: 13px;
+    white-space: nowrap;
+    translate: -50% calc(-100% - 14px);
+    animation: tx-story-tip 2.6s var(--cx-ease) both;
+  }
+  & .tx-story-end {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: min(420px, calc(100vw - 32px));
+    padding: 28px 28px 24px;
+    border: 1px solid rgb(244 237 227 / 0.16);
+    border-radius: 18px;
+    background: rgb(14 18 28 / 0.94);
+    box-shadow: 0 30px 80px -30px rgb(0 0 0 / 0.9);
+    color: var(--cx-ink);
+    translate: -50% -50%;
+    pointer-events: auto;
+    animation: tx-story-end 700ms var(--cx-ease) both;
+  }
+  & .tx-story-end h2 {
+    margin: 0 0 18px;
+    font-family: var(--cx-display);
+    font-size: 28px;
+  }
+  & .tx-story-end dl {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 18px;
+    margin: 0;
+  }
+  & .tx-story-end dt {
+    font-family: var(--cx-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cx-muted);
+  }
+  & .tx-story-end:lang(th) dt {
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: var(--cx-text);
+    font-size: 13px;
+  }
+  & .tx-story-end dd {
+    margin: 2px 0 0;
+    font-family: var(--cx-mono);
+    font-size: 22px;
+    color: var(--cx-ink);
+  }
+  & .tx-story-end [data-kind='human'] dd {
+    color: #d6a35f;
+  }
+  & .tx-story-end [data-kind='ai'] dd {
+    color: #5ba89f;
+  }
+  & .tx-story-end [data-kind='hearts'] dd {
+    color: #e3a08f;
+  }
+  & .tx-story-note {
+    margin: 18px 0 16px;
+    color: var(--cx-muted);
+    font-size: 13px;
+  }
+  & .tx-story-again {
+    padding: 12px 18px;
+    border: 0;
+    border-radius: 4px;
+    background: var(--cx-sun);
+    color: var(--mkt-accent-fg);
+    font-family: var(--cx-mono);
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+  & .tx-story-again:lang(th) {
+    letter-spacing: 0;
+  }
+}
+@keyframes tx-story-tip {
+  0% {
+    opacity: 0;
+    translate: -50% calc(-100% - 4px);
+  }
+  12%,
+  80% {
+    opacity: 1;
+    translate: -50% calc(-100% - 14px);
+  }
+  100% {
+    opacity: 0;
+    translate: -50% calc(-100% - 20px);
+  }
+}
+@keyframes tx-story-end {
+  from {
+    opacity: 0;
+    translate: -50% -44%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wakaclock-marketing[data-world='on'] :is(.tx-story-tip, .tx-story-end) {
+    animation: none;
+  }
+}
+
+/* The demo clock, coded time and hearts sit on a dark backing, so they read over any part of
+   the model (owner 2026-11-15). */
+.wakaclock-marketing[data-world='on'] .tx-root .tx-clock {
+  padding: 8px 16px;
+  border: 1px solid rgb(244 237 227 / 0.12);
+  border-radius: 12px;
+  background: rgb(11 15 25 / 0.8);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.wakaclock-marketing[data-world='on'] .tx-root .tx-clock-label {
+  color: rgb(244 237 227 / 0.72);
+}
+/* Thai is never letter-spaced or case-transformed. */
+.wakaclock-marketing .tx-root .tx-clock-label:lang(th) {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* No spyglass on arrival in the editor world (owner 2026-11-15): the view stays full-frame. */
+.wakaclock-marketing[data-world='on'] .tx-world-spyglass {
+  display: none;
+}
+
+/* One instrument, not two (owner 2026-11-15, "less clutter"): the stop marks live inside
+   the minimap as ticks on its left edge, and the home and whole-file buttons sit in its
+   header. Same elements and behaviour; only the layout changes. */
+.wakaclock-marketing[data-world='on'] {
+  & .tx-world-compass {
+    --head: 40px;
+    width: 64px;
+    height: 296px;
+  }
+  & .tx-world-compass-ring {
+    inset: calc(var(--head) + 6px) 8px 8px 14px;
+  }
+  & .tx-world-compass-needle {
+    top: calc(var(--head) + 6px + var(--p) * (100% - var(--head) - 14px - var(--view)));
+    left: 10px;
+    right: 4px;
+  }
+  & .tx-world-compass li {
+    top: calc(
+      var(--head) + 6px + var(--i) / var(--n) * (100% - var(--head) - 14px - var(--view)) +
+        var(--view) / 2 - 7px
+    );
+    left: 0;
+    width: 100%;
+    height: 14px;
+  }
+  & .tx-world-compass li button {
+    width: 100%;
+    height: 14px;
+  }
+  & .tx-world-compass li button::before {
+    inset: 5px auto 5px 3px;
+    width: 7px;
+    border-radius: 2px;
+    background: rgb(244 237 227 / 0.35);
+  }
+  & .tx-world-compass li button:is(:hover, :focus-visible, [aria-current])::before {
+    inset: 4px auto 4px 2px;
+    width: 9px;
+    background: var(--cx-sun);
+    box-shadow: none;
+  }
+  & .tx-world-compass li button[data-visited]::before {
+    background: rgb(214 163 95 / 0.6);
+  }
+  & .tx-world-compass-home,
+  & .tx-world-compass-chart {
+    top: 6px;
+    width: 26px;
+    height: 26px;
+    font-size: 11px;
+  }
+  & .tx-world-compass-home {
+    left: 5px;
+  }
+  & .tx-world-compass-chart {
+    left: 33px;
+  }
+  & .tx-world-compass-chart svg {
+    width: 13px;
+    height: 13px;
+  }
+  & .tx-world-compass-hint {
+    top: 10px;
+    right: calc(100% + 14px);
+  }
+  & .tx-world-card {
+    right: clamp(104px, 9vw, 148px);
+  }
+}
 @media (max-width: 767px) {
   .wakaclock-marketing[data-world='on'] {
     & .tx-world-compass {
@@ -2511,13 +2794,30 @@ html:has(.wakaclock-marketing[data-world='on']) {
     & .tx-world-compass-chart {
       left: 38px;
     }
+    & .tx-world-compass {
+      --head: 32px;
+      width: 52px;
+      height: 190px;
+    }
     & .tx-world-compass li {
-      right: -26px;
-      left: auto;
+      right: auto;
+      left: 0;
+    }
+    & .tx-world-compass-home,
+    & .tx-world-compass-chart {
+      top: 4px;
+      width: 22px;
+      height: 22px;
+    }
+    & .tx-world-compass-home {
+      left: 3px;
+    }
+    & .tx-world-compass-chart {
+      left: 27px;
     }
     & .tx-world-compass-hint {
       right: auto;
-      left: calc(100% + 36px);
+      left: calc(100% + 14px);
     }
     & .tx-world-card {
       right: 16px;

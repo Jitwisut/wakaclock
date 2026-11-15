@@ -43,10 +43,33 @@ const TOUR_LIFT = TOUR_KEYS.slice(1).map((key, index) => {
  * The scroll sets a target; the tour position glides after it, so a wheel's separate notches
  * and a finger's small jitters become one continuous movement.
  */
+/**
+ * The fastest the tour may travel (stops per second). Owner 2026-11-15: a hard scroll must
+ * not send the figurines racing; a stop takes about four seconds at most speed.
+ */
+export const MAX_TOUR_SPEED = 0.26;
+/** The tour's current speed (stops/s): it eases up to its pace and down into a stop. */
+const glide = { velocity: 0 };
+
+/** One frame of the tour's glide: speed eases toward the gap, never past MAX_TOUR_SPEED. */
+export function glideStep(tour: number, target: number, velocity: number, delta: number) {
+  const gap = target - tour;
+  if (Math.abs(gap) < 1e-4 && Math.abs(velocity) < 1e-3) return { tour: target, velocity: 0 };
+  // A scroll moves one stop at the walking pace; a jump (compass, keys, a new day) across
+  // several stops may go faster, in proportion, so it still takes only a few seconds.
+  const limit = MAX_TOUR_SPEED * Math.max(1, Math.abs(gap) / 1.2);
+  const wanted = Math.max(-limit, Math.min(limit, gap * 1.6));
+  const next = velocity + (wanted - velocity) * dampFactor(delta, 3);
+  let moved = tour + next * delta;
+  // Never overshoot the stop.
+  if ((target - moved) * gap < 0) moved = target;
+  return { tour: moved, velocity: moved === target ? 0 : next };
+}
+
 function glideTour(delta: number) {
-  const gap = timeMotion.tourTarget - timeMotion.tour;
-  timeMotion.tour =
-    Math.abs(gap) < 1e-4 ? timeMotion.tourTarget : timeMotion.tour + gap * dampFactor(delta, 2.1);
+  const step = glideStep(timeMotion.tour, timeMotion.tourTarget, glide.velocity, delta);
+  timeMotion.tour = step.tour;
+  glide.velocity = step.velocity;
 }
 
 /** Moves the world camera toward this frame's goal (`wantedPos`, `wantedLook`). */

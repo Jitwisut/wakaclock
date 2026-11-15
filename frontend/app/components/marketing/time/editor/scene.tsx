@@ -7,10 +7,10 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import {
   BoxGeometry,
-  BufferAttribute,
-  BufferGeometry,
+  type BufferGeometry,
   Color,
   CustomBlending,
+  CylinderGeometry,
   FogExp2,
   GreaterDepth,
   type Group,
@@ -18,28 +18,33 @@ import {
   type InstancedMesh,
   type Material,
   MeshBasicMaterial,
+  MeshDepthMaterial,
   MeshStandardMaterial,
   Object3D,
   OneMinusSrcAlphaFactor,
-  type Points,
+  RGBADepthPacking,
   SrcAlphaFactor,
+  Vector3,
 } from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 import { dotTexture } from '../scene/heartbeats';
-import { seededRandom } from '../time-data';
 import { dampFactor } from '../time-keyframes';
 import { timeMotion } from '../time-store';
-import { fxLevel, weatherAt } from '../voyage/director';
-import { FxBeam, FxPoints, FxRings } from '../voyage/place-fx';
+import { fxLevel } from '../voyage/director';
+import { FxPoints, FxRings } from '../voyage/place-fx';
 import { fxBurst, placeFx, voyage } from '../voyage/state';
 import { TOUR } from '../voyage/world-places';
 
+import { chartBars } from './charts';
+import { demoMinute, ROOM } from './desk';
 import {
+  BASE_DEPTH,
+  CHART_HEIGHT,
   cursorAt,
-  GLYPH_COLUMNS,
-  GLYPH_CUBE,
-  glyphCells,
+  deskY,
+  ISLAND_LIFT,
+  ISLAND_TOP,
   LINE_GAP,
   lineAtTour,
   lineNumberBlocks,
@@ -51,28 +56,32 @@ import {
   TEXT_RIGHT,
   type TokenKind,
 } from './file-plan';
-import { buildIsland, ISLAND_RADIUS, ISLAND_TOP, looseRocks } from './island';
+import { IslandHeart } from './hearts';
+import { buildIsland, ISLAND_RADIUS } from './island';
+import { registerPick } from './pick';
+import { play, showTip, towerText } from './play';
+import { SPEAKERS } from './story';
 
 /**
- * The editor world's scene: the file as a landscape of steps and coloured token bars, the
- * visitor's gold cursor and the AI's teal one, and a landmark glyph on a floating island for
- * every place. Gold is the human, sea-teal is the AI, as everywhere else on the site.
+ * The editor world's scene: the file as a model on a desk — steps of a base with clay token
+ * bars on top — the visitor's gold cursor and the AI's teal one, and a bar chart on a
+ * floating island for every place. Gold is the human, sea-teal is the AI, as everywhere else
+ * on the site.
  *
- * Owner direction 2026-11-15: sharp and calm, never neon. Nothing here is additive light;
- * colours are muted, and shapes read through lighting and thin edge lines instead of glow.
+ * Owner direction 2026-11-15: a miniature in evening lamplight; sharp and calm, never neon.
+ * Nothing here is additive light; shapes read through the lamp's light and shadows.
  */
 
-export const VOID = '#070a12';
 /** Muted, solid versions of the site's gold (human) and sea-teal (AI). */
 export const GOLD = '#d6a35f';
 export const TEAL = '#5ba89f';
 
 const TOKEN_COLOURS: Record<TokenKind, string> = {
-  keyword: '#cf9f60',
-  name: '#c4bdb0',
-  string: '#76ada2',
-  number: '#c98c7c',
-  comment: '#56627a',
+  keyword: '#d9a65f',
+  name: '#ddd5c6',
+  string: '#7fb6aa',
+  number: '#d3907d',
+  comment: '#6d7688',
 };
 
 /** Lines the AI's cursor types ahead of the visitor's. */
@@ -84,21 +93,22 @@ const TOKEN_LIFT = 0.42;
 
 const dummy = new Object3D();
 
-/* ---------- direction: clock, effects, weather ---------- */
+/* ---------- direction: clock and effects ---------- */
 
 /**
- * Runs after the camera rig: advances the scene clock, the open place's effect, the weather
- * along the tour and how much of the file has been typed. The editor's night never changes,
- * so there is no sun to move.
+ * Runs after the camera rig: advances the scene clock, the open place's effect and how much
+ * of the file has been typed. The room's evening never changes; its lights are in desk.tsx.
  */
 export function EditorDirector() {
   const { gl, scene } = useThree();
   const opened = useRef('');
-  const fog = useMemo(() => new FogExp2(VOID, 0.0028), []);
+  const fog = useMemo(() => new FogExp2(ROOM, 0.0028), []);
   const chart = useRef(0);
+  const day = useRef(play.day);
+  const rewinding = useRef(false);
   useEffect(() => {
     const before = scene.background;
-    scene.background = new Color(VOID);
+    scene.background = new Color(ROOM);
     scene.fog = fog;
     return () => {
       scene.background = before;
@@ -110,7 +120,17 @@ export function EditorDirector() {
     voyage.time += delta;
     voyage.daylight = 0;
     voyage.lanterns = 1;
-    voyage.reached = Math.max(voyage.reached, timeMotion.tour);
+    // A new day (from the end card) starts the file over, untyped. Nothing is typed (or
+    // collected) again while the camera glides back to the start.
+    if (day.current !== play.day) {
+      day.current = play.day;
+      voyage.reached = 0;
+      rewinding.current = true;
+    }
+    if (rewinding.current && timeMotion.tour < 0.05) rewinding.current = false;
+    if (!rewinding.current) voyage.reached = Math.max(voyage.reached, timeMotion.tour);
+    // The demo day's clock moves with the cursor: the readout and the ring clock agree.
+    timeMotion.hand = demoMinute(timeMotion.tour, TOUR.length);
 
     const { at, place } = timeMotion;
     const playing = place || at;
@@ -129,69 +149,18 @@ export function EditorDirector() {
     voyage.fxOn += (fxLevel(place, at, voyage.fxPlace) - voyage.fxOn) * dampFactor(delta, 2.4);
     if (!playing && voyage.fxOn < 0.004) voyage.fxPlace = '';
 
-    const sky = weatherAt(timeMotion.tour);
-    const settle = dampFactor(delta, 1.4);
-    voyage.mist += (sky.mist - voyage.mist) * settle;
-    voyage.rain += (sky.rain - voyage.rain) * settle;
-    voyage.aurora += (sky.aurora - voyage.aurora) * settle;
-    voyage.meteors += (sky.meteors - voyage.meteors) * settle;
+    // A model on a desk has no weather (owner 2026-11-15): the sky stays clear.
+    voyage.mist = 0;
+    voyage.rain = 0;
+    voyage.aurora = 0;
+    voyage.meteors = 0;
 
     // From the whole-file view the haze would hide the far end: clear it.
     chart.current += ((timeMotion.chart ? 1 : 0) - chart.current) * dampFactor(delta, 2);
-    fog.density = (0.0028 + voyage.mist * 0.005) * (1 - 0.9 * chart.current);
-    gl.toneMappingExposure = 1;
+    fog.density = 0.0028 * (1 - 0.9 * chart.current);
+    gl.toneMappingExposure = 1.12;
   }, -0.5);
-  // A low fill and a strong key from the upper left, with a cool rim from behind: faces of
-  // a box differ clearly, which is most of what makes the scene read sharp.
-  return (
-    <>
-      <ambientLight color="#8f9bc4" intensity={0.35} />
-      <hemisphereLight args={['#a4b2dc', '#1a1410', 0.55]} />
-      <directionalLight color="#ffe6c2" intensity={2.3} position={[-45, 70, 40]} />
-      <directionalLight color="#8aa2d8" intensity={0.7} position={[30, 25, -80]} />
-      {/* A faint cool bounce from below, so the islands' undersides keep their shape. */}
-      <directionalLight color="#6f7fa8" intensity={0.55} position={[10, -60, 30]} />
-    </>
-  );
-}
-
-/** Distant points of light behind the file, so the void has depth. They travel with the camera. */
-export function Starfield({ count = 700 }: { count?: number }) {
-  const stars = useRef<Points>(null);
-  const geometry = useMemo(() => {
-    const random = seededRandom(51);
-    const position = new Float32Array(count * 3);
-    for (let index = 0; index < count; index += 1) {
-      const around = random() * Math.PI * 2;
-      const up = random() * 1.3 - 0.25;
-      position.set(
-        [
-          Math.cos(around) * Math.cos(up) * 1500,
-          Math.sin(up) * 1500,
-          Math.sin(around) * Math.cos(up) * 1500,
-        ],
-        index * 3
-      );
-    }
-    const buffer = new BufferGeometry();
-    buffer.setAttribute('position', new BufferAttribute(position, 3));
-    return buffer;
-  }, [count]);
-  useEffect(() => () => geometry.dispose(), [geometry]);
-  useFrame(({ camera }) => stars.current?.position.copy(camera.position));
-  return (
-    <points frustumCulled={false} geometry={geometry} ref={stars} renderOrder={-9}>
-      <pointsMaterial
-        color="#a9b6d6"
-        depthWrite={false}
-        fog={false}
-        opacity={0.6}
-        size={1.4}
-        sizeAttenuation={false}
-        transparent
-      />
-    </points>
-  );
+  return null;
 }
 
 /* ---------- the file ---------- */
@@ -209,68 +178,47 @@ float typedAmount(out float written) {
 }
 `;
 
-const TOKEN_VERTEX = /* glsl */ `
-${TYPED_GLSL}
-varying vec3 vColor;
-varying vec3 vNormal;
-varying vec3 vLocal;
-varying vec3 vSize;
-varying float vTyped;
-varying float vFresh;
-varying float vDistance;
-void main() {
-  float written;
-  float typed = typedAmount(written);
-  float pop = typed + sin(typed * 3.14159) * 0.3;
-  float rise = mix(0.14, 1.0, pop);
-  vec3 p = position;
-  p.y = (p.y + 0.5) * rise - 0.5;
-  vec4 world = modelMatrix * instanceMatrix * vec4(p, 1.0);
-  vColor = aColor;
-  vNormal = normalize(mat3(modelMatrix * instanceMatrix) * normal);
-  vLocal = position;
-  vSize = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz) * rise, length(instanceMatrix[2].xyz));
-  vTyped = typed;
-  // Just typed: a brief lift in tone, not a glow.
-  vFresh = typed * (1.0 - smoothstep(1.0, 9.0, written));
-  vec4 view = viewMatrix * world;
-  vDistance = -view.z;
-  gl_Position = projectionMatrix * view;
-}
+/** The typing animation, patched into the tokens' lit material and its shadow. */
+const RISE_GLSL = /* glsl */ `
+float written;
+float typed = typedAmount(written);
+float pop = typed + sin(typed * 3.14159) * 0.3;
+transformed.y = (transformed.y + 0.5) * mix(0.14, 1.0, pop) - 0.5;
+vTyped = typed;
+vFresh = typed * (1.0 - smoothstep(1.0, 9.0, written));
 `;
 
-const TOKEN_FRAGMENT = /* glsl */ `
-uniform vec3 uVoid;
-uniform float uFog;
-varying vec3 vColor;
-varying vec3 vNormal;
-varying vec3 vLocal;
-varying vec3 vSize;
-varying float vTyped;
-varying float vFresh;
-varying float vDistance;
-void main() {
-  vec3 n = normalize(vNormal);
-  float key = max(0.0, dot(n, normalize(vec3(-0.45, 0.8, 0.4))));
-  float rim = max(0.0, dot(n, normalize(vec3(0.3, 0.3, -0.9))));
-  float light = 0.26 + 0.74 * key + 0.15 * rim;
-  vec3 colour = vColor * light * mix(0.32, 1.0, vTyped);
-  colour = mix(colour, vColor * 1.12, 0.25 * vFresh);
-  // A thin ink line round every face: distance (in metres) to the nearest edge of this face.
-  vec3 toEdge = (0.5 - abs(vLocal)) * vSize;
-  vec3 axis = abs(n);
-  float edge = axis.x > 0.5 ? min(toEdge.y, toEdge.z)
-    : axis.y > 0.5 ? min(toEdge.x, toEdge.z)
-    : min(toEdge.x, toEdge.y);
-  float width = fwidth(edge);
-  float ink = 1.0 - smoothstep(0.035, 0.035 + width * 1.5, edge);
-  colour = mix(colour, colour * 0.42, ink * mix(0.4, 1.0, vTyped));
-  float haze = 1.0 - exp(-pow(vDistance * uFog, 2.0));
-  gl_FragColor = vec4(mix(colour, uVoid, haze), 1.0);
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
+/**
+ * The tokens' clay: a matte, lit material, so the lamp and its shadows reach the code. The
+ * typing is patched in: a token ahead of the cursor lies low and dim, and rises as it is
+ * typed. `depth` makes the matching shadow material.
+ */
+function tokenMaterial(typed: { value: number }, depth = false) {
+  const material = depth
+    ? new MeshDepthMaterial({ depthPacking: RGBADepthPacking })
+    : new MeshStandardMaterial({ metalness: 0, roughness: 0.6 });
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uTyped = typed;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>\n${TYPED_GLSL}\nvarying float vTyped;\nvarying float vFresh;`
+      )
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${RISE_GLSL}`);
+    if (depth) return;
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nvarying float vTyped;\nvarying float vFresh;'
+      )
+      .replace(
+        '#include <color_fragment>',
+        '#include <color_fragment>\ndiffuseColor.rgb *= mix(0.32, 1.0, vTyped) * (1.0 + 0.12 * vFresh);'
+      );
+  };
+  material.customProgramCacheKey = () => (depth ? 'editor-token-depth' : 'editor-token');
+  return material;
 }
-`;
 
 /**
  * The tokens' reflections in the polished steps: each token mirrored under its own step's
@@ -314,8 +262,13 @@ void main() {
 }
 `;
 
+/** Every token's colour, in instance order (filled by `tokenGeometry`). */
+const TOKEN_TINTS: Color[] = [];
+
 function tokenGeometry(count: number) {
-  const box = new BoxGeometry(1, 1, 1);
+  TOKEN_TINTS.length = 0;
+  // Rounded like clay pieces; the corners stretch with each bar's length, which reads soft.
+  const box = new RoundedBoxGeometry(1, 1, 1, 2, 0.12);
   const colours = new Float32Array(count * 3);
   const lines = new Float32Array(count * 2);
   const colour = new Color();
@@ -327,6 +280,7 @@ function tokenGeometry(count: number) {
       // The AI's lines lean sea-teal, whatever the token.
       if (line.ai) colour.lerp(ai, 0.6);
       colours.set([colour.r, colour.g, colour.b], index * 3);
+      TOKEN_TINTS.push(colour.clone());
       lines.set([line.index, line.ai ? 1 : 0], index * 2);
       index += 1;
     }
@@ -361,15 +315,27 @@ function Tokens() {
   const mirror = useRef<InstancedMesh>(null);
   const count = useMemo(() => LINES.reduce((sum, line) => sum + line.tokens.length, 0), []);
   const geometry = useMemo(() => tokenGeometry(count), [count]);
-  const uniforms = useMemo(
-    () => ({ uTyped: { value: 0 }, uVoid: { value: new Color(VOID) }, uFog: { value: 0.0028 } }),
-    []
+  const uniforms = useMemo(() => ({ uTyped: { value: 0 }, uFog: { value: 0.0028 } }), []);
+  const materials = useMemo(
+    () => ({ clay: tokenMaterial(uniforms.uTyped), depth: tokenMaterial(uniforms.uTyped, true) }),
+    [uniforms]
   );
-  useEffect(() => () => geometry.dispose(), [geometry]);
+  useEffect(
+    () => () => {
+      geometry.dispose();
+      materials.clay.dispose();
+      materials.depth.dispose();
+    },
+    [geometry, materials]
+  );
   useEffect(() => {
     for (const instance of [mesh.current, mirror.current]) {
       if (instance) placeTokens(instance);
     }
+    const instance = mesh.current;
+    if (!instance) return;
+    for (const [index, tint] of TOKEN_TINTS.entries()) instance.setColorAt(index, tint);
+    if (instance.instanceColor) instance.instanceColor.needsUpdate = true;
   }, []);
   useFrame(({ scene }) => {
     // Typed stays typed: the file fills up to the furthest line the cursor has reached.
@@ -396,25 +362,26 @@ function Tokens() {
           vertexShader={MIRROR_VERTEX}
         />
       </instancedMesh>
-      <instancedMesh args={[geometry, undefined, count]} frustumCulled={false} ref={mesh}>
-        <shaderMaterial
-          fragmentShader={TOKEN_FRAGMENT}
-          uniforms={uniforms}
-          vertexShader={TOKEN_VERTEX}
-        />
-      </instancedMesh>
+      <instancedMesh
+        args={[geometry, materials.clay, count]}
+        castShadow
+        customDepthMaterial={materials.depth}
+        frustumCulled={false}
+        receiveShadow
+        ref={mesh}
+      />
     </>
   );
 }
 
-/** The steps: one polished dark plate per line, with a fine lit edge along its front lip. */
+/** The steps: one block of the model's base per line, with a fine edge along its front lip. */
 function Steps() {
   const plates = useRef<InstancedMesh>(null);
   const lips = useRef<InstancedMesh>(null);
   const materials = useMemo(
     () => ({
-      plate: new MeshStandardMaterial({ color: '#1d2740', metalness: 0.25, roughness: 0.42 }),
-      lip: new MeshBasicMaterial({ color: '#36425f' }),
+      plate: new MeshStandardMaterial({ color: '#4b4a52', metalness: 0, roughness: 0.78 }),
+      lip: new MeshBasicMaterial({ color: '#77757d' }),
     }),
     []
   );
@@ -434,9 +401,11 @@ function Steps() {
       const y = lineY(line.index);
       const z = lineZ(line.index);
       dummy.rotation.set(0, 0, 0);
-      // Thick enough that each step closes the gap down to the next.
-      dummy.position.set(centre, y + PLATE_TOP - 1.8, z);
-      dummy.scale.set(width, 3.6, LINE_GAP * 0.94);
+      // Each step reaches down to the desk: together they are the model's base.
+      const top = y + PLATE_TOP;
+      const bottom = deskY(z);
+      dummy.position.set(centre, (top + bottom) / 2, z);
+      dummy.scale.set(width, top - bottom, LINE_GAP * 0.94);
       dummy.updateMatrix();
       plates.current?.setMatrixAt(line.index, dummy.matrix);
       // The lip: a hairline along the step's nearer top edge, so every step reads crisply.
@@ -547,6 +516,9 @@ export function CodeFile() {
 
 /* ---------- the cursors ---------- */
 
+/** Where each cursor is this frame: the figurines walk along with them. */
+export const caretAt = { human: new Vector3(), ai: new Vector3() };
+
 /** How bright a caret is `seconds` into its blink: on, then a quick dip, like a heartbeat. */
 export function caretBlink(seconds: number) {
   const beat = ((seconds % 1.1) + 1.1) % 1.1;
@@ -561,6 +533,7 @@ export function caretBlink(seconds: number) {
 function Caret({ colour, ghost = false, lead }: { colour: string; ghost?: boolean; lead: number }) {
   const caret = useRef<Group>(null);
   const at = useRef({ ready: false, x: 0, y: 0, z: 0 });
+  const roam = useRef(1);
   const materials = useMemo(
     () => ({
       solid: new MeshStandardMaterial({
@@ -592,8 +565,10 @@ function Caret({ colour, ghost = false, lead }: { colour: string; ghost?: boolea
     const group = caret.current;
     if (!group) return;
     const delta = Math.min(rawDelta, 0.1);
-    // The AI's cursor works a few lines ahead and wanders a little as it goes.
-    const wander = ghost ? Math.sin(voyage.time * 0.7) * 1.4 : 0;
+    // The AI's cursor works a few lines ahead and wanders a little as it goes; at a place it
+    // stands still, so its robot (and the robot's speech bubble) can be read.
+    roam.current += ((timeMotion.at ? 0 : 1) - roam.current) * dampFactor(delta, 2.5);
+    const wander = ghost ? Math.sin(voyage.time * 0.7) * 1.4 * roam.current : 0;
     const [x, y, z] = cursorAt(lineAtTour(timeMotion.tour) + lead + wander);
     const { current } = at;
     if (!current.ready) Object.assign(current, { ready: true, x, y, z });
@@ -603,6 +578,7 @@ function Caret({ colour, ghost = false, lead }: { colour: string; ghost?: boolea
     current.y += (y - current.y) * dampFactor(delta, 12);
     current.z += (z - current.z) * dampFactor(delta, 14);
     group.position.set(current.x, current.y, current.z);
+    caretAt[ghost ? 'ai' : 'human'].copy(group.position);
     const blink = caretBlink(voyage.time + (ghost ? 0.4 : 0));
     materials.solid.opacity = (ghost ? 0.85 : 1) * (0.55 + 0.45 * blink);
     // The current line lights up under the visitor's own cursor.
@@ -610,10 +586,10 @@ function Caret({ colour, ghost = false, lead }: { colour: string; ghost?: boolea
   });
   return (
     <group ref={caret}>
-      <mesh material={materials.solid} position={[0, 2.05, 0]}>
+      <mesh castShadow material={materials.solid} position={[0, 2.05, 0]}>
         <boxGeometry args={[0.32, 3.3, 0.32]} />
       </mesh>
-      <mesh material={materials.solid} position={[0.62, 3.95, 0]}>
+      <mesh castShadow material={materials.solid} position={[0.62, 3.95, 0]}>
         <boxGeometry args={[1.25, 0.62, 0.18]} />
       </mesh>
       {ghost ? null : (
@@ -639,35 +615,44 @@ export function Cursors() {
 
 /* ---------- landmarks ---------- */
 
-/** Which cubes of a place's glyph are the AI's (sea-teal); the rest are gold. */
-export function tealCell(id: string, column: number) {
-  if (id === 'twinlights' || id === 'signal') return column > 3;
-  return false;
+/** How built up a chart is as the tour nears its stop: 0 far away, 1 arrived. */
+export function chartGrowth(tour: number, stop: number) {
+  return Math.min(1, Math.max(0, 1 - Math.abs(tour - stop) * 1.4) * 1.25);
 }
 
-/** How bright a glyph's cubes are: dim from afar, full as it is reached, a touch more when open. */
-export function glyphShade(gathered: number, on: number, burst: number) {
-  return Math.min(1.55, 1 + 0.3 * gathered + 0.15 * on + 0.12 * burst);
+/** Ease-out with a small overshoot, for a tower rising into place. */
+function rise(t: number) {
+  const clamped = Math.min(1, Math.max(0, t));
+  return 1 + 2.2 * (clamped - 1) ** 3 + 1.2 * (clamped - 1) ** 2;
+}
+
+/** A tapped tower's springy bounce `age` seconds after the tap: up, then settling. */
+export function tapBounce(age: number) {
+  if (age < 0 || age > 1.2) return 0;
+  return 0.22 * Math.sin(age * 11) * Math.exp(-age * 3.2);
+}
+
+/** The page's language, for text the scene shows in the page. */
+export function pageLocale(): 'en' | 'th' {
+  const site =
+    typeof document === 'undefined' ? null : document.querySelector('.wakaclock-marketing');
+  return site?.getAttribute('lang') === 'th' ? 'th' : 'en';
 }
 
 /**
- * A place's landmark: its glyph in cubes standing on its island. From afar it is dim and
- * slightly scattered; as the tour arrives the cubes draw together, and when the place is
- * opened they lock and brighten a little.
+ * A place's landmark: its bar chart as a model town on the island. From afar the towers are
+ * low stubs; as the tour arrives they rise one after another into the chart, and when the
+ * place is opened they give a small bounce.
  */
-function Glyph({ id, stop }: { id: string; stop: number }) {
-  const cubes = useRef<InstancedMesh>(null);
-  const cells = useMemo(() => glyphCells(id), [id]);
-  const seeds = useMemo(() => {
-    const random = seededRandom(stop * 97 + 5);
-    return cells.map(() => [random() - 0.5, random(), random() - 0.5] as const);
-  }, [cells, stop]);
+function ChartTowers({ id, stop }: { id: string; stop: number }) {
+  const towers = useRef<InstancedMesh>(null);
+  const bars = useMemo(() => chartBars(id), [id]);
   const material = useMemo(
-    () => new MeshStandardMaterial({ color: '#ffffff', metalness: 0.12, roughness: 0.55 }),
+    () => new MeshStandardMaterial({ color: '#ffffff', metalness: 0.05, roughness: 0.58 }),
     []
   );
-  const geometry = useMemo(() => new RoundedBoxGeometry(1, 1, 1, 2, 0.1), []);
-  const tint = useMemo(() => new Color(), []);
+  const geometry = useMemo(() => new RoundedBoxGeometry(1, 1, 1, 2, 0.14), []);
+  const tints = useMemo(() => ({ human: new Color(GOLD), ai: new Color(TEAL) }), []);
   useEffect(
     () => () => {
       geometry.dispose();
@@ -675,36 +660,66 @@ function Glyph({ id, stop }: { id: string; stop: number }) {
     },
     [geometry, material]
   );
+  /** When each tower was last tapped (scene seconds), for its bounce. */
+  const tapped = useRef(new Map<number, number>());
+  useEffect(() => {
+    const instance = towers.current;
+    if (!instance) return;
+    for (const index of bars.keys()) {
+      instance.setColorAt(index * 2, tints.human);
+      instance.setColorAt(index * 2 + 1, tints.ai);
+    }
+    if (instance.instanceColor) instance.instanceColor.needsUpdate = true;
+    // Tap a tower: it bounces and says how much time it stands for (demo).
+    return registerPick(instance, (hit, event) => {
+      const index = Math.floor((hit.instanceId ?? 0) / 2);
+      const bar = bars[index];
+      if (!bar) return;
+      tapped.current.set(index, voyage.time);
+      const locale = pageLocale();
+      showTip(
+        towerText(bar.human, bar.ai, { you: SPEAKERS.dev[locale], ai: SPEAKERS.bot[locale] }),
+        event.clientX,
+        event.clientY
+      );
+    });
+  }, [bars, tints]);
   useFrame(() => {
-    const instance = cubes.current;
+    const instance = towers.current;
     if (!instance) return;
     const { age, on } = placeFx(id);
-    // How near the tour is, so the glyph starts gathering before the stop is reached.
-    const near = Math.max(0, 1 - Math.abs(timeMotion.tour - stop) * 1.6);
-    const gathered = Math.min(1, near * 0.75 + on);
-    const loose = (1 - gathered) ** 2;
-    const burst = fxBurst(age, 2.6);
-    const shade = glyphShade(gathered, on, burst);
-    for (const [index, [column, row]] of cells.entries()) {
-      const seed = seeds[index] as readonly [number, number, number];
-      const bob = Math.sin(voyage.time * 1.3 + index) * 0.12 * (1 - on);
-      dummy.position.set(
-        (column - (GLYPH_COLUMNS - 1) / 2) * GLYPH_CUBE + seed[0] * 9 * loose,
-        ISLAND_TOP + 0.1 + (row + 0.5) * GLYPH_CUBE + seed[1] * 7 * loose + bob,
-        seed[2] * 12 * loose
-      );
-      dummy.rotation.set(seed[0] * 3 * loose, seed[1] * 4 * loose, 0);
-      dummy.scale.setScalar(GLYPH_CUBE * (0.9 + 0.06 * on + 0.06 * burst));
+    const grown = Math.max(chartGrowth(timeMotion.tour, stop), on);
+    const bounce = 1 + 0.06 * fxBurst(age, 2.2) * Math.sin(age * 9);
+    for (const [index, bar] of bars.entries()) {
+      // Left to right, each tower a beat after the one before.
+      const own = rise(grown * 1.6 - (index / Math.max(1, bars.length)) * 0.6);
+      const since = tapped.current.get(index);
+      const poke = since === undefined ? 0 : tapBounce(voyage.time - since);
+      const k = (0.06 + 0.94 * own) * bounce * (1 + poke);
+      const human = Math.max(0.02, bar.human * k);
+      const ai = bar.ai * k;
+      dummy.rotation.set(0, 0, 0);
+      dummy.position.set(bar.x, ISLAND_TOP + human / 2, bar.z);
+      dummy.scale.set(bar.width, human, bar.depth);
       dummy.updateMatrix();
-      instance.setMatrixAt(index, dummy.matrix);
-      tint.set(tealCell(id, column) ? TEAL : GOLD).multiplyScalar(shade);
-      instance.setColorAt(index, tint);
+      instance.setMatrixAt(index * 2, dummy.matrix);
+      dummy.position.set(bar.x, ISLAND_TOP + human + ai / 2, bar.z);
+      dummy.scale.set(bar.width * 0.98, Math.max(0.0001, ai), bar.depth * 0.98);
+      dummy.updateMatrix();
+      instance.setMatrixAt(index * 2 + 1, dummy.matrix);
     }
     instance.instanceMatrix.needsUpdate = true;
-    if (instance.instanceColor) instance.instanceColor.needsUpdate = true;
+    // The towers change height: let the next tap recompute their bounds.
+    instance.boundingSphere = null;
   });
   return (
-    <instancedMesh args={[geometry, material, cells.length]} frustumCulled={false} ref={cubes} />
+    <instancedMesh
+      args={[geometry, material, bars.length * 2]}
+      castShadow
+      frustumCulled={false}
+      receiveShadow
+      ref={towers}
+    />
   );
 }
 
@@ -726,7 +741,7 @@ const STOP_FX: Record<string, FxKind> = {
 
 function StopFx({ id, particles, stop }: { id: string; particles: number; stop: number }) {
   const kind = STOP_FX[id] ?? 'rise';
-  const top = ISLAND_TOP + (GLYPH_CUBE * 9) / 2;
+  const top = ISLAND_TOP + CHART_HEIGHT * 0.6;
   const common = { calm: true, id, seed: stop * 13 + 3 };
   return (
     <>
@@ -752,51 +767,30 @@ function StopFx({ id, particles, stop }: { id: string; particles: number; stop: 
         />
       ) : null}
       {kind === 'twin' ? (
-        <>
-          <FxBeam
-            calm
-            color={GOLD}
-            height={60}
-            id={id}
-            position={[-4.2, top + 30, 0]}
-            radius={0.7}
-          />
-          <FxBeam
-            calm
-            color={TEAL}
-            height={60}
-            id={id}
-            position={[4.2, top + 30, 0]}
-            radius={0.7}
-          />
-          <FxPoints
-            {...common}
-            colors={[GOLD, TEAL]}
-            count={Math.round(particles * 0.8)}
-            life={5}
-            position={[0, top, 0]}
-            rise={6}
-            size={3}
-            spin={1.5}
-            spread={8}
-          />
-        </>
+        <FxPoints
+          {...common}
+          colors={[GOLD, TEAL]}
+          count={Math.round(particles * 0.8)}
+          life={5}
+          position={[0, top, 0]}
+          rise={6}
+          size={3}
+          spin={1.5}
+          spread={8}
+        />
       ) : null}
       {kind === 'beam' ? (
-        <>
-          <FxBeam calm color={GOLD} height={70} id={id} position={[0, top + 35, 0]} radius={1.6} />
-          <FxPoints
-            {...common}
-            colors={[GOLD, '#e9dcc0']}
-            count={Math.round(particles * 0.6)}
-            life={4}
-            out={3}
-            position={[0, top, 0]}
-            rise={7}
-            size={3}
-            spread={3}
-          />
-        </>
+        <FxPoints
+          {...common}
+          colors={[GOLD, '#e9dcc0']}
+          count={Math.round(particles * 0.6)}
+          life={4}
+          out={3}
+          position={[0, top, 0]}
+          rise={7}
+          size={3}
+          spread={3}
+        />
       ) : null}
       {kind === 'rise' ? (
         <FxPoints
@@ -873,8 +867,8 @@ function StopFx({ id, particles, stop }: { id: string; particles: number; stop: 
 }
 
 /**
- * One place's floating island: the island itself, a soft contact shadow under the glyph,
- * and a few loose rocks hanging beneath. It bobs gently, glyph and all.
+ * One place's floating island, held over the desk on a brass rod like a model's: the island,
+ * a soft contact shadow under the chart, and the chart itself. It bobs very slightly.
  */
 function FloatingIsland({
   id,
@@ -884,58 +878,58 @@ function FloatingIsland({
   stop,
 }: {
   id: string;
-  materials: { ground: Material; rock: Material; shade: Material };
+  materials: { brass: Material; ground: Material; shade: Material };
   particles: number;
   shapes: SharedShapes;
   stop: number;
 }) {
   const float = useRef<Group>(null);
   const geometry = useMemo(() => buildIsland(stop * 31 + 7), [stop]);
-  const rocks = useMemo(() => looseRocks(stop), [stop]);
   useEffect(() => () => geometry.dispose(), [geometry]);
   useFrame(() => {
     const group = float.current;
     if (!group) return;
-    group.position.y = Math.sin(voyage.time * 0.55 + stop * 1.7) * 0.35;
-    group.rotation.y = Math.sin(voyage.time * 0.21 + stop) * 0.015;
-    for (const [index, child] of group.children.entries()) {
-      if (child.userData.rock === undefined) continue;
-      const lift = Math.sin(voyage.time * 0.8 + index * 2.1 + stop) * 0.5;
-      child.position.y = (child.userData.rock as number) + lift;
-      child.rotation.y += 0.002;
-    }
+    group.position.y = ISLAND_LIFT + Math.sin(voyage.time * 0.55 + stop * 1.7) * 0.18;
   });
+  const rod = ISLAND_LIFT - 4 + BASE_DEPTH;
   return (
-    <group ref={float}>
-      <mesh geometry={geometry} material={materials.ground} receiveShadow />
+    <>
       <mesh
-        geometry={shapes.plane}
-        material={materials.shade}
-        position={[0, ISLAND_TOP + 0.03, 0.4]}
-        rotation={[-Math.PI / 2, 0, 0]}
-        scale={[GLYPH_COLUMNS * GLYPH_CUBE * 1.3, 7, 1]}
+        castShadow
+        geometry={shapes.rod}
+        material={materials.brass}
+        position={[0, ISLAND_LIFT - 4 - rod / 2, 0]}
+        scale={[1, rod, 1]}
       />
-      {rocks.map(([x, y, z, size], index) => (
+      <mesh
+        castShadow
+        geometry={shapes.foot}
+        material={materials.brass}
+        position={[0, -BASE_DEPTH + 0.2, 0]}
+        receiveShadow
+      />
+      <group ref={float}>
+        <mesh castShadow geometry={geometry} material={materials.ground} receiveShadow />
         <mesh
-          geometry={shapes.rock}
-          key={`${x}:${z}`}
-          material={materials.rock}
-          position={[x, y, z]}
-          rotation={[index, index * 2, 0]}
-          scale={size}
-          userData={{ rock: y }}
+          geometry={shapes.plane}
+          material={materials.shade}
+          position={[0, ISLAND_TOP + 0.03, 0]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          scale={[19, 12, 1]}
         />
-      ))}
-      <Glyph id={id} stop={stop} />
-      <StopFx id={id} particles={particles} stop={stop} />
-    </group>
+        <ChartTowers id={id} stop={stop} />
+        <IslandHeart stop={stop} />
+        <StopFx id={id} particles={particles} stop={stop} />
+      </group>
+    </>
   );
 }
 
-/** Geometry the islands share: the contact shadow's plane and a loose rock. */
+/** Geometry the islands share: the contact shadow's plane, the rod and its foot. */
 interface SharedShapes {
+  foot: BufferGeometry;
   plane: BufferGeometry;
-  rock: BufferGeometry;
+  rod: BufferGeometry;
 }
 
 /** Every place's landmark beside the file, turned a little toward the approaching camera. */
@@ -950,23 +944,19 @@ export function Landmarks({ particles }: { particles: number }) {
           roughness: 0.92,
           vertexColors: true,
         }),
-        rock: new MeshStandardMaterial({
-          color: '#5d6374',
-          flatShading: true,
-          metalness: 0,
-          roughness: 0.9,
-        }),
+        brass: new MeshStandardMaterial({ color: '#b08a55', metalness: 0.7, roughness: 0.35 }),
         shade: new MeshBasicMaterial({
           color: '#000000',
           depthWrite: false,
           map: shadow,
-          opacity: 0.5,
+          opacity: 0.35,
           transparent: true,
         }),
       },
       geometry: {
+        foot: new CylinderGeometry(2.2, 2.6, 0.4, 32),
         plane: new BoxGeometry(1, 1, 0.001),
-        rock: new RoundedBoxGeometry(1, 1, 1, 1, 0.25),
+        rod: new CylinderGeometry(0.32, 0.32, 1, 16),
       },
       texture: shadow,
     };
@@ -974,8 +964,7 @@ export function Landmarks({ particles }: { particles: number }) {
   useEffect(
     () => () => {
       for (const material of Object.values(shared.materials)) material.dispose();
-      shared.geometry.plane.dispose();
-      shared.geometry.rock.dispose();
+      for (const shape of Object.values(shared.geometry)) shape.dispose();
       shared.texture.dispose();
     },
     [shared]
