@@ -47,9 +47,9 @@ pub async fn get(
 
 async fn require(state: &AppState, headers: &HeaderMap) -> Result<Uuid, (StatusCode, Json<Value>)> {
     let user_id = auth::resolve_user_id(state, headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(state, headers, "read_goals").await {
+    if !auth::require_scope(state, headers, "read_goals").await? {
         return Err(auth::forbidden_scope("read_goals"));
     }
     Ok(user_id)

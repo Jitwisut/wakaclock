@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 
 import { WakaclockError, wakaclockClient } from '@/lib/wakaclock/client';
 import { wakaclockV2Client } from '@/lib/wakaclock/client-v2';
-import { setCurrentToken, setUnauthorizedHandler } from '@/lib/wakaclock/session';
+import { getCurrentToken, setCurrentToken, setUnauthorizedHandler } from '@/lib/wakaclock/session';
 
 vi.mock('@/lib/env', () => ({ env: { NEXT_PUBLIC_WAKACLOCK_API_URL: 'http://client.test' } }));
 const server = setupServer();
@@ -135,5 +135,25 @@ it.each([wakaclockClient, wakaclockV2Client])(
       await Promise.all([rejected, stale]);
       expect(logout).not.toHaveBeenCalled();
     }
+  }
+);
+
+it.each([wakaclockClient, wakaclockV2Client])(
+  'preserves valid credentials during an authentication-store outage',
+  async (client) => {
+    const logout = vi.fn();
+    setCurrentToken('still-valid');
+    setUnauthorizedHandler(logout);
+    server.use(
+      http.get('http://client.test/api/:version/me', () =>
+        HttpResponse.json(
+          { error: 'authentication service temporarily unavailable' },
+          { status: 503 }
+        )
+      )
+    );
+    await expect(client.get('/me')).rejects.toMatchObject({ status: 503 });
+    expect(logout).not.toHaveBeenCalled();
+    expect(getCurrentToken()).toBe('still-valid');
   }
 );

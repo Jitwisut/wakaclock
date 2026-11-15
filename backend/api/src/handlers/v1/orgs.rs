@@ -63,7 +63,7 @@ pub async fn create(
     Json(payload): Json<CreateOrgPayload>,
 ) -> Result<Json<OrgResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
 
     let org = state
@@ -81,7 +81,7 @@ pub async fn list(
     headers: HeaderMap,
 ) -> Result<Json<OrgsResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
 
     let orgs = state

@@ -21,7 +21,7 @@ pub async fn readiness(
     Path(org): Path<Uuid>,
 ) -> Result<Json<V2Envelope<Value>>, ApiError> {
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     Ok(Json(envelope(
         state
@@ -317,7 +317,7 @@ pub async fn propose(
     Json(request): Json<LinkRequest>,
 ) -> Result<Json<V2Envelope<WorkLink>>, ApiError> {
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     Ok(Json(envelope(
         state
@@ -337,7 +337,7 @@ pub async fn decide(
     Json(request): Json<LinkDecision>,
 ) -> Result<Json<V2Envelope<WorkLink>>, ApiError> {
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     Ok(Json(envelope(
         state
@@ -377,7 +377,7 @@ pub async fn history(
     Query(q): Query<HistoryQuery>,
 ) -> Result<(HeaderMap, Json<V2Envelope<Value>>), ApiError> {
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let mut cache = HeaderMap::new();
     cache.insert("cache-control", "private, no-store".parse().unwrap());
@@ -401,7 +401,7 @@ pub async fn replace(
     Json(input): Json<crate::model::team_insights::LinkReplacement>,
 ) -> Result<Json<V2Envelope<WorkLink>>, ApiError> {
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     Ok(Json(envelope(
         state
@@ -421,7 +421,7 @@ pub async fn links_page(
     Query(q): Query<HistoryQuery>,
 ) -> Result<Json<V2Envelope<Value>>, ApiError> {
     let user = auth::require_session_user(&s, &h)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     Ok(Json(envelope(
         s.team_insights_service
@@ -446,7 +446,7 @@ pub async fn own_receipt(
     ApiError,
 > {
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let data = state
         .team_insights_service

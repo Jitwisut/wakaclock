@@ -77,6 +77,7 @@ async fn migrate_clickhouse(state: &AppState) -> Result<()> {
     state.org_repo.migrate().await?;
     state.team_repo.migrate().await?;
     state.coworking_session_repo.migrate().await?;
+    wakaclock_server::repository::session_revocation::migrate(&state.clickhouse.get_client()).await?;
     Ok(())
 }
 
@@ -293,10 +294,8 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to bind TCP listener")?;
 
-    // ConnectInfo<SocketAddr> is what the rate limiter keys on — note this is the
-    // direct TCP peer, so behind a reverse proxy every request would appear to come
-    // from the proxy's IP. Fine for a direct-exposed deployment; a proxied one needs
-    // X-Forwarded-For handling instead, which isn't wired up yet.
+    // Auth handlers derive the client IP from this peer and explicitly trusted
+    // proxy addresses; arbitrary forwarded headers never override the peer.
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),

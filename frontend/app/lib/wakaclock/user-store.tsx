@@ -2,7 +2,16 @@
 
 import * as React from 'react';
 
-import { getCurrentToken, setCurrentToken, setUnauthorizedHandler } from './session';
+import { toast } from 'sonner';
+
+import { WakaclockError } from './client';
+import { postLogout } from './endpoints';
+import {
+  getCurrentToken,
+  getSessionObservation,
+  setCurrentToken,
+  setUnauthorizedHandler,
+} from './session';
 
 const STORAGE_KEY = 'wakaclock-session';
 
@@ -155,6 +164,38 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
     };
   }, [applySession, saveSession]);
 
+  const logout = React.useCallback(() => {
+    const token = getCurrentToken();
+    if (!token) {
+      saveSession(null);
+      return;
+    }
+    const generation = getSessionObservation(token);
+    const clearSameSession = () => {
+      if (getSessionObservation(getCurrentToken()) !== generation) return;
+      // A different tab may have signed in before its storage event arrives.
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as null | StoredShape;
+        if (saved?.token && saved.token !== token) {
+          applySession(saved);
+          return;
+        }
+      } catch {
+        /* In-memory logout must work when storage is unavailable. */
+      }
+      saveSession(null);
+    };
+    void postLogout()
+      .then(clearSameSession)
+      .catch((error: unknown) => {
+        if (error instanceof WakaclockError && error.status === 401) {
+          clearSameSession(); // Expired/invalid tokens are already unusable.
+        } else if (getSessionObservation(getCurrentToken()) === generation) {
+          toast.error('Could not revoke your session. Please try signing out again.');
+        }
+      });
+  }, [applySession, saveSession]);
+
   const value = React.useMemo<WakaclockUserState>(
     () => ({
       hydrated: isHydrated,
@@ -162,9 +203,9 @@ export function WakaclockUserProvider({ children }: { children: React.ReactNode 
       username: state.username,
       token: state.token,
       setSession: saveSession,
-      logout: () => saveSession(null),
+      logout,
     }),
-    [isHydrated, state, saveSession]
+    [isHydrated, state, saveSession, logout]
   );
 
   return <WakaclockUserContext.Provider value={value}>{children}</WakaclockUserContext.Provider>;

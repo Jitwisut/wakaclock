@@ -52,7 +52,7 @@ pub async fn list(
     headers: HeaderMap,
 ) -> Result<Json<ProjectRulesResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     let rows = state
         .project_rule_service
@@ -72,7 +72,7 @@ pub async fn upsert(
     Json(payload): Json<UpsertProjectRulePayload>,
 ) -> Result<Json<ProjectRuleMutationResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     let row = state
         .project_rule_service
@@ -99,7 +99,7 @@ pub async fn delete(
     Path(rule_id): Path<Uuid>,
 ) -> Result<Json<DeleteResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     state
         .project_rule_service

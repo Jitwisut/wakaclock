@@ -118,9 +118,9 @@ async fn require_export_scope(
     headers: &HeaderMap,
 ) -> Result<uuid::Uuid, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(state, headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(state, headers, "export_data").await {
+    if !auth::require_scope(state, headers, "export_data").await? {
         return Err(auth::forbidden_scope("export_data"));
     }
     Ok(user_id)

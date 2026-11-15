@@ -21,7 +21,7 @@ pub async fn run(
     Json(payload): Json<ReprocessRequest>,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     auth::check_analytics_rate_limit(&state, user_id)?;
 

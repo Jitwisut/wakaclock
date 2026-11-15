@@ -29,9 +29,9 @@ pub async fn ingest(
     Json(report): Json<AiDiagnosticsReport>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_logged_time").await {
+    if !auth::require_scope(&state, &headers, "write_logged_time").await? {
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     validate(&report)?;
@@ -47,9 +47,9 @@ pub async fn ingest_v2(
     Json(report): Json<AiDiagnosticsReportV2>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_logged_time").await {
+    if !auth::require_scope(&state, &headers, "write_logged_time").await? {
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     validate_v2(&report)?;
@@ -78,9 +78,9 @@ pub async fn get(
     headers: HeaderMap,
 ) -> Result<Json<AiDiagnosticsResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "read_logged_time").await {
+    if !auth::require_scope(&state, &headers, "read_logged_time").await? {
         return Err(auth::forbidden_scope("read_logged_time"));
     }
     let report = state.ai_diagnostics_service.latest(user_id).await;
@@ -93,9 +93,9 @@ pub async fn get_v2(
     headers: HeaderMap,
 ) -> Result<Json<AiDiagnosticsV2Response>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "read_logged_time").await {
+    if !auth::require_scope(&state, &headers, "read_logged_time").await? {
         return Err(auth::forbidden_scope("read_logged_time"));
     }
     let reports = state

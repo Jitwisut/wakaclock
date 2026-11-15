@@ -1,8 +1,5 @@
-//! In-memory latest-snapshot store for privacy-safe AI integration diagnostics.
-//!
-//! The payload is intentionally metadata-only.  This first rollout keeps the latest
-//! report in memory, matching the existing presence prototype; the wire contract is
-//! stable so a durable repository can replace the store without a client migration.
+//! Metadata-only diagnostic snapshots. V2 is durable when PostgreSQL is configured;
+//! the compatibility fallback is ephemeral. Retired boot IDs fence late deliveries.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -14,8 +11,13 @@ use wakaclock_core::ai::{AiDiagnosticsReport, AiDiagnosticsReportV2};
 
 use crate::infrastructure::postgres::PostgresClient;
 
-/// `(report, received_at, expires_at)` for one device's latest in-memory diagnostics report.
-type LatestV2Entry = (AiDiagnosticsReportV2, DateTime<Utc>, DateTime<Utc>);
+/// `(report, received_at, expires_at, retired_boot_ids)` for one device's latest in-memory diagnostics report.
+type LatestV2Entry = (
+    AiDiagnosticsReportV2,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    Vec<String>,
+);
 
 pub struct AiDiagnosticsService {
     latest: RwLock<HashMap<Uuid, AiDiagnosticsReport>>,
@@ -68,47 +70,49 @@ impl AiDiagnosticsService {
         let received_at = Utc::now();
         if let Some(postgres) = &self.postgres {
             let value = serde_json::to_value(&report).context("serialize diagnostics report")?;
-            let updated = postgres
-                .client()
-                .execute(
-                    "INSERT INTO ai_diagnostics_devices
-                        (user_id, device_id, boot_id, sequence, measured_at, receipt_at, expires_at, report)
-                     VALUES ($1, $2, $3, $4, $5, now(), now() + interval '30 days', $6)
-                     ON CONFLICT (user_id, device_id) DO UPDATE SET
-                        boot_id = EXCLUDED.boot_id,
-                        sequence = EXCLUDED.sequence,
-                        measured_at = EXCLUDED.measured_at,
-                        receipt_at = now(),
-                        expires_at = now() + interval '30 days',
-                        report = EXCLUDED.report
-                     WHERE EXCLUDED.boot_id <> ai_diagnostics_devices.boot_id
-                        OR EXCLUDED.sequence > ai_diagnostics_devices.sequence
-                        OR (EXCLUDED.sequence = ai_diagnostics_devices.sequence
-                            AND EXCLUDED.report = ai_diagnostics_devices.report)",
-                    &[
-                        &user_id,
-                        &report.device_id,
-                        &report.boot_id,
-                        &(report.sequence as i64),
-                        &report.measured_at,
-                        &value,
-                    ],
-                )
-                .await
-                .context("persist diagnostics report")?;
-            return Ok(updated > 0);
+            let mut connection = postgres.transaction_client().await?;
+            let tx = connection.transaction().await?;
+            let inserted = tx.execute(
+                "INSERT INTO ai_diagnostics_devices (user_id,device_id,boot_id,sequence,measured_at,receipt_at,expires_at,report)
+                 VALUES($1,$2,$3,$4,$5,now(),now()+interval '30 days',$6) ON CONFLICT(user_id,device_id) DO NOTHING",
+                &[&user_id,&report.device_id,&report.boot_id,&(report.sequence as i64),&report.measured_at,&value],
+            ).await?;
+            if inserted > 0 {
+                tx.commit().await?;
+                return Ok(true);
+            }
+            // The row lock fences concurrent transitions, including competing new boots.
+            let row = tx.query_one("SELECT report,retired_boot_ids FROM ai_diagnostics_devices WHERE user_id=$1 AND device_id=$2 FOR UPDATE", &[&user_id,&report.device_id]).await?;
+            let current: AiDiagnosticsReportV2 = serde_json::from_value(row.get("report"))?;
+            let mut retired: Vec<String> = row.get("retired_boot_ids");
+            if !accept_report(&current, &report, &mut retired)? {
+                tx.commit().await?;
+                return Ok(false);
+            }
+            tx.execute("UPDATE ai_diagnostics_devices SET boot_id=$3,sequence=$4,measured_at=$5,receipt_at=now(),expires_at=now()+interval '30 days',report=$6,retired_boot_ids=$7 WHERE user_id=$1 AND device_id=$2",
+                &[&user_id,&report.device_id,&report.boot_id,&(report.sequence as i64),&report.measured_at,&value,&retired]).await?;
+            tx.commit().await?;
+            return Ok(true);
         }
 
         let mut latest = self.latest_v2.write().await;
         let key = (user_id, report.device_id.clone());
-        if let Some((current, _, expires_at)) = latest.get(&key) {
-            if *expires_at <= received_at {
-                latest.remove(&key);
-            } else if current.boot_id == report.boot_id && current.sequence >= report.sequence {
+        let mut retired = Vec::new();
+        if let Some((current, _, _, history)) = latest.get(&key) {
+            retired = history.clone();
+            if !accept_report(current, &report, &mut retired)? {
                 return Ok(false);
             }
         }
-        latest.insert(key, (report, received_at, received_at + Duration::days(30)));
+        latest.insert(
+            key,
+            (
+                report,
+                received_at,
+                received_at + Duration::days(30),
+                retired,
+            ),
+        );
         Ok(true)
     }
 
@@ -135,11 +139,11 @@ impl AiDiagnosticsService {
 
         let now = Utc::now();
         let mut latest = self.latest_v2.write().await;
-        latest.retain(|_, (_, _, expires_at)| *expires_at > now);
+        latest.retain(|_, (_, _, expires_at, _)| *expires_at > now);
         let mut reports: Vec<_> = latest
             .iter()
             .filter(|((owner, _), _)| *owner == user_id)
-            .map(|(_, (report, received_at, _))| (report.clone(), *received_at))
+            .map(|(_, (report, received_at, _, _))| (report.clone(), *received_at))
             .collect();
         // HashMap iteration is intentionally unordered. Return a stable newest-first
         // view so the dashboard and API clients do not select a random device snapshot.
@@ -153,6 +157,30 @@ impl AiDiagnosticsService {
         });
         Ok(reports.into_iter().map(|(report, _)| report).collect())
     }
+}
+
+/// UUID-like boot IDs have no ordering. A new boot needs newer measurement
+/// evidence; once superseded, a boot can never reclaim the latest slot, even
+/// with a larger sequence or clock timestamp. Equal sequences never refresh TTL.
+fn accept_report(
+    current: &AiDiagnosticsReportV2,
+    incoming: &AiDiagnosticsReportV2,
+    retired: &mut Vec<String>,
+) -> Result<bool> {
+    if current.boot_id == incoming.boot_id {
+        return Ok(
+            incoming.sequence > current.sequence && incoming.measured_at >= current.measured_at
+        );
+    }
+    if retired.contains(&incoming.boot_id) || incoming.measured_at <= current.measured_at {
+        return Ok(false);
+    }
+    anyhow::ensure!(
+        retired.len() < 1024,
+        "diagnostics boot history capacity reached"
+    );
+    retired.push(current.boot_id.clone());
+    Ok(true)
 }
 
 impl Default for AiDiagnosticsService {
@@ -278,6 +306,77 @@ mod tests {
         assert!(reports
             .iter()
             .any(|report| report.device_id == "device-b" && report.sequence == 1));
+    }
+
+    async fn exercise_late_boots(service: &AiDiagnosticsService, user: Uuid) {
+        let a = report_v2("ordering-device", "boot-a", 1);
+        assert!(service.record_v2(user, a.clone()).await.unwrap());
+        let mut b = report_v2("ordering-device", "boot-b", 1);
+        b.measured_at = a.measured_at + Duration::seconds(10);
+        assert!(service.record_v2(user, b.clone()).await.unwrap());
+        // Even a larger sequence/timestamp cannot resurrect a retired boot.
+        assert!(!service
+            .record_v2(user, report_v2("ordering-device", "boot-a", 999))
+            .await
+            .unwrap());
+        assert!(!service
+            .record_v2(user, report_v2("ordering-device", "unseen-old-boot", 1))
+            .await
+            .unwrap());
+        assert!(!service.record_v2(user, b.clone()).await.unwrap());
+        let mut conflicting = b.clone();
+        conflicting.consent.observer = false;
+        assert!(!service.record_v2(user, conflicting).await.unwrap());
+        let latest = service.latest_v2(user).await.unwrap();
+        assert_eq!(latest[0].boot_id, "boot-b");
+        assert_eq!(latest[0].sequence, 1);
+    }
+
+    #[tokio::test]
+    async fn memory_rejects_retired_and_unseen_older_boots() {
+        exercise_late_boots(&AiDiagnosticsService::new(), Uuid::new_v4()).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated POSTGRES_TEST_URL"]
+    async fn postgres_rejects_retired_boots_after_restart_and_concurrent_delivery() {
+        let config = crate::config::PostgresConfig {
+            url: Some(std::env::var("POSTGRES_TEST_URL").unwrap()),
+            max_connections: 4,
+        };
+        let pg = Arc::new(PostgresClient::connect(&config).await.unwrap());
+        pg.migrate().await.unwrap();
+        pg.migrate().await.unwrap();
+        let user = Uuid::now_v7();
+        pg.client()
+            .execute(
+                "INSERT INTO users(id,username) VALUES($1,$2)",
+                &[&user, &format!("diagnostics-{user}")],
+            )
+            .await
+            .unwrap();
+        let service = AiDiagnosticsService::with_postgres(Some(pg.clone()));
+        exercise_late_boots(&service, user).await;
+        let restarted = AiDiagnosticsService::with_postgres(Some(Arc::new(
+            PostgresClient::connect(&config).await.unwrap(),
+        )));
+        assert!(!restarted
+            .record_v2(user, report_v2("ordering-device", "boot-a", 1000))
+            .await
+            .unwrap());
+        let mut newer = report_v2("ordering-device", "boot-c", 1);
+        newer.measured_at += Duration::seconds(20);
+        let (first, duplicate) = tokio::join!(
+            service.record_v2(user, newer.clone()),
+            restarted.record_v2(user, newer)
+        );
+        assert_ne!(first.unwrap(), duplicate.unwrap());
+        assert_eq!(service.latest_v2(user).await.unwrap()[0].boot_id, "boot-c");
+        assert!(service.latest_v2(Uuid::new_v4()).await.unwrap().is_empty());
+        pg.client()
+            .execute("DELETE FROM users WHERE id=$1", &[&user])
+            .await
+            .unwrap();
     }
 
     #[test]

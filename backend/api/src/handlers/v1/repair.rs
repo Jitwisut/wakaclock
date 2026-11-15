@@ -47,7 +47,7 @@ pub async fn day(
     Json(request): Json<RepairDayRequest>,
 ) -> Result<Json<RepairDayResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     let date = if request.date.eq_ignore_ascii_case("today") {
         ResolvedRange::today_date_string(request.timezone.as_deref())

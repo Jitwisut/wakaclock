@@ -61,7 +61,7 @@ pub async fn create_room(
     body: Option<Json<CreateRoomPayload>>,
 ) -> Result<Json<CreateRoomResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     let username = username_for(&state, user_id).await?;
 
@@ -124,7 +124,7 @@ pub async fn join_room(
     headers: HeaderMap,
 ) -> Result<Json<RoomActionResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     let username = username_for(&state, user_id).await?;
 
@@ -147,7 +147,7 @@ pub async fn leave_room(
     headers: HeaderMap,
 ) -> Result<Json<RoomActionResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
 
     state.presence.leave_room(room_id, user_id).await;
@@ -184,7 +184,7 @@ pub async fn update_position(
     Json(payload): Json<UpdatePositionPayload>,
 ) -> Result<Json<RoomActionResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
 
     let accepted = state
@@ -232,7 +232,7 @@ pub async fn start_or_join_session(
     Json(payload): Json<StartSessionPayload>,
 ) -> Result<Json<RoomActionResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
 
     let both_in_room = state.presence.is_member(room_id, user_id).await
@@ -277,7 +277,7 @@ pub async fn leave_session(
     headers: HeaderMap,
 ) -> Result<Json<RoomActionResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
 
     state
@@ -318,7 +318,7 @@ pub async fn create_stream_ticket(
     headers: HeaderMap,
 ) -> Result<Json<StreamTicketResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
 
     // Membership is checked here as well as in `stream_presence`: a ticket should never
@@ -353,7 +353,7 @@ pub async fn stream_presence(
     Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>,
     (StatusCode, Json<serde_json::Value>),
 > {
-    let user_id = match auth::require_account_user(&state, &headers).await {
+    let user_id = match auth::require_account_user(&state, &headers).await? {
         Some(user_id) => user_id,
         None => {
             let ticket = query.ticket.as_deref().ok_or_else(auth::unauthorized)?;

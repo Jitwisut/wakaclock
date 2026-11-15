@@ -547,41 +547,16 @@ impl OAuthService {
     ) -> Result<DeviceCodeResponse> {
         validate_scopes(scopes)?;
         let postgres = self.required()?;
-        let app = postgres
-            .client()
-            .query_opt(
-                "SELECT id, is_confidential FROM oauth_apps
-                 WHERE client_id = $1 AND revoked_at IS NULL",
-                &[&client_id],
-            )
-            .await
-            .context("failed to resolve OAuth device client")?
-            .ok_or_else(|| OAuthRequestError::error("invalid_client", "unknown OAuth client_id"))?;
-        let is_confidential: bool = app.get("is_confidential");
-        if is_confidential {
-            return Err(anyhow!("OAuth device flow requires a public client"));
-        }
-        let app_id: Uuid = app.get("id");
         let device_code = auth::generate_key();
         let user_code = device_user_code();
         let expires_at = Utc::now() + Duration::minutes(10);
-        let scope_values = scopes.to_vec();
-        postgres
-            .client()
-            .execute(
-                "INSERT INTO oauth_device_codes
-                    (device_code_hash, user_code, app_id, scopes, expires_at)
-                 VALUES ($1, $2, $3, $4, $5)",
-                &[
-                    &auth::hash_key(&device_code),
-                    &user_code,
-                    &app_id,
-                    &scope_values,
-                    &expires_at,
-                ],
-            )
-            .await
-            .context("failed to persist OAuth device code")?;
+        use crate::repository::oauth_device::{allocate, Allocation};
+        match allocate(postgres, client_id, &auth::hash_key(&device_code), &user_code, scopes, expires_at, 50).await? {
+            Allocation::Issued => {},
+            Allocation::MissingClient => return Err(OAuthRequestError::error("invalid_client", "unknown OAuth client_id")),
+            Allocation::ConfidentialClient => return Err(OAuthRequestError::error("invalid_client", "OAuth device flow requires a public client")),
+            Allocation::Capacity => return Err(OAuthRequestError::error("slow_down", "too many pending device codes for this client")),
+        }
         Ok(DeviceCodeResponse {
             device_code,
             user_code,

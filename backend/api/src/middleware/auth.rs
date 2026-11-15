@@ -71,14 +71,50 @@ pub fn issue_session_token(
     )
 }
 
+// Revocation TTL and validation must share an exact expiry boundary. Otherwise
+// JWT clock leeway could resurrect a tombstoned token after its TTL expires.
+fn session_validation() -> Validation {
+    let mut validation = Validation::default();
+    validation.leeway = 0;
+    validation
+}
+
 fn verify_session_token(token: &str, jwt_secret: &str) -> Option<Uuid> {
     decode::<SessionClaims>(
         token,
         &DecodingKey::from_secret(jwt_secret.as_bytes()),
-        &Validation::default(),
+        &session_validation(),
     )
     .ok()
+    .filter(|data| data.claims.exp > chrono::Utc::now().timestamp())
     .map(|data| data.claims.sub)
+}
+
+/// Verified session material for idempotent logout; API keys and OAuth tokens
+/// cannot request session revocation, and callers cannot choose an account.
+pub struct SessionRevocation {
+    pub user_id: Uuid,
+    pub token_hash: String,
+    pub expires_at: i64,
+}
+
+pub fn session_to_revoke(headers: &HeaderMap, jwt_secret: &str) -> Option<SessionRevocation> {
+    let token = extract_key(headers)?;
+    let claims = decode::<SessionClaims>(
+        &token,
+        &DecodingKey::from_secret(jwt_secret.as_bytes()),
+        &session_validation(),
+    )
+    .ok()?
+    .claims;
+    if claims.exp <= chrono::Utc::now().timestamp() {
+        return None;
+    }
+    Some(SessionRevocation {
+        user_id: claims.sub,
+        token_hash: hash_key(&token),
+        expires_at: claims.exp,
+    })
 }
 
 /// Extract the raw token from `Authorization: Bearer <token>` or `Authorization: Basic
@@ -126,11 +162,43 @@ impl AuthContext {
     }
 }
 
-pub async fn resolve_context(state: &AppState, headers: &HeaderMap) -> Option<AuthContext> {
-    let token = extract_key(headers)?;
-    let session_user = verify_session_token(&token, &state.config.jwt_secret);
+pub type AuthFailure = (axum::http::StatusCode, axum::Json<serde_json::Value>);
+
+/// A store failure is not evidence that a credential was revoked. Never turn it
+/// into a 401: clients would erase valid sessions and stop retrying delivery.
+fn store_unavailable<E>(_error: E) -> AuthFailure {
+    tracing::warn!("credential store lookup failed");
+    (
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        axum::Json(serde_json::json!({"error": "authentication service temporarily unavailable"})),
+    )
+}
+
+pub async fn resolve_context(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<AuthContext>, AuthFailure> {
+    resolve_credentials(
+        state.postgres.as_deref(),
+        state.clickhouse.get_client(),
+        &state.config.jwt_secret,
+        headers,
+    )
+    .await
+}
+
+async fn resolve_credentials(
+    postgres: Option<&crate::infrastructure::postgres::PostgresClient>,
+    client: clickhouse::Client,
+    jwt_secret: &str,
+    headers: &HeaderMap,
+) -> Result<Option<AuthContext>, AuthFailure> {
+    let Some(token) = extract_key(headers) else {
+        return Ok(None);
+    };
+    let session_user = verify_session_token(&token, jwt_secret);
     let hash = hash_key(&token);
-    if let Some(postgres) = &state.postgres {
+    if let Some(postgres) = postgres {
         if let Some(user_id) = session_user {
             let active = postgres
                 .client()
@@ -141,12 +209,14 @@ pub async fn resolve_context(state: &AppState, headers: &HeaderMap) -> Option<Au
                     &[&user_id, &hash],
                 )
                 .await
-                .ok()??;
-            let _ = active;
-            return Some(AuthContext {
+                .map_err(store_unavailable)?;
+            if active.is_none() {
+                return Ok(None);
+            }
+            return Ok(Some(AuthContext {
                 user_id,
                 kind: CredentialKind::Session,
-            });
+            }));
         }
         let row = postgres
             .client()
@@ -165,52 +235,65 @@ pub async fn resolve_context(state: &AppState, headers: &HeaderMap) -> Option<Au
                 &[&hash],
             )
             .await
-            .ok()??;
+            .map_err(store_unavailable)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
         let scopes: Option<Vec<String>> = row.get("scopes");
-        return Some(AuthContext {
+        return Ok(Some(AuthContext {
             user_id: row.get("user_id"),
             kind: scopes
                 .map(CredentialKind::OAuth)
                 .unwrap_or(CredentialKind::ApiKey),
-        });
+        }));
     }
     #[derive(Deserialize, clickhouse::Row)]
     struct Identity {
         #[serde(with = "clickhouse::serde::uuid")]
         user_id: Uuid,
     }
-    let client = state.clickhouse.get_client();
     let query = if let Some(user_id) = session_user {
         client
             .query(
-                "SELECT user_id FROM wakaclock.users FINAL WHERE user_id = ? AND is_active LIMIT 1",
+                "SELECT user_id FROM wakaclock.users FINAL WHERE user_id = ? AND is_active AND ? NOT IN (SELECT token_hash FROM wakaclock.session_revocations WHERE user_id = ? AND expires_at > now()) LIMIT 1",
             )
-            .bind(user_id)
+            .bind(user_id).bind(&hash).bind(user_id)
     } else {
         client.query("SELECT user_id FROM wakaclock.users FINAL WHERE api_key = ? AND api_key != '' AND is_active LIMIT 1").bind(hash)
     };
-    let identity = query.fetch_optional::<Identity>().await.ok()??;
-    Some(AuthContext {
+    let Some(identity) = query
+        .fetch_optional::<Identity>()
+        .await
+        .map_err(store_unavailable)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(AuthContext {
         user_id: identity.user_id,
         kind: if session_user.is_some() {
             CredentialKind::Session
         } else {
             CredentialKind::ApiKey
         },
-    })
+    }))
 }
 
-pub async fn resolve_user_id(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
-    Some(resolve_context(state, headers).await?.user_id)
+pub async fn resolve_user_id(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<Uuid>, AuthFailure> {
+    Ok(resolve_context(state, headers)
+        .await?
+        .map(|context| context.user_id))
 }
 
 pub async fn require_scoped_user(
     state: &AppState,
     headers: &HeaderMap,
     scope: &str,
-) -> Result<Uuid, (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
+) -> Result<Uuid, AuthFailure> {
     let context = resolve_context(state, headers)
-        .await
+        .await?
         .ok_or_else(unauthorized)?;
     if !context.allows(scope) {
         return Err(forbidden_scope(scope));
@@ -219,20 +302,32 @@ pub async fn require_scoped_user(
 }
 
 /// First-party account operations are never authorized by a third-party OAuth grant.
-pub async fn require_account_user(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
-    let context = resolve_context(state, headers).await?;
-    (!matches!(context.kind, CredentialKind::OAuth(_))).then_some(context.user_id)
+pub async fn require_account_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<Uuid>, AuthFailure> {
+    Ok(resolve_context(state, headers).await?.and_then(|context| {
+        (!matches!(context.kind, CredentialKind::OAuth(_))).then_some(context.user_id)
+    }))
 }
 
-pub async fn require_session_user(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
-    let context = resolve_context(state, headers).await?;
-    (context.kind == CredentialKind::Session).then_some(context.user_id)
+pub async fn require_session_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<Uuid>, AuthFailure> {
+    Ok(resolve_context(state, headers)
+        .await?
+        .and_then(|context| (context.kind == CredentialKind::Session).then_some(context.user_id)))
 }
 
-pub async fn require_scope(state: &AppState, headers: &HeaderMap, scope: &str) -> bool {
-    resolve_context(state, headers)
-        .await
-        .is_some_and(|context| context.allows(scope))
+pub async fn require_scope(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope: &str,
+) -> Result<bool, AuthFailure> {
+    Ok(resolve_context(state, headers)
+        .await?
+        .is_some_and(|context| context.allows(scope)))
 }
 
 /// Shared 403 body for an authenticated OAuth client that did not grant the
@@ -446,3 +541,59 @@ mod tests {
         assert_eq!(verify_session_token(&first, "wrong-secret"), None);
     }
 }
+
+#[cfg(test)]
+mod outage_tests {
+    use super::*;
+    #[test]
+    fn expired_sessions_cannot_outlive_revocation_tombstones() {
+        let secret = "test-only-secret";
+        let claims = SessionClaims {
+            sub: Uuid::new_v4(),
+            jti: Uuid::new_v4(),
+            exp: chrono::Utc::now().timestamp() - 30,
+        };
+        let token = encode(
+            &JwtHeader::default(),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+        assert!(verify_session_token(&token, secret).is_none());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        assert!(session_to_revoke(&headers, secret).is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_store_preserves_retry_semantics_for_session_and_key() {
+        let client = clickhouse::Client::default().with_url("http://127.0.0.1:1");
+        let secret = "test-only-secret";
+        for token in [
+            issue_session_token(Uuid::new_v4(), secret).unwrap(),
+            generate_key(),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::AUTHORIZATION,
+                format!("Bearer {token}").parse().unwrap(),
+            );
+            let failure = resolve_credentials(None, client.clone(), secret, &headers)
+                .await
+                .unwrap_err();
+            assert_eq!(failure.0, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+            assert!(!failure.1 .0.to_string().contains(&token));
+        }
+        assert!(resolve_credentials(None, client, secret, &HeaderMap::new())
+            .await
+            .unwrap()
+            .is_none());
+    }
+}
+
+#[cfg(test)]
+#[path = "auth_security_tests.rs"]
+mod security_tests;

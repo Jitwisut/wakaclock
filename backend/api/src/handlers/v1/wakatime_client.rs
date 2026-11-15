@@ -31,7 +31,7 @@ pub async fn plugin_errors(
     _body: Bytes,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
     auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     Ok(StatusCode::CREATED)
 }
@@ -46,7 +46,7 @@ pub async fn file_experts(
     _body: Bytes,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     Ok(Json(json!({ "data": [] })))
 }

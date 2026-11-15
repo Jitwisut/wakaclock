@@ -33,8 +33,12 @@ pub async fn ingest(
 ) -> Result<Response, Response> {
     let user_id = auth::resolve_user_id(&state, &headers)
         .await
+        .map_err(IntoResponse::into_response)?
         .ok_or_else(|| auth::unauthorized().into_response())?;
-    if !auth::require_scope(&state, &headers, "write_logged_time").await {
+    if !auth::require_scope(&state, &headers, "write_logged_time")
+        .await
+        .map_err(IntoResponse::into_response)?
+    {
         return Err(auth::forbidden_scope("write_logged_time").into_response());
     }
     let record_count = records.len();

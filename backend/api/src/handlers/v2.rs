@@ -956,7 +956,7 @@ pub async fn me(
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Value>>, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let user = state
         .user_service
@@ -981,7 +981,7 @@ pub async fn account_delete(
     Json(input): Json<AccountDeletionConfirmation>,
 ) -> Result<(StatusCode, Json<V2Envelope<Value>>), ApiError> {
     let user_id = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     if !input.confirm {
         return Err(ApiError::bad_request("confirm must be true"));
@@ -1273,7 +1273,7 @@ async fn require_session_scope(
     scope: &'static str,
 ) -> Result<Uuid, ApiError> {
     let context = auth::resolve_context(state, headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     if context.kind != auth::CredentialKind::Session {
         return Err(ApiError::forbidden_scope("session"));
@@ -2315,7 +2315,7 @@ pub async fn jobs_get(
     Path(job_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<AsyncJobView>>, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let job = state
         .job_service
@@ -2331,7 +2331,7 @@ pub async fn profile_get(
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<PublicProfile>>, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let profile = state
         .profile_service
@@ -2347,7 +2347,7 @@ pub async fn profile_update(
     Json(input): Json<UpdateProfileRequest>,
 ) -> Result<Json<V2Envelope<PublicProfile>>, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     // Fail before touching PostgreSQL so a disabled public-profile surface
     // cannot mutate visibility or profile settings as a side effect.
@@ -2373,7 +2373,7 @@ pub async fn share_links_create(
     Json(input): Json<CreateShareLinkRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<ShareLink>>), ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     require_runtime_feature(crate::services::RuntimeFeature::PublicProfilesAndEmbeds)?;
     ensure_pg_identity(&state, user_id).await?;
@@ -2396,7 +2396,7 @@ pub async fn share_links_list(
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Vec<ShareLink>>>, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let links = state
         .profile_service
@@ -2412,7 +2412,7 @@ pub async fn share_links_delete(
     Path(link_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     if state
         .profile_service
@@ -2434,7 +2434,7 @@ pub async fn report_schedules_create(
     Json(input): Json<CreateReportScheduleRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<ReportSchedule>>), ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     crate::services::require_background_processor().map_err(ApiError::service_unavailable)?;
     ensure_pg_identity(&state, user_id).await?;
@@ -2457,7 +2457,7 @@ pub async fn report_schedules_list(
     headers: HeaderMap,
 ) -> Result<Json<V2Envelope<Vec<ReportSchedule>>>, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let schedules = state
         .report_service
@@ -2473,7 +2473,7 @@ pub async fn report_schedules_delete(
     Path(schedule_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     if state
         .report_service
@@ -2611,7 +2611,7 @@ pub async fn organizations_create(
     Json(input): Json<CreateOrganizationRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<Organization>>), ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     ensure_pg_identity(&state, user_id).await?;
     let organization = state
@@ -2656,7 +2656,7 @@ pub async fn organization_update(
     Json(input): Json<UpdateOrganizationRequest>,
 ) -> Result<Json<V2Envelope<Organization>>, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let organization = state
         .organizations_service
@@ -2696,7 +2696,7 @@ pub async fn organization_add_member(
     Json(input): Json<AddOrganizationMemberRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<OrganizationMember>>), ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let member = state
         .organizations_service
@@ -2712,7 +2712,7 @@ async fn organization_transfer_ownership(
     Path((org, successor)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     state
         .organizations_service
@@ -2728,7 +2728,7 @@ pub async fn organization_remove_member(
     Path((organization_id, member_user_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     if state
         .organizations_service
@@ -2763,7 +2763,7 @@ pub async fn organization_create_team(
     Json(input): Json<CreateOrganizationTeamRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<OrganizationTeam>>), ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let team = state
         .organizations_service
@@ -2805,7 +2805,7 @@ pub async fn organization_invite_member(
     Json(input): Json<InviteOrganizationMemberRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<OrganizationUserInvite>>), ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let invite = state
         .organizations_service
@@ -2835,7 +2835,7 @@ pub async fn organization_revoke_invite(
     Path((organization_id, invite_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     if state
         .organizations_service
@@ -2868,7 +2868,7 @@ pub async fn accept_organization_invite(
     Path(invite_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<AcceptedOrganizationInvite>>, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let accepted = state
         .organizations_service
@@ -2884,7 +2884,7 @@ pub async fn decline_organization_invite(
     Path(invite_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     if state
         .organizations_service
@@ -2919,7 +2919,7 @@ pub async fn organization_add_team_member(
     Json(input): Json<AddOrganizationTeamMemberRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<OrganizationTeamMember>>), ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let member = state
         .organizations_service
@@ -2935,7 +2935,7 @@ pub async fn organization_remove_team_member(
     Path((organization_id, team_id, member_user_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     if state
         .organizations_service
@@ -2998,7 +2998,7 @@ pub async fn organization_analytics_sharing(
     Path(organization_id): Path<Uuid>,
 ) -> Result<Json<V2Envelope<OrganizationAnalyticsSharing>>, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let sharing = state
         .organizations_service
@@ -3015,7 +3015,7 @@ pub async fn organization_analytics_sharing_update(
     Json(sharing): Json<OrganizationAnalyticsSharing>,
 ) -> Result<Json<V2Envelope<OrganizationAnalyticsSharing>>, ApiError> {
     let user_id = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     if sharing.share_individual && !sharing.share_aggregate {
         return Err(ApiError::bad_request(
@@ -3510,7 +3510,7 @@ pub async fn leaderboards_create(
     Json(input): Json<CreateLeaderboardRequest>,
 ) -> Result<(StatusCode, Json<V2Envelope<Leaderboard>>), ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     require_runtime_feature(crate::services::RuntimeFeature::PrivateLeaderboards)?;
     ensure_pg_identity(&state, user_id).await?;
@@ -3569,7 +3569,7 @@ pub async fn leaderboard_add_member(
     Json(input): Json<LeaderboardMemberRequest>,
 ) -> Result<StatusCode, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     require_runtime_feature(crate::services::RuntimeFeature::PrivateLeaderboards)?;
     if state
@@ -3592,7 +3592,7 @@ pub async fn leaderboard_remove_member(
     Path((leaderboard_id, member_user_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     require_runtime_feature(crate::services::RuntimeFeature::PrivateLeaderboards)?;
     if state
@@ -4063,9 +4063,9 @@ async fn require_scope(
     scope: &'static str,
 ) -> Result<Uuid, ApiError> {
     let user_id = auth::resolve_user_id(state, headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
-    if !auth::require_scope(state, headers, scope).await {
+    if !auth::require_scope(state, headers, scope).await? {
         return Err(ApiError::forbidden_scope(scope));
     }
     Ok(user_id)
@@ -4075,6 +4075,16 @@ async fn require_scope(
 pub struct ApiError {
     status: StatusCode,
     message: String,
+}
+
+impl From<auth::AuthFailure> for ApiError {
+    fn from((status, body): auth::AuthFailure) -> Self {
+        Self {
+            status,
+            message: body.0["error"].as_str()
+                .unwrap_or("authentication service temporarily unavailable").to_owned(),
+        }
+    }
 }
 
 impl ApiError {

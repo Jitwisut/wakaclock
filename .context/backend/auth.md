@@ -11,7 +11,7 @@ directly. (The old `src/helpers/auth/` template code was removed — see
 | Credential | Shape | Lifetime | Holder |
 | --- | --- | --- | --- |
 | **API key** | `waka_` + UUIDv4 (new keys); legacy `wcl_` + 64 hex still accepted | long-lived, revocable | CLI, editor/browser extensions, wakatime-cli |
-| **Session JWT** | HS256, claims `{sub: Uuid, exp}` | 24 h | dashboard |
+| **Session JWT** | HS256, claims `{sub: Uuid, exp, jti}` | 24 h | dashboard |
 | **OAuth access token** | opaque, carries a scope set | per grant | third-party apps |
 
 All three arrive in the same header:
@@ -31,48 +31,36 @@ WakaTime-compatible form; a trailing `:` is tolerated).
 - Do not change this to a slow KDF without also changing the per-request
   verification path.
 
-## The auth cache
+## Authoritative identity lookup
 
-[../../backend/api/src/infrastructure/auth_cache.rs](../../backend/api/src/infrastructure/auth_cache.rs)
-holds `sha256(key) -> user_id` in memory, plus OAuth expirations and scopes.
+`middleware/auth.rs` checks credentials against PostgreSQL when configured, or
+ClickHouse compatibility state otherwise; there is no credential cache.
+Sessions carry `{sub, exp, jti}`. PostgreSQL checks active users and unrevoked,
+unexpired session rows. ClickHouse checks active users and session-revocation
+hashes. API keys and OAuth access tokens are checked for revocation and expiry;
+OAuth grants preserve their scopes.
 
-Reason it exists: `wakaclock.users` is a ClickHouse `ReplacingMergeTree` ordered
-by `user_id`. Looking a key up by hash would full-scan, and a revoked key would
-keep working until ClickHouse merged the old row away.
+`resolve_context`, `resolve_user_id`, `require_account_user` and
+`require_session_user` return `Result<Option<_>, AuthFailure>`. `Ok(None)` means
+401; `Err` means 503, never a reason for clients to delete a valid credential.
+`require_scope` returns `Result<bool, AuthFailure>`; `require_scoped_user` performs
+one lookup and enforces the scope. Never infer identity from a client user ID.
+First-party account helpers reject third-party OAuth grants.
 
-**Rule: any mutation of a user's key must refresh the cache.** Creating,
-rotating or revoking a key without refreshing leaves the old key valid.
-`main.rs` warms it at startup from ClickHouse and, if configured, PostgreSQL.
-
-## Resolving identity — the four entry points
-
-| Function | Accepts | Use for |
-| --- | --- | --- |
-| `resolve_user_id(state, headers)` | session JWT **or** API key | almost every endpoint |
-| `require_session_user(state, headers)` | session JWT only | endpoints an API key must not reach — notably minting a new API key (a key must never mint another key) |
-| `resolve_user_id_from_token(state, token)` | raw token | **only** the presence SSE stream, where `EventSource` cannot set headers so the token arrives as `?token=` |
-| `require_scope(state, headers, scope)` | OAuth scope check | OAuth-exposed resources; session JWTs pass, API keys have no scope entry and keep full-account behaviour |
-
-### Critical rule
-
-`resolve_user_id` returning `None` is a **hard 401**. Never fall back to a
-`user_id` from a query string or JSON body — any caller can set that to any
-uuid. An earlier soft-rollout fallback was removed for exactly this reason; do
-not reintroduce it.
-
-Shared response helpers: `auth::unauthorized()` (401) and
-`auth::forbidden_scope(scope)` (403). Use them instead of hand-rolling bodies.
+`POST /api/v1/auth/logout` revokes only the signed session supplied by the caller.
+The operation is idempotent and durable with either identity store. UI logout
+retains the session on a temporary failure so the user can retry; delayed logout
+ACKs cannot erase a newer login. Exact session expiry matches revocation TTL.
 
 ## Rate limiting
 
-`auth::check_rate_limit(state, ip)` returns a ready-to-return 429. Apply it to
-auth-sensitive endpoints (login, register, key generate/revoke). Backed by
-[../../backend/api/src/infrastructure/rate_limiter.rs](../../backend/api/src/infrastructure/rate_limiter.rs)
-(`governor`, in-process).
+Auth-sensitive endpoints use `auth::client_ip` with explicitly configured
+`TRUSTED_PROXY_IPS`; untrusted forwarding headers are ignored. Password/key/logout
+limits are separate from OAuth device-code issuance limits. Device issuance also
+uses a transactional pending-code limit across API replicas.
 
-**Caveat:** the IP comes from `ConnectInfo<SocketAddr>`, i.e. the direct TCP
-peer. Behind a reverse proxy every request looks like the proxy.
-`X-Forwarded-For` handling is not implemented.
+See [../../docs/backend-auth-diagnostics-hardening.md](../../docs/backend-auth-diagnostics-hardening.md)
+for limits, tests, rollout and rollback constraints.
 
 ## Authorization (Phase 10)
 

@@ -192,3 +192,5 @@ pub mod team_financial_source;
 pub mod team_financial_transaction;
 
 pub mod matched_authorship;
+
+pub mod session_revocation;
