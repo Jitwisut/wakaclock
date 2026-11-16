@@ -246,3 +246,8 @@ it('preserves legacy inbox field names and reports an empty adapter inventory', 
   );
   expect(screen.getByText('0 pending · 0 retry · 0 dead-letter')).toBeVisible();
 });
+
+it('marks bounded device coverage as incomplete', () => {
+  render(<AiDiagnosticsPanel incomplete report={certifiedDegradedReport()} />);
+  expect(screen.getByRole('status')).toHaveTextContent('Additional devices are omitted');
+});

@@ -37,27 +37,50 @@ pub struct PresenceRateLimiter {
 /// but an authenticated client can still exhaust the API with a tight upload loop.
 /// Keeping the device in the key lets a user's legitimate machines report independently.
 pub struct AiDiagnosticsRateLimiter {
-    inner: Governor<(Uuid, String), DefaultKeyedStateStore<(Uuid, String)>, DefaultClock>,
+    state: parking_lot::Mutex<DiagnosticsLimiterState>,
+}
+
+struct DiagnosticsLimiterState {
+    accounts: Governor<Uuid, DefaultKeyedStateStore<Uuid>, DefaultClock>,
+    devices: Governor<(Uuid, String), DefaultKeyedStateStore<(Uuid, String)>, DefaultClock>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateLimitExceeded;
 
 impl AiDiagnosticsRateLimiter {
-    /// Twelve reports per minute with a small startup burst. The CLI normally uploads
-    /// only on an explicit doctor command, so this leaves room for retries without
-    /// allowing an accidental polling loop to become unbounded.
+    /// Device budget remains twelve/minute, burst three. Account budget prevents
+    /// callers bypassing it by rotating client-controlled device identifiers.
     pub fn new() -> Arc<Self> {
-        let quota = Quota::per_minute(NonZeroU32::new(12).expect("12 is non-zero"))
-            .allow_burst(NonZeroU32::new(3).expect("3 is non-zero"));
         Arc::new(Self {
-            inner: Governor::keyed(quota),
+            state: parking_lot::Mutex::new(DiagnosticsLimiterState {
+                accounts: Governor::keyed(
+                    Quota::per_minute(NonZeroU32::new(60).unwrap())
+                        .allow_burst(NonZeroU32::new(10).unwrap()),
+                ),
+                devices: Governor::keyed(
+                    Quota::per_minute(NonZeroU32::new(12).unwrap())
+                        .allow_burst(NonZeroU32::new(3).unwrap()),
+                ),
+            }),
         })
     }
 
     pub fn check(&self, user_id: Uuid, device_id: &str) -> Result<(), RateLimitExceeded> {
-        self.inner
-            .check_key(&(user_id, device_id.to_string()))
+        // Admission and cleanup share a lock: concurrent new IDs cannot overshoot.
+        let state = self.state.lock();
+        state.accounts.retain_recent();
+        state.devices.retain_recent();
+        if state.accounts.len() >= 10_000 || state.devices.len() >= 10_000 {
+            return Err(RateLimitExceeded);
+        }
+        state
+            .accounts
+            .check_key(&user_id)
+            .map_err(|_| RateLimitExceeded)?;
+        state
+            .devices
+            .check_key(&(user_id, device_id.to_owned()))
             .map_err(|_| RateLimitExceeded)
     }
 }
@@ -138,6 +161,37 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_key_capacity_rejects_without_growing_or_resetting_buckets() {
+        let limiter = AiDiagnosticsRateLimiter::new();
+        let user = Uuid::new_v4();
+        {
+            let state = limiter.state.lock();
+            for index in 0..10_000 {
+                state
+                    .devices
+                    .check_key(&(user, format!("device-{index}")))
+                    .unwrap();
+            }
+        }
+        assert!(limiter.check(Uuid::new_v4(), "overflow").is_err());
+        let state = limiter.state.lock();
+        assert_eq!(state.devices.len(), 10_000);
+        assert_eq!(state.accounts.len(), 0);
+    }
+
+    #[test]
+    fn diagnostics_rotating_devices_exhaust_account_budget() {
+        let limiter = AiDiagnosticsRateLimiter::new();
+        let user = Uuid::new_v4();
+        for index in 0..10 {
+            assert!(limiter.check(user, &format!("device-{index}")).is_ok());
+        }
+        assert!(limiter.check(user, "another-device").is_err());
+        assert!(limiter.check(Uuid::new_v4(), "another-device").is_ok());
+        assert_eq!(limiter.state.lock().devices.len(), 11);
+    }
+
+    #[test]
     fn diagnostics_limit_is_scoped_to_user_and_device() {
         let limiter = AiDiagnosticsRateLimiter::new();
         let user = Uuid::new_v4();
@@ -204,5 +258,75 @@ mod oauth_tests {
         assert!(limiter
             .check("10.0.1.2".parse().unwrap(), "independent-client")
             .is_ok());
+    }
+}
+
+/// Public signup has its own process-local quota, independent of login/logout.
+/// Serialize cleanup/admission so concurrent new IPs cannot exceed the key cap.
+pub struct EarlyAccessRateLimiter {
+    inner: parking_lot::Mutex<Governor<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>>,
+    max_keys: usize,
+}
+
+impl EarlyAccessRateLimiter {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: parking_lot::Mutex::new(Governor::keyed(
+                Quota::per_minute(NonZeroU32::new(5).unwrap())
+                    .allow_burst(NonZeroU32::new(5).unwrap()),
+            )),
+            max_keys: 10_000,
+        })
+    }
+
+    pub fn check(&self, ip: IpAddr) -> Result<(), RateLimitExceeded> {
+        let inner = self.inner.lock();
+        inner.retain_recent();
+        if inner.len() >= self.max_keys {
+            return Err(RateLimitExceeded);
+        }
+        inner.check_key(&ip).map_err(|_| RateLimitExceeded)
+    }
+}
+
+#[cfg(test)]
+mod early_access_tests {
+    use super::*;
+
+    #[test]
+    fn signup_does_not_consume_login_or_other_client_budget() {
+        let signup = EarlyAccessRateLimiter::new();
+        let auth = AuthRateLimiter::new();
+        let ip = "192.0.2.1".parse().unwrap();
+        for _ in 0..5 {
+            assert!(signup.check(ip).is_ok());
+        }
+        assert!(signup.check(ip).is_err());
+        assert!(signup.check("192.0.2.2".parse().unwrap()).is_ok());
+        for _ in 0..5 {
+            assert!(auth.check(ip).is_ok());
+        }
+    }
+
+    #[test]
+    fn concurrent_new_ips_cannot_grow_state_past_capacity() {
+        let limiter = Arc::new(EarlyAccessRateLimiter {
+            inner: parking_lot::Mutex::new(Governor::keyed(Quota::per_minute(
+                NonZeroU32::new(5).unwrap(),
+            ))),
+            max_keys: 8,
+        });
+        let threads: Vec<_> = (1..=32)
+            .map(|n| {
+                let limiter = limiter.clone();
+                std::thread::spawn(move || limiter.check(IpAddr::from([192, 0, 2, n])).is_ok())
+            })
+            .collect();
+        let accepted: usize = threads
+            .into_iter()
+            .map(|t| usize::from(t.join().unwrap()))
+            .sum();
+        assert_eq!(accepted, 8);
+        assert_eq!(limiter.inner.lock().len(), 8);
     }
 }

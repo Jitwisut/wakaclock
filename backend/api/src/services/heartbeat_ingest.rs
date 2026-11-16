@@ -39,31 +39,12 @@ impl HeartbeatIngestService {
         }
     }
 
-    pub fn should_assign_server_ids(&self, user_id: Uuid) -> bool {
-        match self.config.brokers.ingest.mode {
-            IngestMode::Direct => false,
-            IngestMode::Verify => true,
-            IngestMode::Kafka => self
-                .config
-                .brokers
-                .ingest
-                .kafka_cohort
-                .as_ref()
-                .is_some_and(|cohort| cohort.includes(user_id)),
-        }
-    }
-
-    /// Assign IDs only for paths that need a stable broker identity. Direct mode
-    /// intentionally keeps its historical behaviour for old clients.
-    pub fn assign_server_ids(&self, user_id: Uuid, heartbeats: &mut [Heartbeat]) {
-        if !self.should_assign_server_ids(user_id) {
-            return;
-        }
-        for heartbeat in heartbeats {
-            if heartbeat.heartbeat_id.is_none() {
-                heartbeat.heartbeat_id = Some(format!("srv-{}", Uuid::now_v7()));
-            }
-        }
+    /// Give every newly received ID-less row its own transport identity before
+    /// persistence and response construction. Never infer identity from content:
+    /// independent legacy observations (including retries without an ID) remain
+    /// independent, and existing historical rows are not changed.
+    pub fn assign_server_ids(&self, _user_id: Uuid, heartbeats: &mut [Heartbeat]) {
+        assign_missing_heartbeat_ids(heartbeats);
     }
 
     pub async fn process(
@@ -180,6 +161,14 @@ impl HeartbeatIngestService {
                 .map_err(|error| anyhow!(error.to_string()))?;
         }
         Ok(())
+    }
+}
+
+pub(crate) fn assign_missing_heartbeat_ids(heartbeats: &mut [Heartbeat]) {
+    for heartbeat in heartbeats {
+        if heartbeat.heartbeat_id.is_none() {
+            heartbeat.heartbeat_id = Some(format!("srv-{}", Uuid::now_v7()));
+        }
     }
 }
 

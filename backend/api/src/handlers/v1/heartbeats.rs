@@ -462,7 +462,7 @@ fn bulk_responses(heartbeats: &[Heartbeat]) -> Vec<(serde_json::Value, u16)> {
             let id = heartbeat
                 .heartbeat_id
                 .clone()
-                .unwrap_or_else(|| Uuid::now_v7().to_string());
+                .expect("server IDs are assigned before constructing bulk responses");
             (serde_json::json!({ "data": { "id": id } }), 201)
         })
         .collect()
@@ -853,6 +853,16 @@ async fn require_active_access(
 fn payload_to_heartbeat(p: HeartbeatPayload, user_id: Uuid) -> Result<Heartbeat, String> {
     if p.revision.unwrap_or(0) > MAX_HEARTBEAT_REVISION {
         return Err("revision exceeds the supported bound".to_string());
+    }
+    // A server-generated ID cannot locate an older operation. Reject baseless
+    // corrections before minting an ID so they receive 400, not a retryable 500.
+    // Legacy clients omitting revisions still start at revision zero as before.
+    if p.revision.unwrap_or(0) > 0
+        && [&p.heartbeat_id, &p.ai_event_id, &p.ai_change_id]
+            .iter()
+            .all(|id| id.as_deref().is_none_or(|value| value.trim().is_empty()))
+    {
+        return Err("correction revision requires an operation identifier".to_string());
     }
     let explicit_actor_type = p
         .actor_type
@@ -1264,6 +1274,31 @@ mod tests {
         assert_eq!(heartbeat.ai_provider.as_deref(), Some("openai"));
         assert_eq!(heartbeat.session_id.as_deref(), Some("codex-session-1"));
         heartbeat.validate().unwrap();
+    }
+
+    #[test]
+    fn idless_legacy_rows_are_accepted_but_baseless_corrections_are_not() {
+        let base = json!({"entity":"legacy.rs", "entity_type":"file", "time":1_700_000_000.0});
+        let payload = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(
+            payload_to_heartbeat(payload, Uuid::nil()).unwrap().revision,
+            0
+        );
+        let mut correction = base;
+        correction["revision"] = json!(1);
+        assert!(payload_to_heartbeat(
+            serde_json::from_value(correction.clone()).unwrap(),
+            Uuid::nil()
+        )
+        .unwrap_err()
+        .contains("requires an operation identifier"));
+        correction["heartbeat_id"] = json!("existing-operation");
+        assert_eq!(
+            payload_to_heartbeat(serde_json::from_value(correction).unwrap(), Uuid::nil())
+                .unwrap()
+                .revision,
+            1
+        );
     }
 
     #[test]
@@ -1738,12 +1773,17 @@ mod tests {
         heartbeats[0].heartbeat_id = Some("client-id-1".to_string());
         heartbeats[1].heartbeat_id = None;
 
+        crate::services::heartbeat_ingest::assign_missing_heartbeat_ids(&mut heartbeats);
         let responses = bulk_responses(&heartbeats);
         assert_eq!(responses.len(), heartbeats.len());
         assert_eq!(responses[0].0, json!({ "data": { "id": "client-id-1" } }));
         assert!(responses[1].0["data"]["id"]
             .as_str()
             .is_some_and(|id| !id.is_empty()));
+        assert_eq!(
+            responses[1].0["data"]["id"].as_str(),
+            heartbeats[1].heartbeat_id.as_deref()
+        );
         assert!(responses.iter().all(|(_, status)| *status == 201));
 
         // The exact shape wakatime-cli's ParseHeartbeatResponses reads.

@@ -123,7 +123,7 @@ impl HeartbeatService {
         let mut clamped_seconds = 0.0f64;
         let mut batch_heartbeat_revisions = HashMap::<(String, Option<String>), u32>::new();
         let mut batch_event_revisions = HashMap::<(String, Option<String>), u32>::new();
-        let mut batch_change_revisions = HashMap::<(String, Option<String>), u32>::new();
+        let mut batch_change_revisions = HashMap::<(String, Option<String>, String), u32>::new();
         let candidate_heartbeat_ids: Vec<String> = heartbeats
             .iter()
             .filter_map(|heartbeat| heartbeat.heartbeat_id.clone())
@@ -186,19 +186,11 @@ impl HeartbeatService {
                             heartbeat_id
                         );
                     }
-                    if let Some(revision) = stored_revision {
+                    if let Some(revision) = stored_revision.into_iter().chain(batch_revision).max()
+                    {
                         if hb.revision != revision.saturating_add(1) {
                             anyhow::bail!(
                                 "correction revision {} must follow stored revision {} for heartbeat_id {}",
-                                hb.revision,
-                                revision,
-                                heartbeat_id
-                            );
-                        }
-                    } else if let Some(revision) = batch_revision {
-                        if hb.revision != revision.saturating_add(1) {
-                            anyhow::bail!(
-                                "correction revision {} must follow batch revision {} for heartbeat_id {}",
                                 hb.revision,
                                 revision,
                                 heartbeat_id
@@ -228,19 +220,11 @@ impl HeartbeatService {
                             event_id
                         );
                     }
-                    if let Some(revision) = stored_revision {
+                    if let Some(revision) = stored_revision.into_iter().chain(batch_revision).max()
+                    {
                         if hb.revision != revision.saturating_add(1) {
                             anyhow::bail!(
                                 "correction revision {} must follow stored revision {} for ai_event_id {}",
-                                hb.revision,
-                                revision,
-                                event_id
-                            );
-                        }
-                    } else if let Some(revision) = batch_revision {
-                        if hb.revision != revision.saturating_add(1) {
-                            anyhow::bail!(
-                                "correction revision {} must follow batch revision {} for ai_event_id {}",
                                 hb.revision,
                                 revision,
                                 event_id
@@ -253,7 +237,7 @@ impl HeartbeatService {
 
             if hb.ai_event_id.is_none() {
                 if let Some(change_id) = hb.ai_change_id.as_ref() {
-                    let change_key = (change_id.clone(), hb.session_id.clone());
+                    let change_key = (change_id.clone(), hb.session_id.clone(), hb.entity.clone());
                     let stored_revision = existing_change_revisions.get(&change_key).copied();
                     let batch_revision = batch_change_revisions.get(&change_key).copied();
                     if stored_revision.is_some_and(|revision| hb.revision <= revision)
@@ -270,19 +254,12 @@ impl HeartbeatService {
                                 change_id
                             );
                         }
-                        if let Some(revision) = stored_revision {
+                        if let Some(revision) =
+                            stored_revision.into_iter().chain(batch_revision).max()
+                        {
                             if hb.revision != revision.saturating_add(1) {
                                 anyhow::bail!(
                                     "correction revision {} must follow stored revision {} for ai_change_id {}",
-                                    hb.revision,
-                                    revision,
-                                    change_id
-                                );
-                            }
-                        } else if let Some(revision) = batch_revision {
-                            if hb.revision != revision.saturating_add(1) {
-                                anyhow::bail!(
-                                    "correction revision {} must follow batch revision {} for ai_change_id {}",
                                     hb.revision,
                                     revision,
                                     change_id
@@ -953,3 +930,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "heartbeat_integrity_tests.rs"]
+mod heartbeat_integrity_tests;

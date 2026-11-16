@@ -19,6 +19,23 @@ type LatestV2Entry = (
     Vec<String>,
 );
 
+pub const MAX_DIAGNOSTICS_DEVICES: usize = 32;
+const MAX_MEMORY_DEVICES: usize = 10_000;
+
+#[derive(Debug)]
+pub struct DiagnosticsDeviceLimit;
+impl std::fmt::Display for DiagnosticsDeviceLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("diagnostics device limit reached")
+    }
+}
+impl std::error::Error for DiagnosticsDeviceLimit {}
+
+pub struct DiagnosticsRead {
+    pub reports: Vec<AiDiagnosticsReportV2>,
+    pub incomplete: bool,
+}
+
 pub struct AiDiagnosticsService {
     latest: RwLock<HashMap<Uuid, AiDiagnosticsReport>>,
     latest_v2: RwLock<HashMap<(Uuid, String), LatestV2Entry>>,
@@ -72,6 +89,29 @@ impl AiDiagnosticsService {
             let value = serde_json::to_value(&report).context("serialize diagnostics report")?;
             let mut connection = postgres.transaction_client().await?;
             let tx = connection.transaction().await?;
+            // Serialize admission across API replicas before counting or inserting.
+            // Existing devices remain writable even for legacy accounts above the cap.
+            tx.query_one("SELECT id FROM users WHERE id=$1 FOR UPDATE", &[&user_id])
+                .await?;
+            let exists = tx
+                .query_opt(
+                    "SELECT 1 FROM ai_diagnostics_devices WHERE user_id=$1 AND device_id=$2",
+                    &[&user_id, &report.device_id],
+                )
+                .await?
+                .is_some();
+            if !exists {
+                let count = tx
+                    .query(
+                        "SELECT 1 FROM ai_diagnostics_devices WHERE user_id=$1 LIMIT $2",
+                        &[&user_id, &(MAX_DIAGNOSTICS_DEVICES as i64)],
+                    )
+                    .await?
+                    .len();
+                if count >= MAX_DIAGNOSTICS_DEVICES {
+                    return Err(DiagnosticsDeviceLimit.into());
+                }
+            }
             let inserted = tx.execute(
                 "INSERT INTO ai_diagnostics_devices (user_id,device_id,boot_id,sequence,measured_at,receipt_at,expires_at,report)
                  VALUES($1,$2,$3,$4,$5,now(),now()+interval '30 days',$6) ON CONFLICT(user_id,device_id) DO NOTHING",
@@ -97,6 +137,17 @@ impl AiDiagnosticsService {
 
         let mut latest = self.latest_v2.write().await;
         let key = (user_id, report.device_id.clone());
+        if !latest.contains_key(&key) {
+            if latest.keys().filter(|(owner, _)| *owner == user_id).count()
+                >= MAX_DIAGNOSTICS_DEVICES
+            {
+                return Err(DiagnosticsDeviceLimit.into());
+            }
+            anyhow::ensure!(
+                latest.len() < MAX_MEMORY_DEVICES,
+                "diagnostics memory capacity reached"
+            );
+        }
         let mut retired = Vec::new();
         if let Some((current, _, _, history)) = latest.get(&key) {
             retired = history.clone();
@@ -117,33 +168,43 @@ impl AiDiagnosticsService {
     }
 
     pub async fn latest_v2(&self, user_id: Uuid) -> Result<Vec<AiDiagnosticsReportV2>> {
+        Ok(self.latest_v2_bounded(user_id).await?.reports)
+    }
+
+    pub async fn latest_v2_bounded(&self, user_id: Uuid) -> Result<DiagnosticsRead> {
         if let Some(postgres) = &self.postgres {
             let rows = postgres
                 .client()
                 .query(
                     "SELECT report FROM ai_diagnostics_devices
                      WHERE user_id = $1 AND expires_at > now()
-                     ORDER BY receipt_at DESC",
-                    &[&user_id],
+                     ORDER BY receipt_at DESC, device_id ASC LIMIT $2",
+                    &[&user_id, &((MAX_DIAGNOSTICS_DEVICES + 1) as i64)],
                 )
                 .await
                 .context("read diagnostics reports")?;
-            return rows
+            let incomplete = rows.len() > MAX_DIAGNOSTICS_DEVICES;
+            let reports = rows
                 .into_iter()
+                .take(MAX_DIAGNOSTICS_DEVICES)
                 .map(|row| {
                     let value: serde_json::Value = row.get(0);
                     serde_json::from_value(value).context("decode diagnostics report")
                 })
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(DiagnosticsRead {
+                reports,
+                incomplete,
+            });
         }
 
         let now = Utc::now();
-        let mut latest = self.latest_v2.write().await;
-        latest.retain(|_, (_, _, expires_at, _)| *expires_at > now);
+        // Expiry hides reports, but does not erase retired boot fences or free slots.
+        let latest = self.latest_v2.read().await;
         let mut reports: Vec<_> = latest
             .iter()
-            .filter(|((owner, _), _)| *owner == user_id)
-            .map(|(_, (report, received_at, _, _))| (report.clone(), *received_at))
+            .filter(|((owner, _), (_, _, expires_at, _))| *owner == user_id && *expires_at > now)
+            .map(|(_, (report, received_at, _, _))| (report, *received_at))
             .collect();
         // HashMap iteration is intentionally unordered. Return a stable newest-first
         // view so the dashboard and API clients do not select a random device snapshot.
@@ -155,7 +216,15 @@ impl AiDiagnosticsService {
                 .then_with(|| right.0.sequence.cmp(&left.0.sequence))
                 .then_with(|| left.0.device_id.cmp(&right.0.device_id))
         });
-        Ok(reports.into_iter().map(|(report, _)| report).collect())
+        let incomplete = reports.len() > MAX_DIAGNOSTICS_DEVICES;
+        Ok(DiagnosticsRead {
+            reports: reports
+                .into_iter()
+                .take(MAX_DIAGNOSTICS_DEVICES)
+                .map(|(report, _)| report.clone())
+                .collect(),
+            incomplete,
+        })
     }
 }
 
@@ -308,6 +377,111 @@ mod tests {
             .any(|report| report.device_id == "device-b" && report.sequence == 1));
     }
 
+    #[tokio::test]
+    async fn memory_device_cap_preserves_existing_and_expired_boot_fences() {
+        let service = AiDiagnosticsService::new();
+        let user = Uuid::new_v4();
+        for index in 0..MAX_DIAGNOSTICS_DEVICES {
+            service
+                .record_v2(user, report_v2(&format!("device-{index}"), "boot-a", 1))
+                .await
+                .unwrap();
+        }
+        let error = service
+            .record_v2(user, report_v2("overflow", "boot-a", 1))
+            .await
+            .unwrap_err();
+        assert!(error.is::<DiagnosticsDeviceLimit>());
+        assert!(service
+            .record_v2(user, report_v2("device-0", "boot-b", 2))
+            .await
+            .unwrap());
+        {
+            let mut records = service.latest_v2.write().await;
+            records.get_mut(&(user, "device-0".to_owned())).unwrap().2 =
+                Utc::now() - Duration::days(1);
+        }
+        assert_eq!(
+            service.latest_v2(user).await.unwrap().len(),
+            MAX_DIAGNOSTICS_DEVICES - 1
+        );
+        assert!(!service
+            .record_v2(user, report_v2("device-0", "boot-a", 999))
+            .await
+            .unwrap());
+        assert!(service
+            .record_v2(user, report_v2("overflow", "boot-a", 1))
+            .await
+            .unwrap_err()
+            .is::<DiagnosticsDeviceLimit>());
+        assert!(service
+            .record_v2(Uuid::new_v4(), report_v2("overflow", "boot-a", 1))
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn memory_global_capacity_rejects_new_records_but_preserves_updates() {
+        let service = AiDiagnosticsService::new();
+        let user = Uuid::new_v4();
+        {
+            let mut records = service.latest_v2.write().await;
+            for index in 0..MAX_MEMORY_DEVICES {
+                records.insert(
+                    (user, format!("device-{index}")),
+                    (
+                        report_v2(&format!("device-{index}"), "boot", 1),
+                        Utc::now(),
+                        Utc::now() + Duration::days(30),
+                        vec![],
+                    ),
+                );
+            }
+        }
+        let error = service
+            .record_v2(Uuid::new_v4(), report_v2("new-device", "boot", 1))
+            .await
+            .unwrap_err();
+        assert!(!error.is::<DiagnosticsDeviceLimit>());
+        assert!(service
+            .record_v2(user, report_v2("device-0", "boot", 2))
+            .await
+            .unwrap());
+        assert_eq!(service.latest_v2.read().await.len(), MAX_MEMORY_DEVICES);
+    }
+
+    #[tokio::test]
+    async fn legacy_over_cap_read_is_bounded_and_existing_device_updates() {
+        let service = AiDiagnosticsService::new();
+        let user = Uuid::new_v4();
+        {
+            let mut records = service.latest_v2.write().await;
+            for index in 0..MAX_DIAGNOSTICS_DEVICES + 3 {
+                records.insert(
+                    (user, format!("device-{index}")),
+                    (
+                        report_v2(&format!("device-{index}"), "boot", 1),
+                        Utc::now(),
+                        Utc::now() + Duration::days(30),
+                        vec![],
+                    ),
+                );
+            }
+        }
+        let read = service.latest_v2_bounded(user).await.unwrap();
+        assert!(read.incomplete);
+        assert_eq!(read.reports.len(), MAX_DIAGNOSTICS_DEVICES);
+        assert!(service
+            .record_v2(user, report_v2("device-0", "boot", 2))
+            .await
+            .unwrap());
+        assert!(service
+            .record_v2(user, report_v2("new-device", "boot", 1))
+            .await
+            .unwrap_err()
+            .is::<DiagnosticsDeviceLimit>());
+    }
+
     async fn exercise_late_boots(service: &AiDiagnosticsService, user: Uuid) {
         let a = report_v2("ordering-device", "boot-a", 1);
         assert!(service.record_v2(user, a.clone()).await.unwrap());
@@ -373,6 +547,32 @@ mod tests {
         assert_ne!(first.unwrap(), duplicate.unwrap());
         assert_eq!(service.latest_v2(user).await.unwrap()[0].boot_id, "boot-c");
         assert!(service.latest_v2(Uuid::new_v4()).await.unwrap().is_empty());
+        // Leave one slot, then race two independent connections/replicas.
+        for index in 0..MAX_DIAGNOSTICS_DEVICES - 2 {
+            service
+                .record_v2(user, report_v2(&format!("quota-{index}"), "boot", 1))
+                .await
+                .unwrap();
+        }
+        let (first, second) = tokio::join!(
+            service.record_v2(user, report_v2("last-slot-a", "boot", 1)),
+            restarted.record_v2(user, report_v2("last-slot-b", "boot", 1)),
+        );
+        assert_ne!(first.is_ok(), second.is_ok());
+        let error = if let Err(error) = first {
+            error
+        } else {
+            second.unwrap_err()
+        };
+        assert!(error.is::<DiagnosticsDeviceLimit>());
+        assert_eq!(
+            service.latest_v2(user).await.unwrap().len(),
+            MAX_DIAGNOSTICS_DEVICES
+        );
+        assert!(restarted
+            .record_v2(user, report_v2("quota-0", "boot", 2))
+            .await
+            .unwrap());
         pg.client()
             .execute("DELETE FROM users WHERE id=$1", &[&user])
             .await

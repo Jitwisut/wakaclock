@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::infrastructure::database::ClickHouseClient;
 use crate::model::date_range::ResolvedRange;
 use crate::model::heartbeat::{ActivityIntervalRow, HeartbeatRow};
-use crate::repository::canonical::canonical_winner_relation;
+use crate::repository::canonical::{canonical_window_relation, canonical_winner_relation};
 
 pub struct HeartbeatRepository {
     client: Arc<ClickHouseClient>,
@@ -991,7 +991,7 @@ impl HeartbeatRepository {
         &self,
         user_id: uuid::Uuid,
         candidates: &[String],
-    ) -> Result<HashMap<(String, Option<String>), u32>> {
+    ) -> Result<HashMap<(String, Option<String>, String), u32>> {
         if candidates.is_empty() {
             return Ok(HashMap::new());
         }
@@ -999,16 +999,17 @@ impl HeartbeatRepository {
         struct RevisionRow {
             ai_change_id: String,
             session_id: Option<String>,
+            entity: String,
             revision: u32,
         }
         let rows = self
             .client
             .get_client()
             .query(
-                "SELECT assumeNotNull(ai_change_id) AS ai_change_id, session_id, max(revision) AS revision
+                "SELECT assumeNotNull(ai_change_id) AS ai_change_id, session_id, entity, max(revision) AS revision
                  FROM wakaclock.heartbeats
                  WHERE user_id = ? AND ai_change_id IS NOT NULL AND ai_change_id IN ?
-                 GROUP BY ai_change_id, session_id",
+                 GROUP BY ai_change_id, session_id, entity",
             )
             .bind(user_id)
             .bind(candidates)
@@ -1019,7 +1020,7 @@ impl HeartbeatRepository {
             })?;
         Ok(rows
             .into_iter()
-            .map(|row| ((row.ai_change_id, row.session_id), row.revision))
+            .map(|row| ((row.ai_change_id, row.session_id, row.entity), row.revision))
             .collect())
     }
 
@@ -1125,8 +1126,7 @@ impl HeartbeatRepository {
         if references.is_empty() {
             return Ok(Vec::new());
         }
-        let relation =
-            canonical_winner_relation("h.user_id = ? AND h.time >= ? AND h.time < ?", "h");
+        let relation = canonical_window_relation("h");
         let row_key = "lower(hex(SHA256(concat(
             toString(length(ifNull(h.session_id, ''))), ':', ifNull(h.session_id, ''),
             toString(length(coalesce(nullIf(h.ai_event_id, ''), nullIf(h.ai_change_id, ''), nullIf(h.heartbeat_id, ''), ''))), ':',
@@ -1174,6 +1174,11 @@ impl HeartbeatRepository {
             .get_client()
             .query(&query)
             .bind(user_id)
+            .bind(user_id)
+            .bind(start_epoch)
+            .bind(end_epoch)
+            .bind(start_epoch)
+            .bind(end_epoch)
             .bind(start_epoch)
             .bind(end_epoch)
             .bind(references)
@@ -1192,8 +1197,7 @@ impl HeartbeatRepository {
         let ch_client = self.client.get_client();
         let (start_epoch, end_epoch) = range.unix_bounds();
 
-        let relation =
-            canonical_winner_relation("h.user_id = ? AND h.time >= ? AND h.time < ?", "h");
+        let relation = canonical_window_relation("h");
         let query = format!(
             // Column order must match `HeartbeatRow` field order exactly — the client
             // decodes positionally, so an omitted or reordered column misaligns every
@@ -1234,6 +1238,11 @@ impl HeartbeatRepository {
         let rows = ch_client
             .query(&query)
             .bind(user_id)
+            .bind(user_id)
+            .bind(start_epoch)
+            .bind(end_epoch)
+            .bind(start_epoch)
+            .bind(end_epoch)
             .bind(start_epoch)
             .bind(end_epoch)
             .fetch_all::<HeartbeatRow>()

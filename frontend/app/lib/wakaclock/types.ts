@@ -624,6 +624,7 @@ export interface AiDiagnosticsReportV2 {
 }
 
 export interface AiDiagnosticsV2Response {
+  incomplete?: boolean;
   reports: AiDiagnosticsReportV2[];
   storage: 'ephemeral' | 'postgres' | string;
 }
