@@ -441,6 +441,10 @@ impl PostgresClient {
                 "Private observed PR cost publication equations",
                 include_str!("../../migrations/postgres/064_team_cost_equations.sql"),
             ),
+            (
+                "Auth and diagnostics hardening",
+                include_str!("../../migrations/postgres/065_auth_diagnostics_hardening.sql"),
+            ),
         ] {
             client
                 .batch_execute(sql)

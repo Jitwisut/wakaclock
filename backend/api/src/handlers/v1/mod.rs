@@ -48,6 +48,7 @@ pub fn router(app_state: Arc<AppState>) -> Router {
         .route("/early-access", post(early_access::create).layer(early_access::body_limit()))
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
+        .route("/auth/logout", post(auth::logout))
         .route(
             "/internal/subscription",
             post(internal::update_subscription),

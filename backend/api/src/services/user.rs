@@ -20,6 +20,15 @@ use crate::model::user::{
 };
 use crate::repository::ingest_state::IngestStateRepository;
 
+#[derive(Debug)]
+pub struct LoginRejected;
+impl std::fmt::Display for LoginRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("invalid username or password")
+    }
+}
+impl std::error::Error for LoginRejected {}
+
 pub struct UserService {
     clickhouse: Arc<ClickHouseClient>,
     postgres: Option<Arc<PostgresClient>>,
@@ -372,23 +381,23 @@ impl UserService {
         };
         let (user_id, password_hash): (Uuid, String) = if let Some(row) = pg_credentials {
             if !row.get::<_, bool>("active") {
-                anyhow::bail!("invalid username or password");
+                return Err(LoginRejected.into());
             }
             (
                 row.get("id"),
                 row.get::<_, Option<String>>("password_hash")
-                    .context("password login unavailable")?,
+                    .ok_or(LoginRejected)?,
             )
         } else {
             let row = self.clickhouse.get_client().query(
                 "SELECT user_id, password_hash FROM wakaclock.users FINAL WHERE username = ? AND is_active LIMIT 1"
             ).bind(username).fetch_optional::<CredentialsRow>().await?
-                .context("invalid username or password")?;
+                .ok_or(LoginRejected)?;
             (row.user_id, row.password_hash)
         };
 
         if password_hash.is_empty() {
-            return Err(anyhow!("invalid username or password"));
+            return Err(LoginRejected.into());
         }
 
         let password = password.to_owned();
@@ -398,7 +407,7 @@ impl UserService {
                 PasswordHash::new(&hash).map_err(|_| anyhow!("invalid stored credential"))?;
             Argon2::default()
                 .verify_password(password.as_bytes(), &parsed)
-                .map_err(|_| anyhow!("invalid username or password"))
+                .map_err(|_| anyhow::Error::from(LoginRejected))
         })
         .await
         .context("password verification task failed")??;

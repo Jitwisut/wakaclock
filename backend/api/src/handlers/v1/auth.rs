@@ -71,11 +71,66 @@ pub async fn login(
             &state.config.jwt_secret,
         )
         .await
-        .map_err(|_| app_error(StatusCode::UNAUTHORIZED, "invalid username or password"))?;
+        .map_err(login_error)?;
 
     Ok(Json(AuthResponse { data }))
 }
 
+/// POST /api/v1/auth/logout. Revoking the same signed session twice is safe.
+pub async fn logout(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Result<StatusCode, auth::AuthFailure> {
+    auth::check_rate_limit(
+        &state,
+        auth::client_ip(addr.ip(), &headers, &state.config.trusted_proxy_ips),
+    )?;
+    let session = auth::session_to_revoke(&headers, &state.config.jwt_secret)
+        .ok_or_else(auth::unauthorized)?;
+    crate::services::session_revocation::revoke(
+        state.postgres.as_deref(),
+        &state.clickhouse.get_client(),
+        session,
+    )
+    .await
+    .map_err(|_| {
+        app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "session revocation temporarily unavailable",
+        )
+    })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn app_error(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Value>) {
     (status, Json(serde_json::json!({ "error": msg })))
+}
+
+fn login_error(error: anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {
+    if error.is::<crate::services::user::LoginRejected>() {
+        app_error(StatusCode::UNAUTHORIZED, "invalid username or password")
+    } else {
+        tracing::warn!("login service unavailable");
+        app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authentication service temporarily unavailable",
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn login_outage_is_not_bad_credentials() {
+        assert_eq!(
+            login_error(anyhow::anyhow!("database down")).0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            login_error(crate::services::user::LoginRejected.into()).0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
 }

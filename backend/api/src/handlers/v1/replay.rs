@@ -57,7 +57,7 @@ pub async fn get(
 
     let status = ai_sessions_status(
         filters_active(&filters),
-        auth::require_scope(&state, &headers, "read_ai_analytics").await,
+        auth::require_scope(&state, &headers, "read_ai_analytics").await?,
     );
     let ai_sessions = if status == ReplayAiSessionsStatus::Available {
         load_ai_sessions(&state, user_id, start, end).await?

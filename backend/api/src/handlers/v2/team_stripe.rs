@@ -39,7 +39,7 @@ pub async fn cancellation_view(
         return Err(ApiError::not_found("Team cancellation unavailable"));
     }
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     if input.operation_id.is_some_and(|id| id.is_nil()) {
         return Err(ApiError::bad_request(
@@ -66,7 +66,7 @@ pub async fn accept_cancellation(
         return Err(ApiError::not_found("Team cancellation unavailable"));
     }
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let result = state
         .billing_service
@@ -88,7 +88,7 @@ pub async fn recover_cancellation(
         return Err(ApiError::not_found("Team cancellation unavailable"));
     }
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let result = state
         .billing_service
@@ -111,7 +111,7 @@ pub async fn portal_destination(
         return Err(ApiError::not_found("Team portal unavailable"));
     }
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let result = state
         .billing_service
@@ -175,7 +175,7 @@ pub async fn trial_status(
         return Err(ApiError::not_found("Team trial unavailable"));
     }
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let result = state
         .billing_service
@@ -197,7 +197,7 @@ pub async fn trial_start(
         return Err(ApiError::not_found("Team trial unavailable"));
     }
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let result = state
         .billing_service
@@ -219,7 +219,7 @@ pub async fn trial_recover(
         return Err(ApiError::not_found("Team trial unavailable"));
     }
     let actor = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let result = state
         .billing_service
@@ -270,7 +270,7 @@ async fn customer_request(
         return Err(ApiError::not_found("Stripe customer setup disabled"));
     }
     let actor = auth::require_session_user(&s, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let result = s
         .billing_service
@@ -322,7 +322,7 @@ pub async fn customer_recover(
         return Err(ApiError::not_found("Stripe customer setup disabled"));
     }
     let actor = auth::require_session_user(&s, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     s.billing_service
         .recover_stripe_customer(
@@ -390,7 +390,7 @@ pub async fn quote_create(
         return Err(ApiError::not_found("Stripe pricing disabled"));
     }
     let actor = auth::require_session_user(&s, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let quote = s
         .billing_service
@@ -411,7 +411,7 @@ pub async fn quote_get(
         return Err(ApiError::not_found("Stripe pricing disabled"));
     }
     let actor = auth::require_session_user(&s, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let quote = s
         .billing_service
@@ -452,7 +452,7 @@ pub async fn checkout_status(
         return Err(ApiError::not_found("Stripe checkout diagnostics disabled"));
     }
     let actor = auth::require_session_user(&s, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let result = s
         .billing_service
@@ -474,7 +474,7 @@ pub async fn checkout_recover(
         return Err(ApiError::not_found("Stripe checkout recovery disabled"));
     }
     let actor = auth::require_session_user(&s, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     s.billing_service
         .recover_stripe_checkout(
@@ -505,7 +505,7 @@ pub async fn checkout_prepare(
         return Err(ApiError::not_found("Stripe checkout disabled"));
     }
     let actor = auth::require_session_user(&s, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     let result = s
         .billing_service
@@ -529,7 +529,7 @@ pub async fn checkout_destination(
         return Err(ApiError::not_found("Stripe checkout disabled"));
     }
     let actor = auth::require_session_user(&s, &headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)?;
     if !input.confirm {
         return Err(ApiError::bad_request("confirm opening test checkout"));

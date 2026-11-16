@@ -62,7 +62,7 @@ pub async fn create(
     Json(payload): Json<CreateTeamPayload>,
 ) -> Result<Json<TeamResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
 
     let team = state
@@ -81,7 +81,7 @@ pub async fn list(
     Path(org_id): Path<Uuid>,
 ) -> Result<Json<TeamsResponse>, (StatusCode, Json<serde_json::Value>)> {
     auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
 
     let teams = state
@@ -113,7 +113,7 @@ pub async fn add_member(
     Json(payload): Json<AddMemberPayload>,
 ) -> Result<Json<AddMemberResponse>, (StatusCode, Json<serde_json::Value>)> {
     let actor_user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
 
     state

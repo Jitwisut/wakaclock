@@ -31,9 +31,9 @@ pub async fn list(
         .map_err(|error| app_error(StatusCode::BAD_REQUEST, &error.to_string()))?;
     let (range_start, range_end) = range.unix_bounds();
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "read_logged_time").await {
+    if !auth::require_scope(&state, &headers, "read_logged_time").await? {
         return Err(auth::forbidden_scope("read_logged_time"));
     }
 

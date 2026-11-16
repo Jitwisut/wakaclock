@@ -148,7 +148,7 @@ async fn distinct_telemetry_values(
     hash_machine: bool,
 ) -> Result<Json<CatalogResponse<Vec<NamedItem>>>, (StatusCode, Json<Value>)> {
     let user_id = auth::require_account_user(state, headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     // Column names are selected from a closed list above; never interpolate client input.
     let query = format!(
@@ -196,7 +196,7 @@ pub async fn stats_default(
     headers: HeaderMap,
 ) -> Result<Json<crate::model::stats::StatsResponse>, (StatusCode, Json<Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     state
         .stats_service
@@ -219,7 +219,7 @@ pub async fn custom_rule_upsert(
     Json(input): Json<CustomRuleRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     let pattern = input
         .pattern
@@ -257,7 +257,7 @@ pub async fn private_leaderboards(
     headers: HeaderMap,
 ) -> Result<Json<CatalogResponse<Value>>, (StatusCode, Json<Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     let rows = state
         .leaderboard_service
@@ -275,7 +275,7 @@ pub async fn private_leaderboard(
     Path(board): Path<Uuid>,
 ) -> Result<Json<CatalogResponse<Value>>, (StatusCode, Json<Value>)> {
     let user_id = auth::require_account_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
     let board = state
         .leaderboard_service

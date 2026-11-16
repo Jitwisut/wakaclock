@@ -532,3 +532,8 @@ export async function addTeamMember(orgId: string, teamId: string, userId: strin
   );
   return data;
 }
+
+// POST /auth/logout — the request interceptor binds the current session.
+export async function postLogout() {
+  await wakaclockClient.post('/auth/logout');
+}

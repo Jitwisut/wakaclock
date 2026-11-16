@@ -78,7 +78,7 @@ pub async fn list_apps(
     headers: HeaderMap,
 ) -> Result<Json<Vec<crate::services::oauth::DeveloperAppSummary>>, OAuthError> {
     let owner_user_id = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
     let apps = state
         .oauth_service
@@ -94,7 +94,7 @@ pub async fn revoke_app(
     axum::extract::Path(client_id): axum::extract::Path<String>,
 ) -> Result<StatusCode, OAuthError> {
     let owner_user_id = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
     let Some(_access_hashes) = state
         .oauth_service
@@ -116,7 +116,7 @@ pub async fn authorize(
         return Err(OAuthError::bad_request("response_type must be code"));
     }
     let user_id = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
     ensure_pg_identity(&state, user_id).await?;
     let scopes = parse_scopes(query.scope.as_deref())?;
@@ -211,7 +211,7 @@ pub async fn register_app(
     Json(request): Json<RegisterAppRequest>,
 ) -> Result<(StatusCode, Json<crate::services::oauth::RegisteredApp>), OAuthError> {
     let owner_user_id = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
     ensure_pg_identity(&state, owner_user_id).await?;
     let app = state
@@ -246,15 +246,29 @@ pub struct DeviceApproveForm {
 
 pub async fn device_code(
     State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Form(form): Form<DeviceCodeForm>,
 ) -> Result<Json<crate::services::oauth::DeviceCodeResponse>, OAuthError> {
+    if form.client_id.is_empty() || form.client_id.len() > 256 {
+        return Err(OAuthError::bad_request("invalid client_id"));
+    }
+    let ip = auth::client_ip(peer.ip(), &headers, &state.config.trusted_proxy_ips);
+    state
+        .oauth_device_rate_limiter
+        .check(ip, &form.client_id)
+        .map_err(|_| OAuthError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "slow_down",
+            message: "device code issuance rate limit exceeded".into(),
+        })?;
     let scopes = parse_scopes(form.scope.as_deref())?;
     let verification_uri = format!("{}/device", state.config.public_app_url);
     let response = state
         .oauth_service
         .issue_device_code(&form.client_id, &scopes, &verification_uri)
         .await
-        .map_err(OAuthError::invalid_grant)?;
+        .map_err(OAuthError::service_unavailable)?;
     Ok(Json(response))
 }
 
@@ -276,7 +290,7 @@ pub async fn device_approve(
     Form(form): Form<DeviceApproveForm>,
 ) -> Result<StatusCode, OAuthError> {
     let user_id = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(|| OAuthError::unauthorized("a dashboard session is required"))?;
     ensure_pg_identity(&state, user_id).await?;
     state
@@ -357,6 +371,19 @@ pub struct OAuthError {
     message: String,
 }
 
+impl From<auth::AuthFailure> for OAuthError {
+    fn from((status, body): auth::AuthFailure) -> Self {
+        Self {
+            status,
+            code: "temporarily_unavailable",
+            message: body.0["error"]
+                .as_str()
+                .unwrap_or("authentication service temporarily unavailable")
+                .to_owned(),
+        }
+    }
+}
+
 impl OAuthError {
     fn bad_request(message: impl Into<String>) -> Self {
         Self {
@@ -376,7 +403,11 @@ impl OAuthError {
 
     fn from_request(error: &OAuthRequestError) -> Self {
         Self {
-            status: StatusCode::BAD_REQUEST,
+            status: if error.code == "slow_down" {
+                StatusCode::TOO_MANY_REQUESTS
+            } else {
+                StatusCode::BAD_REQUEST
+            },
             code: error.code,
             message: error.message.clone(),
         }

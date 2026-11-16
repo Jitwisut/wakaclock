@@ -21,7 +21,7 @@ fn error(e: anyhow::Error) -> ApiError {
 }
 async fn actor(state: &AppState, headers: &HeaderMap) -> Result<Uuid, ApiError> {
     auth::require_session_user(state, headers)
-        .await
+        .await?
         .ok_or_else(ApiError::unauthorized)
 }
 pub async fn status(

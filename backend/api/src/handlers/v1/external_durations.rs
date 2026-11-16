@@ -41,9 +41,9 @@ pub async fn create(
     Json(request): Json<ExternalDurationRequest>,
 ) -> Result<(StatusCode, Json<ExternalDurationResponse>), (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_external_durations").await {
+    if !auth::require_scope(&state, &headers, "write_external_durations").await? {
         return Err(auth::forbidden_scope("write_external_durations"));
     }
     let duration = state
@@ -63,9 +63,9 @@ pub async fn list(
     Query(query): Query<ExternalDurationQuery>,
 ) -> Result<Json<ExternalDurationListResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "read_external_durations").await {
+    if !auth::require_scope(&state, &headers, "read_external_durations").await? {
         return Err(auth::forbidden_scope("read_external_durations"));
     }
     if query.start.is_some_and(|value| !value.is_finite())
@@ -101,9 +101,9 @@ pub async fn create_bulk(
 ) -> Result<(StatusCode, Json<ExternalDurationBulkResponse>), (StatusCode, Json<serde_json::Value>)>
 {
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_external_durations").await {
+    if !auth::require_scope(&state, &headers, "write_external_durations").await? {
         return Err(auth::forbidden_scope("write_external_durations"));
     }
     if requests.len() > 2_000 {
@@ -142,9 +142,9 @@ pub async fn delete_source(
     Query(query): Query<ExternalDurationQuery>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_external_durations").await {
+    if !auth::require_scope(&state, &headers, "write_external_durations").await? {
         return Err(auth::forbidden_scope("write_external_durations"));
     }
     let source = query

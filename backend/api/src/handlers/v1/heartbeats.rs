@@ -289,8 +289,12 @@ pub async fn create(
 ) -> Result<Json<HeartbeatResponse>, (StatusCode, HeaderMap, Json<serde_json::Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers)
         .await
+        .map_err(with_headers)?
         .ok_or_else(|| with_headers(auth::unauthorized()))?;
-    if !auth::require_scope(&state, &headers, "write_logged_time").await {
+    if !auth::require_scope(&state, &headers, "write_logged_time")
+        .await
+        .map_err(with_headers)?
+    {
         return Err(with_headers(auth::forbidden_scope("write_logged_time")));
     }
     require_active_access(&state, user_id)
@@ -357,8 +361,12 @@ pub async fn create_bulk(
 {
     let user_id = auth::resolve_user_id(&state, &headers)
         .await
+        .map_err(with_headers)?
         .ok_or_else(|| with_headers(auth::unauthorized()))?;
-    if !auth::require_scope(&state, &headers, "write_logged_time").await {
+    if !auth::require_scope(&state, &headers, "write_logged_time")
+        .await
+        .map_err(with_headers)?
+    {
         return Err(with_headers(auth::forbidden_scope("write_logged_time")));
     }
     require_active_access(&state, user_id)
@@ -474,9 +482,9 @@ pub async fn delete_bulk(
     Json(payload): Json<DeleteBulkPayload>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_logged_time").await {
+    if !auth::require_scope(&state, &headers, "write_logged_time").await? {
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     if payload.heartbeat_ids.len() > 1000 {
@@ -515,9 +523,9 @@ pub async fn list(
         .map_err(|error| app_error(StatusCode::BAD_REQUEST, &error.to_string()))?;
 
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "read_logged_time").await {
+    if !auth::require_scope(&state, &headers, "read_logged_time").await? {
         return Err(auth::forbidden_scope("read_logged_time"));
     }
 

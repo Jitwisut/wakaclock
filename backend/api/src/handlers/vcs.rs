@@ -172,9 +172,9 @@ async fn require_scope(
     scope: &str,
 ) -> Result<Uuid, (StatusCode, Json<Value>)> {
     let actor = auth::resolve_user_id(state, headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(state, headers, scope).await {
+    if !auth::require_scope(state, headers, scope).await? {
         return Err((
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "insufficient_scope", "scope": scope })),

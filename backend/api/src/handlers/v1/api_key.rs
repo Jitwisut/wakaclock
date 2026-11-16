@@ -27,7 +27,7 @@ pub async fn generate(
     )?;
 
     let user_id = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "log in first"))?;
 
     let response = state
@@ -54,7 +54,7 @@ pub async fn current(
     )?;
 
     let user_id = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "log in first"))?;
 
     let api_key = state
@@ -80,7 +80,7 @@ pub async fn revoke(
     )?;
 
     let user_id = auth::require_session_user(&state, &headers)
-        .await
+        .await?
         .ok_or_else(|| app_error(StatusCode::UNAUTHORIZED, "log in first"))?;
 
     let response = state

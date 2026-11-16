@@ -149,3 +149,60 @@ mod tests {
         assert!(limiter.check(Uuid::new_v4(), "device-a").is_ok());
     }
 }
+
+/// Independent OAuth issuance budgets; never consumes the password-login quota.
+/// In-memory keys are bounded even when callers invent client IDs/IP addresses.
+pub struct OAuthDeviceRateLimiter {
+    ips: Governor<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>,
+    clients: Governor<String, DefaultKeyedStateStore<String>, DefaultClock>,
+}
+impl OAuthDeviceRateLimiter {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            ips: Governor::keyed(
+                Quota::per_minute(NonZeroU32::new(20).unwrap())
+                    .allow_burst(NonZeroU32::new(10).unwrap()),
+            ),
+            clients: Governor::keyed(
+                Quota::per_minute(NonZeroU32::new(60).unwrap())
+                    .allow_burst(NonZeroU32::new(30).unwrap()),
+            ),
+        })
+    }
+    pub fn check(&self, ip: IpAddr, client_id: &str) -> Result<(), RateLimitExceeded> {
+        self.ips.retain_recent();
+        self.clients.retain_recent();
+        if self.ips.len() >= 10_000 || self.clients.len() >= 10_000 {
+            return Err(RateLimitExceeded);
+        }
+        self.ips.check_key(&ip).map_err(|_| RateLimitExceeded)?;
+        self.clients
+            .check_key(&client_id.to_owned())
+            .map_err(|_| RateLimitExceeded)
+    }
+}
+
+#[cfg(test)]
+mod oauth_tests {
+    use super::*;
+    #[test]
+    fn device_issuance_limits_both_dimensions() {
+        let limiter = OAuthDeviceRateLimiter::new();
+        let ip = "127.0.0.1".parse().unwrap();
+        for n in 0..10 {
+            assert!(limiter.check(ip, &format!("client-{n}")).is_ok());
+        }
+        assert!(limiter.check(ip, "another-client").is_err());
+        for n in 1..=30 {
+            assert!(limiter
+                .check(format!("10.0.0.{n}").parse().unwrap(), "shared-client")
+                .is_ok());
+        }
+        assert!(limiter
+            .check("10.0.1.1".parse().unwrap(), "shared-client")
+            .is_err());
+        assert!(limiter
+            .check("10.0.1.2".parse().unwrap(), "independent-client")
+            .is_ok());
+    }
+}

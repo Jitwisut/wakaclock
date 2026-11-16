@@ -100,3 +100,6 @@ mod team_financial_transaction;
 mod team_financial_transaction_tests;
 
 pub mod matched_authorship;
+
+pub mod session_revocation;
+pub mod oauth_device;

@@ -16,9 +16,9 @@ pub async fn create(
     Json(request): Json<MatchRequest>,
 ) -> Result<Json<MatchResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user = auth::resolve_user_id(&state, &headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_logged_time").await {
+    if !auth::require_scope(&state, &headers, "write_logged_time").await? {
         return Err(auth::forbidden_scope("write_logged_time"));
     }
     request.validate().map_err(|error| {

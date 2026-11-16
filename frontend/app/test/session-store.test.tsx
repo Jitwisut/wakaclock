@@ -1,8 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { QueryProvider } from '@/components/query-provider';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { WakaclockUserProvider, useWakaclockUserStore } from '@/lib/wakaclock/user-store';
+import { postLogout } from '@/lib/wakaclock/endpoints';
+import { WakaclockError } from '@/lib/wakaclock/client';
+vi.mock('@/lib/wakaclock/endpoints', () => ({ postLogout: vi.fn() }));
 import { getCurrentToken, notifyUnauthorized } from '@/lib/wakaclock/session';
 function token(payload: unknown) {
   return `header.${btoa(JSON.stringify(payload))}.signature`;
@@ -25,7 +28,10 @@ function mount() {
     </WakaclockUserProvider>
   );
 }
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  vi.mocked(postLogout).mockReset().mockResolvedValue(undefined);
+});
 afterEach(() => vi.restoreAllMocks());
 it('never overwrites the stored session with anonymous state while hydrating', () => {
   localStorage.setItem('wakaclock-session', JSON.stringify(session));
@@ -35,13 +41,13 @@ it('never overwrites the stored session with anonymous state while hydrating', (
   expect(JSON.parse(localStorage.getItem('wakaclock-session')!)).toEqual(session);
   expect(writes).not.toHaveBeenCalled();
 });
-it('hydrates a valid session, mirrors its token and clears both persistence and token on logout or rejection', () => {
+it('hydrates a valid session, mirrors its token and clears both persistence and token on logout or rejection', async () => {
   localStorage.setItem('wakaclock-session', JSON.stringify(session));
   mount();
   expect(screen.getByText('Ada')).toBeVisible();
   expect(getCurrentToken()).toBe(session.token);
   fireEvent.click(screen.getByText('Sign out'));
-  expect(screen.getByText('Signed out')).toBeVisible();
+  await waitFor(() => expect(screen.getByText('Signed out')).toBeVisible());
   expect(getCurrentToken()).toBeNull();
   expect(JSON.parse(localStorage.getItem('wakaclock-session')!)).toMatchObject({ token: null });
   fireEvent.click(screen.getByText('Sign in'));
@@ -136,4 +142,37 @@ it('starts a fresh query cache when another account takes over the same page', (
   fireEvent.click(screen.getByText('Switch account'));
   expect(screen.getByText('Grace')).toBeVisible();
   expect(screen.getByText('Empty cache')).toBeVisible();
+});
+
+it('keeps the session when server revocation fails', async () => {
+  vi.mocked(postLogout).mockRejectedValue(new WakaclockError('unavailable', 503));
+  localStorage.setItem('wakaclock-session', JSON.stringify(session));
+  mount();
+  fireEvent.click(screen.getByText('Sign out'));
+  await act(async () => {});
+  expect(screen.getByText('Ada')).toBeVisible();
+  expect(getCurrentToken()).toBe(session.token);
+});
+it('a delayed logout ACK cannot erase a newer login from another tab', async () => {
+  let acknowledge!: () => void;
+  vi.mocked(postLogout).mockReturnValue(
+    new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    })
+  );
+  localStorage.setItem('wakaclock-session', JSON.stringify(session));
+  mount();
+  fireEvent.click(screen.getByText('Sign out'));
+  const next = { userId: 'other', username: 'Grace', token: token({ exp: 9999999998 }) };
+  localStorage.setItem('wakaclock-session', JSON.stringify(next));
+  await act(async () => acknowledge());
+  expect(screen.getByText('Grace')).toBeVisible();
+  expect(getCurrentToken()).toBe(next.token);
+});
+it('clears an already expired session after logout returns 401', async () => {
+  vi.mocked(postLogout).mockRejectedValue(new WakaclockError('expired', 401));
+  localStorage.setItem('wakaclock-session', JSON.stringify(session));
+  mount();
+  fireEvent.click(screen.getByText('Sign out'));
+  await waitFor(() => expect(screen.getByText('Signed out')).toBeVisible());
 });

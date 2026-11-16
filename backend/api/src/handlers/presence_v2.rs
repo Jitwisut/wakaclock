@@ -30,6 +30,16 @@ pub struct PresenceApiError {
     message: String,
 }
 
+impl From<auth::AuthFailure> for PresenceApiError {
+    fn from((status, body): auth::AuthFailure) -> Self {
+        Self {
+            status,
+            message: body.0["error"].as_str()
+                .unwrap_or("authentication service temporarily unavailable").to_owned(),
+        }
+    }
+}
+
 impl PresenceApiError {
     fn new(status: StatusCode, message: impl Into<String>) -> Self {
         Self {
@@ -861,7 +871,7 @@ pub async fn stream_presence(
     Query(query): Query<StreamQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, PresenceApiError> {
     let redis = redis(&state)?;
-    let user_id = if let Some(user_id) = auth::require_account_user(&state, &headers).await {
+    let user_id = if let Some(user_id) = auth::require_account_user(&state, &headers).await? {
         user_id
     } else {
         let ticket = query
@@ -1425,7 +1435,7 @@ fn history_bounds(
 
 async fn user(state: &AppState, headers: &HeaderMap) -> Result<Uuid, PresenceApiError> {
     auth::require_account_user(state, headers)
-        .await
+        .await?
         .ok_or_else(PresenceApiError::unauthorized)
 }
 

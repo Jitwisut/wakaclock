@@ -338,9 +338,9 @@ async fn require_admin_scope(
     headers: &HeaderMap,
 ) -> Result<Uuid, (StatusCode, Json<Value>)> {
     let actor = auth::resolve_user_id(state, headers)
-        .await
+        .await?
         .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(state, headers, "manage_integrations").await {
+    if !auth::require_scope(state, headers, "manage_integrations").await? {
         return Err((
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "insufficient_scope", "scope": "manage_integrations" })),
