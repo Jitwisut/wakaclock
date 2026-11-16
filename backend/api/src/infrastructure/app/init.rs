@@ -8,7 +8,8 @@ use crate::infrastructure::database::ClickHouseClient;
 use crate::infrastructure::postgres::PostgresClient;
 use crate::infrastructure::presence_store::PresenceStore;
 use crate::infrastructure::rate_limiter::{
-    AiDiagnosticsRateLimiter, AnalyticsRateLimiter, AuthRateLimiter, PresenceRateLimiter, OAuthDeviceRateLimiter,
+    AiDiagnosticsRateLimiter, AnalyticsRateLimiter, AuthRateLimiter, EarlyAccessRateLimiter,
+    OAuthDeviceRateLimiter, PresenceRateLimiter,
 };
 use crate::infrastructure::redis_presence::RedisPresenceStore;
 use crate::repository::account_analytics::AccountAnalyticsRepository;
@@ -81,6 +82,7 @@ pub struct AppState {
     pub event_bus: Option<Arc<dyn EventBus>>,
     pub object_store: Option<Arc<dyn ObjectStore>>,
     pub auth_rate_limiter: Arc<AuthRateLimiter>,
+    pub early_access_rate_limiter: Arc<EarlyAccessRateLimiter>,
     pub oauth_device_rate_limiter: Arc<OAuthDeviceRateLimiter>,
     pub analytics_rate_limiter: Arc<AnalyticsRateLimiter>,
     pub presence_rate_limiter: Arc<PresenceRateLimiter>,
@@ -267,6 +269,7 @@ pub async fn create_app_state() -> Result<AppState> {
     };
 
     let auth_rate_limiter = AuthRateLimiter::new();
+    let early_access_rate_limiter = EarlyAccessRateLimiter::new();
     let oauth_device_rate_limiter = OAuthDeviceRateLimiter::new();
     let analytics_rate_limiter = AnalyticsRateLimiter::new();
     let presence_rate_limiter = PresenceRateLimiter::new();
@@ -521,6 +524,7 @@ pub async fn create_app_state() -> Result<AppState> {
         event_bus,
         object_store,
         auth_rate_limiter,
+        early_access_rate_limiter,
         oauth_device_rate_limiter,
         analytics_rate_limiter,
         presence_rate_limiter,

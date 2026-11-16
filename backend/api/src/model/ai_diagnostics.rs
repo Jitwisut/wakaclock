@@ -14,4 +14,6 @@ pub struct AiDiagnosticsV2Response {
     /// `postgres` means the snapshot survives an API restart; `ephemeral` means
     /// this compatibility deployment keeps it in process memory only.
     pub storage: &'static str,
+    /// More retained active devices exist than this bounded response includes.
+    pub incomplete: bool,
 }

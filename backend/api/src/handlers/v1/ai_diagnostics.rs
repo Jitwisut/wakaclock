@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{header::RETRY_AFTER, HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use serde_json::json;
@@ -45,30 +46,39 @@ pub async fn ingest_v2(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(report): Json<AiDiagnosticsReportV2>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, Response> {
     let user_id = auth::resolve_user_id(&state, &headers)
-        .await?
-        .ok_or_else(auth::unauthorized)?;
-    if !auth::require_scope(&state, &headers, "write_logged_time").await? {
-        return Err(auth::forbidden_scope("write_logged_time"));
+        .await
+        .map_err(IntoResponse::into_response)?
+        .ok_or_else(|| auth::unauthorized().into_response())?;
+    if !auth::require_scope(&state, &headers, "write_logged_time")
+        .await
+        .map_err(IntoResponse::into_response)?
+    {
+        return Err(auth::forbidden_scope("write_logged_time").into_response());
     }
-    validate_v2(&report)?;
+    validate_v2(&report).map_err(IntoResponse::into_response)?;
     if state
         .ai_diagnostics_rate_limiter
         .check(user_id, &report.device_id)
         .is_err()
     {
-        return Err(app_error(
+        let mut response = app_error(
             StatusCode::TOO_MANY_REQUESTS,
             "diagnostics upload rate limit exceeded",
-        ));
+        )
+        .into_response();
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from_static("60"));
+        return Err(response);
     }
     let report = sanitize_report_v2(report, &state.ai_certification_service);
     state
         .ai_diagnostics_service
         .record_v2(user_id, report)
         .await
-        .map_err(|error| app_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()))?;
+        .map_err(|error| diagnostics_write_error(error).into_response())?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -98,13 +108,14 @@ pub async fn get_v2(
     if !auth::require_scope(&state, &headers, "read_logged_time").await? {
         return Err(auth::forbidden_scope("read_logged_time"));
     }
-    let reports = state
+    let result = state
         .ai_diagnostics_service
-        .latest_v2(user_id)
+        .latest_v2_bounded(user_id)
         .await
         .map_err(|error| app_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()))?;
     Ok(Json(AiDiagnosticsV2Response {
-        reports,
+        reports: result.reports,
+        incomplete: result.incomplete,
         storage: state.ai_diagnostics_service.storage_mode(),
     }))
 }
@@ -314,6 +325,20 @@ fn sanitize_report_v2(
     report
 }
 
+fn diagnostics_write_error(error: anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {
+    if error.is::<crate::services::ai_diagnostics::DiagnosticsDeviceLimit>() {
+        app_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "diagnostics device limit reached",
+        )
+    } else {
+        app_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "diagnostics storage unavailable",
+        )
+    }
+}
+
 fn app_error(status: StatusCode, message: &str) -> (StatusCode, Json<serde_json::Value>) {
     (status, Json(json!({ "error": message })))
 }
@@ -340,6 +365,16 @@ mod tests {
                 ..Default::default()
             }],
         }
+    }
+
+    #[test]
+    fn device_quota_is_429_but_storage_failure_is_503() {
+        let quota =
+            diagnostics_write_error(crate::services::ai_diagnostics::DiagnosticsDeviceLimit.into());
+        assert_eq!(quota.0, StatusCode::TOO_MANY_REQUESTS);
+        let storage = diagnostics_write_error(anyhow::anyhow!("private database error"));
+        assert_eq!(storage.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!storage.1.to_string().contains("private database"));
     }
 
     #[test]

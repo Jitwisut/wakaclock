@@ -377,6 +377,7 @@ function AiDiagnosticsPanelContainer() {
   return (
     <AiDiagnosticsPanel
       error={hasSnapshot ? undefined : (v2.error ?? legacy.error)}
+      incomplete={v2.data?.incomplete}
       isLoading={v2.isLoading || (reports.length === 0 && legacy.isLoading)}
       report={reports[0] ?? legacyReport}
       reports={reports}

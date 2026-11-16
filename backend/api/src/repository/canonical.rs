@@ -37,6 +37,31 @@ pub fn canonical_winner_relation(predicate: &str, alias: &str) -> String {
     )
 }
 
+/// Rank every revision of the logical operations observed in a requested window,
+/// then filter the winners. The candidate scan is account/time scoped; the rank
+/// scan is account/key scoped. ID-less legacy rows are bounded directly by time
+/// and retain their independent-row semantics in `canonical_winner_relation`.
+/// Bind: user, user, start, end, start, end, start, end.
+pub fn canonical_window_relation(alias: &str) -> String {
+    // This is a candidate key, not a new identity rule. Keep the identified-row
+    // branches exactly aligned with the canonical partition above.
+    let key = "multiIf(
+        length(ifNull(h.ai_event_id, '')) > 0,
+        concat('event:', ifNull(h.ai_event_id, ''), '|session:', ifNull(h.session_id, ''), '|entity:', h.entity),
+        length(ifNull(h.ai_change_id, '')) > 0,
+        concat('change:', ifNull(h.ai_change_id, ''), '|session:', ifNull(h.session_id, ''), '|entity:', h.entity),
+        length(ifNull(h.heartbeat_id, '')) > 0,
+        concat('heartbeat:', ifNull(h.heartbeat_id, ''), '|session:', ifNull(h.session_id, ''), '|entity:', h.entity), '')";
+    let predicate = format!(
+        "h.user_id = ? AND (({key} != '' AND {key} IN (
+            SELECT {key} FROM wakaclock.heartbeats AS h
+            WHERE h.user_id = ? AND h.time >= ? AND h.time < ?
+        )) OR ({key} = '' AND h.time >= ? AND h.time < ?))"
+    );
+    let winners = canonical_winner_relation(&predicate, "window_winner");
+    format!("(SELECT * FROM {winners} WHERE time >= ? AND time < ?) AS {alias}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::canonical_winner_relation;

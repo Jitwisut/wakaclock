@@ -17,6 +17,7 @@ import type {
 
 export interface AiDiagnosticsPanelProps {
   error?: unknown;
+  incomplete?: boolean;
   isLoading?: boolean;
   report: AiDiagnosticsReport | AiDiagnosticsReportV2 | null | undefined;
   reports?: AiDiagnosticsReportV2[];
@@ -272,6 +273,7 @@ function DiagnosticsBody({ report }: { report: AiDiagnosticsReport }) {
 }
 
 export function AiDiagnosticsPanel({
+  incomplete = false,
   error,
   isLoading = false,
   report,
@@ -306,6 +308,11 @@ export function AiDiagnosticsPanel({
           isEmpty={!isLoading && !error && !report && reports.length === 0}
           isLoading={isLoading}
         >
+          {incomplete ? (
+            <p className="text-muted-foreground mb-3 text-sm" role="status">
+              Showing the latest device snapshots. Additional devices are omitted from this view.
+            </p>
+          ) : null}
           {reportBody}
         </QueryState>
       </CardContent>
