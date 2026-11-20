@@ -121,9 +121,9 @@ Test on a public website: localhost and private networks are always excluded.
 it tests login, project mapping, domain-only outbound records, offline replay across a browser restart, pause,
 disconnect and both UIs. It never accesses a real account. It records actual browser
 version/platform in `dist/smoke-report-chromium.json`, with screenshots in `dist/screenshots`.
-Set `ATOAXIS_BROWSER_CHANNEL=chrome` or `msedge` to test an installed browser with
-CDP unpacked installation in a temporary profile. Brave requires its own installed binary
-and manual release checks. See [release checklist](RELEASE-CHECKLIST.md) and
+Use `ATOAXIS_BROWSER_CHANNEL=chrome` or `msedge` for the installed browser. For Brave, set
+`ATOAXIS_BROWSER_CHANNEL=brave` and `ATOAXIS_BROWSER_EXECUTABLE` to the Brave executable.
+Each channel writes its own build, report and screenshots. See [release checklist](RELEASE-CHECKLIST.md) and
 [Store materials](STORE.md). The [latest test report](TEST-REPORT.md) distinguishes fixture
 success from production readiness. CI builds on Windows/macOS/Linux and archives Safari on macOS;
 a green build does not replace real focus/AFK/lock tests on each browser/OS.

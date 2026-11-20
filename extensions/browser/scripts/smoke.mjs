@@ -5,6 +5,14 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+const channel = process.env.ATOAXIS_BROWSER_CHANNEL ?? "chromium";
+let context;
+if (channel === "brave" && !process.env.ATOAXIS_BROWSER_EXECUTABLE)
+    throw new Error("Set ATOAXIS_BROWSER_EXECUTABLE to the Brave binary");
+if (!["chrome", "chromium", "msedge", "brave"].includes(channel))
+    throw new Error("Unsupported smoke browser: " + channel);
+const smokeDir = "dist/smoke-" + channel;
+const screenshotsDir = "dist/screenshots/" + channel;
 const received = [],
     requests = [];
 let available = true;
@@ -73,17 +81,16 @@ execFileSync(process.execPath, ["scripts/build.mjs"], {
     env: {
         ...process.env,
         ATOAXIS_BROWSER_API_URL: "http://127.0.0.1:" + port,
-        ATOAXIS_BROWSER_BUILD_DIR: "dist/smoke",
+        ATOAXIS_BROWSER_BUILD_DIR: smokeDir,
     },
 });
 const profile = await mkdtemp(path.join(tmpdir(), "atoaxis-browser-smoke-"));
-const extension = path.resolve("dist/smoke/chromium");
+const extension = path.resolve(smokeDir, "chromium");
 const errors = [];
-const channel = process.env.ATOAXIS_BROWSER_CHANNEL ?? "chromium";
-let context;
 async function launch() {
     const instance = await chromium.launchPersistentContext(profile, {
-        channel,
+        channel: channel === "brave" ? undefined : channel,
+        executablePath: process.env.ATOAXIS_BROWSER_EXECUTABLE,
         headless: true,
         ignoreDefaultArgs: ["--disable-extensions"],
         args:
@@ -133,6 +140,7 @@ try {
     let ui = await context.newPage();
     ui.on("pageerror", (error) => errors.push(error.message));
     await ui.goto("chrome-extension://" + id + "/options.html");
+    await ui.bringToFront();
     await expect(ui.locator("#connection")).toContainText("Connect your");
     await ui.locator("#connect").click();
     await expect(ui.locator("#device")).toContainText("TEST-CODE");
@@ -269,6 +277,7 @@ try {
     expect(restarted.id).toBe(id);
     ui = await context.newPage();
     await ui.goto("chrome-extension://" + id + "/options.html");
+    await ui.bringToFront();
     await expect(ui.locator("#connection")).toContainText("Connected");
     await expect
         .poll(
@@ -312,9 +321,9 @@ try {
         .toBe(false);
     await ui.bringToFront();
     await ui.reload();
-    await mkdir("dist/screenshots", { recursive: true });
+    await mkdir(screenshotsDir, { recursive: true });
     await ui.screenshot({
-        path: "dist/screenshots/options.png",
+        path: path.join(screenshotsDir, "options.png"),
         fullPage: true,
     });
     const popup = await context.newPage();
@@ -322,7 +331,7 @@ try {
     await expect(popup.locator("#connection")).toContainText("Connected");
     await popup
         .locator("body")
-        .screenshot({ path: "dist/screenshots/popup.png" });
+        .screenshot({ path: path.join(screenshotsDir, "popup.png") });
     await ui.evaluate(() => chrome.runtime.sendMessage({ type: "disconnect" }));
     expect(
         await ui.evaluate(() => chrome.runtime.sendMessage({ type: "status" })),

@@ -30,4 +30,4 @@ PYTHONPATH=. python3 -m unittest discover -s tests -v
 python3 -m compileall -q atoaxis
 ```
 
-A real Blender UI/headless smoke additionally requires Blender to be installed on the test host.
+On macOS or Linux, run `python3 tests/host_smoke.py /absolute/path/to/blender` for a headless ZIP install, enable, two-file save/reopen and disable test. It uses a temporary Blender profile and a recording CLI.

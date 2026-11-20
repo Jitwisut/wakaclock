@@ -1,3 +1,4 @@
+import { HeartbeatQueue, newDeliveryId, type QueuedHeartbeat } from './queue';
 import {
   buildEntity,
   buildHeartbeat,
@@ -11,6 +12,7 @@ const API_URL = __ATOAXIS_API_URL__;
 const CREDENTIAL_KEY = 'atoaxis-oauth-credential-v1';
 
 interface Credential {
+  queueScope: string;
   accessToken: string;
   expiresAt: number;
   refreshToken: string;
@@ -44,15 +46,11 @@ class ApiRequestError extends Error {
 }
 
 let credential: Credential | null = null;
+let credentialWrites: Promise<void> = Promise.resolve();
 let lastSentAtMs = 0;
-let pendingActivity: { entity: string; isWrite: boolean } | null = null;
-let heartbeatInFlight = false;
+const queue = new HeartbeatQueue(figma.clientStorage);
 let refreshInFlight: { refreshToken: string; promise: Promise<Credential | null> } | null = null;
 let pollingGeneration = 0;
-
-function queueActivity(entity: string, isWrite: boolean) {
-  pendingActivity = { entity, isWrite: isWrite || pendingActivity?.isWrite === true };
-}
 
 function postStatus(extra: Record<string, unknown> = {}) {
   figma.ui.postMessage({ type: 'status', connected: credential !== null, ...extra });
@@ -76,8 +74,9 @@ async function requestForm<T>(path: string, body: URLSearchParams, accessToken?:
   return payload as T;
 }
 
-function toCredential(token: TokenResponse): Credential {
+function toCredential(token: TokenResponse, queueScope = newDeliveryId()): Credential {
   return {
+    queueScope,
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
     expiresAt: Date.now() + Math.max(0, token.expires_in - 30) * 1000,
@@ -86,8 +85,12 @@ function toCredential(token: TokenResponse): Credential {
 
 async function storeCredential(next: Credential | null) {
   credential = next;
-  if (next) await figma.clientStorage.setAsync(CREDENTIAL_KEY, next);
-  else await figma.clientStorage.deleteAsync(CREDENTIAL_KEY);
+  const write = credentialWrites.catch(() => undefined).then(async () => {
+    if (next) await figma.clientStorage.setAsync(CREDENTIAL_KEY, next);
+    else await figma.clientStorage.deleteAsync(CREDENTIAL_KEY);
+  });
+  credentialWrites = write;
+  await write;
   postStatus();
 }
 
@@ -104,7 +107,7 @@ async function refreshCredential(current: Credential): Promise<Credential | null
           client_id: CLIENT_ID,
         })
       );
-      return toCredential(token);
+      return toCredential(token, current.queueScope);
     } catch (error) {
       // A rejected/rotated refresh token is terminal. Network failures and 5xx responses are
       // recoverable, so keep the stored refresh token and retry on later activity instead of
@@ -133,6 +136,10 @@ async function refreshStoredCredential(current: Credential): Promise<Credential 
 async function loadCredential() {
   const stored = (await figma.clientStorage.getAsync(CREDENTIAL_KEY)) as Credential | undefined;
   if (!stored?.accessToken || !stored.refreshToken) return;
+  if (!stored.queueScope) {
+    stored.queueScope = newDeliveryId();
+    await storeCredential(stored);
+  }
   if (stored.expiresAt > Date.now()) {
     credential = stored;
     return;
@@ -147,67 +154,42 @@ async function loadCredential() {
   }
 }
 
-async function postHeartbeatRequest(accessToken: string, entity: string, isWrite: boolean) {
+async function postHeartbeatRequest(accessToken: string, payload: QueuedHeartbeat) {
   return fetch(`${API_URL}/api/v1/heartbeats`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(buildHeartbeat(entity, isWrite)),
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   });
 }
 
-async function sendHeartbeat(entity: string, isWrite: boolean) {
-  if (heartbeatInFlight) {
-    queueActivity(entity, isWrite);
-    return;
-  }
-  heartbeatInFlight = true;
-  try {
-    if (!credential) {
-      queueActivity(entity, isWrite);
-      return;
-    }
-    if (credential.expiresAt <= Date.now()) {
-      const current = credential;
-      await refreshStoredCredential(current);
-      if (!credential) {
-        queueActivity(entity, isWrite);
-        return;
-      }
-    }
-
+async function flushQueue() {
+  const scope = credential?.queueScope;
+  if (!scope) return;
+  await queue.flush(scope, async (payload) => {
+    if (!credential || credential.queueScope !== scope) return { status: 401 };
+    if (credential.expiresAt <= Date.now()) await refreshStoredCredential(credential);
+    if (!credential || credential.queueScope !== scope) return { status: 401 };
     let current = credential;
-    let usedAccessToken = current.accessToken;
-    let response = await postHeartbeatRequest(usedAccessToken, entity, isWrite);
-
-    if (response.status === 401 && credential?.accessToken === usedAccessToken) {
-      // The server may expire/revoke an access token before our local timer does. Refresh once
-      // before treating the session as disconnected.
+    let response = await postHeartbeatRequest(current.accessToken, payload);
+    if (response.status === 401 && credential?.accessToken === current.accessToken) {
       await refreshStoredCredential(current);
-      if (!credential) {
-        queueActivity(entity, isWrite);
-        return;
-      }
+      if (!credential || credential.queueScope !== scope) return { status: 401 };
       current = credential;
-      usedAccessToken = current.accessToken;
-      response = await postHeartbeatRequest(usedAccessToken, entity, isWrite);
+      response = await postHeartbeatRequest(current.accessToken, payload);
     }
+    if (response.status === 401 && credential?.accessToken === current.accessToken) {
+      await storeCredential(null);
+    }
+    if (response.ok && credential?.queueScope === scope) {
+      lastSentAtMs = Date.now();
+      postStatus({ lastSentAt: lastSentAtMs });
+    }
+    return { status: response.status, retryAfter: response.headers.get('Retry-After') };
+  });
+}
 
-    if (response.status === 401) {
-      // Never let a late response from an older request erase a credential established by a
-      // newer device authorization/refresh operation.
-      if (credential?.accessToken === usedAccessToken) await storeCredential(null);
-      queueActivity(entity, isWrite);
-      return;
-    }
-    if (!response.ok) throw new Error(`heartbeat request failed (${response.status})`);
-    lastSentAtMs = Date.now();
-    postStatus({ lastSentAt: lastSentAtMs });
-  } finally {
-    heartbeatInFlight = false;
-  }
+function reportError(error: unknown) {
+  postStatus({ error: error instanceof Error ? error.message : 'Unable to persist or deliver activity' });
 }
 
 function currentEntity(): string {
@@ -215,19 +197,14 @@ function currentEntity(): string {
 }
 
 function recordActivity(isWrite: boolean) {
+  // Never bind disconnected activity to whichever account connects next.
+  const scope = credential?.queueScope;
+  if (!scope) return;
   const now = Date.now();
-  const entity = currentEntity();
-  if (shouldSendImmediately(isWrite, lastSentAtMs, now)) {
-    void sendHeartbeat(entity, isWrite).catch((error: unknown) => {
-      queueActivity(entity, isWrite);
-      postStatus({ error: error instanceof Error ? error.message : 'failed to send heartbeat' });
-    });
-  } else {
-    pendingActivity = {
-      entity,
-      isWrite: isWrite || pendingActivity?.isWrite === true,
-    };
-  }
+  const payload = { ...buildHeartbeat(currentEntity(), isWrite, now), heartbeat_id: newDeliveryId() };
+  const dueAt = shouldSendImmediately(isWrite, lastSentAtMs, now)
+    ? now : lastSentAtMs + NON_WRITE_HEARTBEAT_INTERVAL_MS;
+  void queue.enqueue(scope, payload, dueAt).then(flushQueue).catch(reportError);
 }
 
 async function connectDevice() {
@@ -256,13 +233,11 @@ async function connectDevice() {
           '/oauth/device/token',
           new URLSearchParams({ device_code: device.device_code, client_id: CLIENT_ID })
         );
+        if (generation !== pollingGeneration) return;
         await storeCredential(toCredential(token));
+        lastSentAtMs = 0;
         postStatus({ connecting: false, userCode: null });
-        if (pendingActivity) {
-          const pending = pendingActivity;
-          pendingActivity = null;
-          await sendHeartbeat(pending.entity, pending.isWrite);
-        }
+        void flushQueue().catch(reportError);
         return;
       } catch (error) {
         const message = error instanceof Error ? error.message : '';
@@ -294,9 +269,13 @@ async function main() {
     if (message.type === 'connect') void connectDevice();
     if (message.type === 'disconnect') {
       pollingGeneration += 1;
-      void storeCredential(null);
+      void storeCredential(null).catch(reportError);
     }
-    if (message.type === 'close') figma.closePlugin();
+    if (message.type === 'close') {
+      pollingGeneration += 1;
+      void Promise.all([queue.settled(), credentialWrites])
+        .then(() => figma.closePlugin()).catch(reportError);
+    }
   };
 
   figma.on('selectionchange', () => recordActivity(false));
@@ -312,16 +291,8 @@ async function main() {
     }
   });
 
-  setInterval(() => {
-    if (!pendingActivity) return;
-    if (Date.now() - lastSentAtMs < NON_WRITE_HEARTBEAT_INTERVAL_MS && !pendingActivity.isWrite) return;
-    const pending = pendingActivity;
-    pendingActivity = null;
-    void sendHeartbeat(pending.entity, pending.isWrite).catch((error: unknown) => {
-      queueActivity(pending.entity, pending.isWrite);
-      postStatus({ error: error instanceof Error ? error.message : 'failed to send heartbeat' });
-    });
-  }, 1_000);
+  setInterval(() => { void flushQueue().catch(reportError); }, 1_000);
+  void flushQueue().catch(reportError);
 
   recordActivity(false);
 }
