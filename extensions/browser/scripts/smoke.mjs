@@ -15,6 +15,7 @@ const smokeDir = "dist/smoke-" + channel;
 const screenshotsDir = "dist/screenshots/" + channel;
 const received = [],
     requests = [];
+const offlinePayloads = new Map();
 let available = true;
 let fixtureToken = "fixture-access";
 const server = createServer(async (req, res) => {
@@ -56,11 +57,12 @@ const server = createServer(async (req, res) => {
     if (req.url === "/api/v1/users/current/projects")
         return res.end(JSON.stringify({ data: [{ name: "Documentation" }] }));
     if (req.url === "/api/v1/heartbeats.bulk") {
+        const payload = JSON.parse(Buffer.concat(chunks).toString());
         if (!available) {
+            for (const item of payload) offlinePayloads.set(item.heartbeat_id, item);
             res.statusCode = 503;
             return res.end("{}");
         }
-        const payload = JSON.parse(Buffer.concat(chunks).toString());
         received.push(...payload);
         res.statusCode = 202;
         return res.end(
@@ -101,6 +103,7 @@ async function launch() {
                   ]
                 : ["--enable-unsafe-extension-debugging"],
     });
+    context = instance; // Ensure cleanup if extension installation fails.
     let loadedId;
     if (channel !== "chromium") {
         const cdp = await instance.browser().newBrowserCDPSession();
@@ -269,8 +272,25 @@ try {
     const offlineState = await ui.evaluate(() =>
         chrome.runtime.sendMessage({ type: "status" }),
     );
-    // A full process restart loses the worker, while the same isolated profile retains IndexedDB.
-    // Native worker termination remains a manual release check; CDP does not reliably stop extension workers.
+    if (channel === "chrome") {
+        await ui.evaluate(() => chrome.runtime.sendMessage({ type: "retry" }));
+        expect(offlinePayloads.size).toBeGreaterThan(0);
+        const cdp = await context.newCDPSession(ui);
+        try {
+            const targets = async () => (await cdp.send("Target.getTargets")).targetInfos;
+            const worker = (await targets()).find(target =>
+                target.type === "service_worker" && target.url.startsWith("chrome-extension://" + id + "/"));
+            expect(worker).toBeDefined();
+            await cdp.send("ServiceWorker.enable");
+            await cdp.send("ServiceWorker.stopAllWorkers");
+            await expect.poll(async () => (await targets()).some(t => t.targetId === worker.targetId))
+                .toBe(false);
+            await expect.poll(status).toMatchObject({ connected: true });
+            expect((await status()).pending).toBeGreaterThanOrEqual(offlineState.pending);
+        } finally {
+            await cdp.detach();
+        }
+    }
     await context.close();
     const restarted = await launch();
     context = restarted.instance;
@@ -301,6 +321,10 @@ try {
                 ).pending,
         )
         .toBe(0);
+    for (const [id, payload] of offlinePayloads) {
+        expect(received.filter(item => item.heartbeat_id === id)).toEqual([payload]);
+    }
+
     await ui.evaluate(
         (settings) =>
             chrome.runtime.sendMessage({
@@ -358,6 +382,7 @@ try {
             "internal-page-excluded",
             "offline-replay",
             "browser-restart",
+            ...(channel === "chrome" ? ["service-worker-stop-recovery"] : []),
             "pause",
             "disconnect",
             "popup",

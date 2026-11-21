@@ -1,5 +1,9 @@
 # Browser extension test reports
 
+## Chrome worker recovery — 20 November 2026
+
+Chrome 157.0.8103.79 on macOS arm64 passed 16 loopback checks. While the fixture API returned 503, the test stopped the extension service worker via DevTools and verified its target disappeared. A status request woke the extension and confirmed that its queue survived. A full browser restart followed. After recovery the fixture received every previously rejected ID exactly once, with its original payload. Physical idle/lock/sleep and production account readback remain pending.
+
 ## Chrome candidate — 19 November 2026 (Asia/Bangkok)
 
 Google Chrome 157.0.8103.79, macOS 27.2.1 arm64, extension 0.1.0. Browser runtime source matched `origin/main` at `6606ce62`. This run reused the installed npm dependencies.

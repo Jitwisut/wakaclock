@@ -10,6 +10,8 @@ import {
 const CLIENT_ID = 'atoaxis_figma';
 const API_URL = __ATOAXIS_API_URL__;
 const CREDENTIAL_KEY = 'atoaxis-oauth-credential-v1';
+// Explicit host signature prevents lib.dom from hiding sandbox API mismatches.
+const hostFetch = fetch as unknown as (url: string, init?: FetchOptions) => Promise<FetchResponse>;
 
 interface Credential {
   queueScope: string;
@@ -47,8 +49,16 @@ class ApiRequestError extends Error {
 
 let credential: Credential | null = null;
 let credentialWrites: Promise<void> = Promise.resolve();
+let captureWrites: Promise<void> = Promise.resolve();
 let lastSentAtMs = 0;
-const queue = new HeartbeatQueue(figma.clientStorage);
+const queueWarnings = new Set<string>();
+const queue = new HeartbeatQueue(figma.clientStorage, Date.now, (message) => {
+  postStatus({ error: message });
+  if (!queueWarnings.has(message)) {
+    queueWarnings.add(message);
+    figma.notify(message, { error: true, timeout: 10_000 });
+  }
+});
 let refreshInFlight: { refreshToken: string; promise: Promise<Credential | null> } | null = null;
 let pollingGeneration = 0;
 
@@ -56,14 +66,14 @@ function postStatus(extra: Record<string, unknown> = {}) {
   figma.ui.postMessage({ type: 'status', connected: credential !== null, ...extra });
 }
 
-async function requestForm<T>(path: string, body: URLSearchParams, accessToken?: string): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+async function requestForm<T>(path: string, body: Record<string, string>, accessToken?: string): Promise<T> {
+  const response = await hostFetch(`${API_URL}${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
     },
-    body: body.toString(),
+    body: Object.entries(body).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&'),
   });
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
@@ -101,11 +111,11 @@ async function refreshCredential(current: Credential): Promise<Credential | null
     try {
       const token = await requestForm<TokenResponse>(
         '/oauth/token',
-        new URLSearchParams({
+        {
           grant_type: 'refresh_token',
           refresh_token: current.refreshToken,
           client_id: CLIENT_ID,
-        })
+        }
       );
       return toCredential(token, current.queueScope);
     } catch (error) {
@@ -155,25 +165,30 @@ async function loadCredential() {
 }
 
 async function postHeartbeatRequest(accessToken: string, payload: QueuedHeartbeat) {
-  return fetch(`${API_URL}/api/v1/heartbeats`, {
+  return hostFetch(`${API_URL}/api/v1/heartbeats`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
 }
 
+async function isStoredScope(scope: string): Promise<boolean> {
+  const stored = await figma.clientStorage.getAsync(CREDENTIAL_KEY) as Credential | undefined;
+  return stored?.queueScope === scope;
+}
+
 async function flushQueue() {
   const scope = credential?.queueScope;
   if (!scope) return;
   await queue.flush(scope, async (payload) => {
-    if (!credential || credential.queueScope !== scope) return { status: 401 };
+    if (!credential || credential.queueScope !== scope || !await isStoredScope(scope)) return { status: 401 };
     if (credential.expiresAt <= Date.now()) await refreshStoredCredential(credential);
-    if (!credential || credential.queueScope !== scope) return { status: 401 };
+    if (!credential || credential.queueScope !== scope || !await isStoredScope(scope)) return { status: 401 };
     let current = credential;
     let response = await postHeartbeatRequest(current.accessToken, payload);
     if (response.status === 401 && credential?.accessToken === current.accessToken) {
       await refreshStoredCredential(current);
-      if (!credential || credential.queueScope !== scope) return { status: 401 };
+      if (!credential || credential.queueScope !== scope || !await isStoredScope(scope)) return { status: 401 };
       current = credential;
       response = await postHeartbeatRequest(current.accessToken, payload);
     }
@@ -184,7 +199,7 @@ async function flushQueue() {
       lastSentAtMs = Date.now();
       postStatus({ lastSentAt: lastSentAtMs });
     }
-    return { status: response.status, retryAfter: response.headers.get('Retry-After') };
+    return { status: response.status, retryAfter: Object.entries(response.headersObject).find(([name]) => name.toLowerCase() === 'retry-after')?.[1] };
   });
 }
 
@@ -204,7 +219,29 @@ function recordActivity(isWrite: boolean) {
   const payload = { ...buildHeartbeat(currentEntity(), isWrite, now), heartbeat_id: newDeliveryId() };
   const dueAt = shouldSendImmediately(isWrite, lastSentAtMs, now)
     ? now : lastSentAtMs + NON_WRITE_HEARTBEAT_INTERVAL_MS;
-  void queue.enqueue(scope, payload, dueAt).then(flushQueue).catch(reportError);
+  captureWrites = captureWrites.catch(() => undefined).then(async () => {
+    await credentialWrites;
+    if (!await isStoredScope(scope)) return;
+    await queue.enqueue(scope, payload, dueAt);
+  });
+  void captureWrites.then(flushQueue).catch(reportError);
+}
+
+function approvalLink(uri: string, code: string): string {
+  // The main sandbox has no URL API. Accept only an absolute HTTPS URL with a
+  // conventional hostname, no credentials, whitespace, controls or backslashes.
+  if (!/^https:\/\/[a-z0-9.-]+(?::[0-9]+)?(?:[/?#]|$)/i.test(uri) || /[\s\u0000-\u001f\u007f\\]/.test(uri)) {
+    throw new Error('Invalid device approval URL');
+  }
+  const hashAt = uri.indexOf('#');
+  const fragment = hashAt < 0 ? '' : uri.slice(hashAt);
+  const base = hashAt < 0 ? uri : uri.slice(0, hashAt);
+  const queryAt = base.indexOf('?');
+  const path = queryAt < 0 ? base : base.slice(0, queryAt);
+  const params = queryAt < 0 ? [] : base.slice(queryAt + 1).split('&').filter((param) =>
+    param && decodeURIComponent(param.split('=')[0]) !== 'code');
+  params.push(`code=${encodeURIComponent(code)}`);
+  return `${path}?${params.join('&')}${fragment}`;
 }
 
 async function connectDevice() {
@@ -213,15 +250,14 @@ async function connectDevice() {
   try {
     const device = await requestForm<DeviceCodeResponse>(
       '/oauth/device/code',
-      new URLSearchParams({ client_id: CLIENT_ID, scope: 'write_logged_time' })
+      { client_id: CLIENT_ID, scope: 'write_logged_time' }
     );
-    const approvalUrl = new URL(device.verification_uri);
-    approvalUrl.searchParams.set('code', device.user_code);
-    figma.openExternal(approvalUrl.toString());
+    const approvalUrl = approvalLink(device.verification_uri, device.user_code);
+    figma.openExternal(approvalUrl);
     postStatus({
       connecting: true,
       userCode: device.user_code,
-      verificationUri: approvalUrl.toString(),
+      verificationUri: approvalUrl,
     });
 
     const deadline = Date.now() + device.expires_in * 1000;
@@ -231,7 +267,7 @@ async function connectDevice() {
       try {
         const token = await requestForm<TokenResponse>(
           '/oauth/device/token',
-          new URLSearchParams({ device_code: device.device_code, client_id: CLIENT_ID })
+          { device_code: device.device_code, client_id: CLIENT_ID }
         );
         if (generation !== pollingGeneration) return;
         await storeCredential(toCredential(token));
@@ -273,7 +309,7 @@ async function main() {
     }
     if (message.type === 'close') {
       pollingGeneration += 1;
-      void Promise.all([queue.settled(), credentialWrites])
+      void Promise.all([captureWrites, queue.settled(), credentialWrites])
         .then(() => figma.closePlugin()).catch(reportError);
     }
   };
