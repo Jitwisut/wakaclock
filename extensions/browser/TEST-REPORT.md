@@ -1,4 +1,31 @@
-# Browser extension test report — 7 October 2026 (Asia/Bangkok)
+# Browser extension test reports
+
+## Chrome worker recovery — 20 November 2026
+
+Chrome 157.0.8103.79 on macOS arm64 passed 16 loopback checks. While the fixture API returned 503, the test stopped the extension service worker via DevTools and verified its target disappeared. A status request woke the extension and confirmed that its queue survived. A full browser restart followed. After recovery the fixture received every previously rejected ID exactly once, with its original payload. Physical idle/lock/sleep and production account readback remain pending.
+
+## Chrome candidate — 19 November 2026 (Asia/Bangkok)
+
+Google Chrome 157.0.8103.79, macOS 27.2.1 arm64, extension 0.1.0. Browser runtime source matched `origin/main` at `6606ce62`. This run reused the installed npm dependencies.
+
+| Check | Observed result |
+| --- | --- |
+| Package validation | TypeScript, 47 unit tests, build and package entrypoint checks passed. |
+| Installed Chrome, loopback API fixture | All 15 smoke checks passed at 03:56 UTC. The fixture received 16 records. Scenarios include device authorization, token rotation, domain-only data, project mapping, pause, exclusions and recovery of queued activity across a browser restart. |
+| Production-configured Chromium ZIP | SHA-256 `3c45dd7aa6f35f6e76a27d3c6a41af8c397f3137b65693af794abe2c0b728a23`. Extracted the ZIP and loaded it in a fresh Chrome profile. Options and popup rendered, the idle setting was 5 minutes, tracking was off, queue and total were zero, and the manifest restricted its API permission to the production origin and disallowed incognito. |
+| Production account and dashboard | The production health probe could not resolve `api.atoaxis.com` from this host. Production OAuth, receipt and dashboard readback remain pending. |
+| Physical device behavior | AFK, screen lock, sleep/wake and abrupt worker termination remain open. The automated navigation fixture uses a 24-hour idle threshold. |
+
+Repeat from `extensions/browser` on a Mac with Google Chrome and unzip:
+
+```sh
+npm run validate
+ATOAXIS_BROWSER_CHANNEL=chrome npm run test:smoke
+npm run package
+node scripts/check-chrome-install.mjs
+```
+
+## Browser extension test report — 7 October 2026 (Asia/Bangkok)
 
 Baseline: `d82a659` on `codex/browser-extension-v1`. This test run expands the
 Chromium integration script to cover refresh rotation, SPA transitions and stopping time.

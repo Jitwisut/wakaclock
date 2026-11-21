@@ -72,7 +72,11 @@ for (const family of ["chromium", "firefox", "safari"]) {
     const manifest = JSON.parse(
         await readFile(family + "/manifest.json", "utf8"),
     );
-    manifest.host_permissions = [api.origin + "/*"];
+    // Firefox match patterns cannot include a port. For isolated HTTP development
+    // builds, grant the loopback host while requests still use the configured port.
+    const permissionOrigin = family === "firefox" && api.protocol === "http:"
+        ? api.protocol + "//" + api.hostname : api.origin;
+    manifest.host_permissions = [permissionOrigin + "/*"];
     await writeFile(dir + "/manifest.json", JSON.stringify(manifest, null, 2));
     for (const size of [16, 32, 48, 128, 512, 1024])
         await writeFile(dir + "/icons/icon-" + size + ".png", png(size));

@@ -2,10 +2,9 @@
 
 Date/time in reports is UTC; user-facing release dates use Asia/Bangkok.
 Never replace a pending cell with Passed based solely on another browser's engine.
-See [the 7 October test report](TEST-REPORT.md) for the current production DNS blocker
-and the expanded Chrome integration assertions.
+See [dated browser results](TEST-REPORT.md) for run details and the production DNS check.
 
-## Local evidence
+## Local evidence recorded on 7 October 2026
 
 - Extension TypeScript build and 47 unit/reliability tests passed: run `npm run validate`.
 - Mozilla Add-ons Linter: run `npm run lint:firefox` (warnings are errors).
@@ -34,13 +33,13 @@ and the expanded Chrome integration assertions.
 
 ## Real browser / OS acceptance matrix
 
-| Browser | macOS                                                          | Windows      | Linux        |
-| ------- | -------------------------------------------------------------- | ------------ | ------------ |
-| Chrome  | Fixture integration report + manual OS idle/lock/sleep pending | Pending      | Pending      |
-| Edge    | Pending                                                        | Pending      | Pending      |
-| Brave   | Pending                                                        | Pending      | Pending      |
-| Firefox | Manifest validated; real installation/timing pending           | Pending      | Pending      |
-| Safari  | Native sandbox and real timing pending                         | Not targeted | Not targeted |
+| Browser | macOS arm64 (through 20 November 2026) | Windows | Linux |
+| --- | --- | --- | --- |
+| Chrome | Production-configured ZIP installation; 16 loopback checks including worker stop and restart. Physical AFK/lock/sleep pending. | Pending | Pending |
+| Edge | 15 loopback checks incl. restart; physical timing pending. | Pending | Pending |
+| Brave | 15 loopback checks incl. restart; physical timing pending. | Pending | Pending |
+| Firefox | Temporary installation and 10 loopback checks; physical timing and signed installation pending. | Pending | Pending |
+| Safari | Unsigned archive built; signed companion & native timing pending. | Not targeted | Not targeted |
 
 Record browser version, OS version, architecture, timestamp and observed elapsed time
 for every result. CI OS builds only validate packaging/unit tests, not the whole real matrix.

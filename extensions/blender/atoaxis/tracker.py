@@ -15,7 +15,7 @@ _QUEUE = ActivityQueue()
 def _current_entity() -> str:
     # Unsaved files have no stable local identity. Ignoring them avoids inventing a path or
     # sending document contents merely to distinguish one temporary scene from another.
-    return bpy.data.filepath or ""
+    return getattr(bpy.data, "filepath", "") or ""
 
 
 def _configured_cli_path() -> str:

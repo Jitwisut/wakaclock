@@ -5,8 +5,17 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+const channel = process.env.ATOAXIS_BROWSER_CHANNEL ?? "chromium";
+let context;
+if (channel === "brave" && !process.env.ATOAXIS_BROWSER_EXECUTABLE)
+    throw new Error("Set ATOAXIS_BROWSER_EXECUTABLE to the Brave binary");
+if (!["chrome", "chromium", "msedge", "brave"].includes(channel))
+    throw new Error("Unsupported smoke browser: " + channel);
+const smokeDir = "dist/smoke-" + channel;
+const screenshotsDir = "dist/screenshots/" + channel;
 const received = [],
     requests = [];
+const offlinePayloads = new Map();
 let available = true;
 let fixtureToken = "fixture-access";
 const server = createServer(async (req, res) => {
@@ -48,11 +57,12 @@ const server = createServer(async (req, res) => {
     if (req.url === "/api/v1/users/current/projects")
         return res.end(JSON.stringify({ data: [{ name: "Documentation" }] }));
     if (req.url === "/api/v1/heartbeats.bulk") {
+        const payload = JSON.parse(Buffer.concat(chunks).toString());
         if (!available) {
+            for (const item of payload) offlinePayloads.set(item.heartbeat_id, item);
             res.statusCode = 503;
             return res.end("{}");
         }
-        const payload = JSON.parse(Buffer.concat(chunks).toString());
         received.push(...payload);
         res.statusCode = 202;
         return res.end(
@@ -73,17 +83,16 @@ execFileSync(process.execPath, ["scripts/build.mjs"], {
     env: {
         ...process.env,
         ATOAXIS_BROWSER_API_URL: "http://127.0.0.1:" + port,
-        ATOAXIS_BROWSER_BUILD_DIR: "dist/smoke",
+        ATOAXIS_BROWSER_BUILD_DIR: smokeDir,
     },
 });
 const profile = await mkdtemp(path.join(tmpdir(), "atoaxis-browser-smoke-"));
-const extension = path.resolve("dist/smoke/chromium");
+const extension = path.resolve(smokeDir, "chromium");
 const errors = [];
-const channel = process.env.ATOAXIS_BROWSER_CHANNEL ?? "chromium";
-let context;
 async function launch() {
     const instance = await chromium.launchPersistentContext(profile, {
-        channel,
+        channel: channel === "brave" ? undefined : channel,
+        executablePath: process.env.ATOAXIS_BROWSER_EXECUTABLE,
         headless: true,
         ignoreDefaultArgs: ["--disable-extensions"],
         args:
@@ -94,6 +103,7 @@ async function launch() {
                   ]
                 : ["--enable-unsafe-extension-debugging"],
     });
+    context = instance; // Ensure cleanup if extension installation fails.
     let loadedId;
     if (channel !== "chromium") {
         const cdp = await instance.browser().newBrowserCDPSession();
@@ -133,6 +143,7 @@ try {
     let ui = await context.newPage();
     ui.on("pageerror", (error) => errors.push(error.message));
     await ui.goto("chrome-extension://" + id + "/options.html");
+    await ui.bringToFront();
     await expect(ui.locator("#connection")).toContainText("Connect your");
     await ui.locator("#connect").click();
     await expect(ui.locator("#device")).toContainText("TEST-CODE");
@@ -261,14 +272,32 @@ try {
     const offlineState = await ui.evaluate(() =>
         chrome.runtime.sendMessage({ type: "status" }),
     );
-    // A full process restart loses the worker, while the same isolated profile retains IndexedDB.
-    // Native worker termination remains a manual release check; CDP does not reliably stop extension workers.
+    if (channel === "chrome") {
+        await ui.evaluate(() => chrome.runtime.sendMessage({ type: "retry" }));
+        expect(offlinePayloads.size).toBeGreaterThan(0);
+        const cdp = await context.newCDPSession(ui);
+        try {
+            const targets = async () => (await cdp.send("Target.getTargets")).targetInfos;
+            const worker = (await targets()).find(target =>
+                target.type === "service_worker" && target.url.startsWith("chrome-extension://" + id + "/"));
+            expect(worker).toBeDefined();
+            await cdp.send("ServiceWorker.enable");
+            await cdp.send("ServiceWorker.stopAllWorkers");
+            await expect.poll(async () => (await targets()).some(t => t.targetId === worker.targetId))
+                .toBe(false);
+            await expect.poll(status).toMatchObject({ connected: true });
+            expect((await status()).pending).toBeGreaterThanOrEqual(offlineState.pending);
+        } finally {
+            await cdp.detach();
+        }
+    }
     await context.close();
     const restarted = await launch();
     context = restarted.instance;
     expect(restarted.id).toBe(id);
     ui = await context.newPage();
     await ui.goto("chrome-extension://" + id + "/options.html");
+    await ui.bringToFront();
     await expect(ui.locator("#connection")).toContainText("Connected");
     await expect
         .poll(
@@ -292,6 +321,10 @@ try {
                 ).pending,
         )
         .toBe(0);
+    for (const [id, payload] of offlinePayloads) {
+        expect(received.filter(item => item.heartbeat_id === id)).toEqual([payload]);
+    }
+
     await ui.evaluate(
         (settings) =>
             chrome.runtime.sendMessage({
@@ -312,9 +345,9 @@ try {
         .toBe(false);
     await ui.bringToFront();
     await ui.reload();
-    await mkdir("dist/screenshots", { recursive: true });
+    await mkdir(screenshotsDir, { recursive: true });
     await ui.screenshot({
-        path: "dist/screenshots/options.png",
+        path: path.join(screenshotsDir, "options.png"),
         fullPage: true,
     });
     const popup = await context.newPage();
@@ -322,7 +355,7 @@ try {
     await expect(popup.locator("#connection")).toContainText("Connected");
     await popup
         .locator("body")
-        .screenshot({ path: "dist/screenshots/popup.png" });
+        .screenshot({ path: path.join(screenshotsDir, "popup.png") });
     await ui.evaluate(() => chrome.runtime.sendMessage({ type: "disconnect" }));
     expect(
         await ui.evaluate(() => chrome.runtime.sendMessage({ type: "status" })),
@@ -349,6 +382,7 @@ try {
             "internal-page-excluded",
             "offline-replay",
             "browser-restart",
+            ...(channel === "chrome" ? ["service-worker-stop-recovery"] : []),
             "pause",
             "disconnect",
             "popup",

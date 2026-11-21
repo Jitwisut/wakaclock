@@ -15,6 +15,8 @@ Authentication uses the OAuth device flow with the first-party public client `at
 Tokens are stored with `figma.clientStorage`; the plugin never asks for or stores an AtoAxis API
 key. Access tokens request only `write_logged_time`.
 
+Activity waiting for delivery is kept in Figma client storage with its capture time and ID. Reopening the plugin retries records for the same authorization grant. A new connection has a separate queue. Older single-array queue entries are retained for recovery; a warning identifies affected connections.
+
 ## Development
 
 The manifest contains a development-only numeric ID. Before publishing to Figma Community,
