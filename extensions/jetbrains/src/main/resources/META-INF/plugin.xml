@@ -1,0 +1,16 @@
+<idea-plugin>
+    <id>com.atoaxis.jetbrains</id>
+    <name>AtoAxis</name>
+    <vendor>AtoAxis</vendor>
+    <description>Opt-in IDEA and PyCharm activity tracking pilot using an explicitly configured AtoAxis CLI. No source text is captured.</description>
+    <depends>com.intellij.modules.platform</depends>
+    <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity implementation="org.atoaxis.jetbrains.TrackingStartup"/>
+        <notificationGroup id="AtoAxis" displayType="BALLOON"/>
+    </extensions>
+    <actions>
+        <action id="AtoAxis.Configure" class="org.atoaxis.jetbrains.ConfigureTrackingAction" text="Configure AtoAxis Tracking…" description="Opt in or disable AtoAxis tracking and select a trusted CLI">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
