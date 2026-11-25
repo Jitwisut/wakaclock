@@ -12,6 +12,85 @@
       "cwd": "frontend/app"
     },
     {
+      "name": "nextjs-upgrade-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "3002"
+      ],
+      "env": {
+        "NEXT_PUBLIC_APP_URL": "http://localhost:3002",
+        "NEXT_PUBLIC_WAKACLOCK_API_URL": "http://localhost:8080"
+      },
+      "port": 3002,
+      "cwd": ".worktrees/nextjs-16-4-5/frontend/app"
+    },
+    {
+      "name": "backend-cors-3002",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": [
+        "run",
+        "--bin",
+        "wakaclock-server"
+      ],
+      "env": {
+        "CORS_ORIGINS": "http://localhost:3000,http://localhost:3002"
+      },
+      "port": 8080,
+      "cwd": "backend/api"
+    },
+    {
+      "name": "wakaclock-backend",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": [
+        "run",
+        "--bin",
+        "wakaclock-server"
+      ],
+      "port": 8080,
+      "cwd": "backend/api"
+    },
+    {
+      "name": "main-latest-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "port": 3000,
+      "cwd": ".worktrees/main-latest/frontend/app"
+    },
+    {
+      "name": "main-latest-backend",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": [
+        "run",
+        "--bin",
+        "wakaclock-server"
+      ],
+      "env": {
+        "CARGO_TARGET_DIR": "/Users/jitwisutthobut/Desktop/wakaclock/backend/api/target"
+      },
+      "port": 8080,
+      "cwd": ".worktrees/main-latest/backend/api"
+    },
+    {
+      "name": "brand-logo-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "3005"
+      ],
+      "port": 3005,
+      "cwd": ".claude/worktrees/affectionate-liskov-b59825/frontend/app"
+    },
+    {
       "name": "time-homepage-frontend",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
@@ -35,6 +114,31 @@
       ],
       "port": 3003,
       "cwd": ".worktrees/time-homepage/frontend/app"
+    },
+    {
+      "name": "cinematic-marketing-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "3007"
+      ],
+      "port": 3007,
+      "cwd": ".worktrees/cinematic-marketing/frontend/app"
+    },
+    {
+      "name": "cinematic-marketing-prod",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "next",
+        "start",
+        "-p",
+        "3008"
+      ],
+      "port": 3008,
+      "cwd": ".worktrees/cinematic-marketing/frontend/app"
     }
   ]
 }
