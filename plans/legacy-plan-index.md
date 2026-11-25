@@ -7,6 +7,8 @@ records and must not be treated as current status:
 
 | Record | Disposition |
 |---|---|
+| `plans/project-intelligence-roadmap-2026-11-08.md` | **Queued** for the next Project Intelligence workstream: all 13 Evolution/Replay/Flagship ideas. Planning only; does not replace the attribution roadmap or resume paused Receipt/Team work. |
+| `plans/free-tier-plan-2026-11-10.md` | **Planned** Free tier + personal Pro plan (history window, feature gating, personal billing). Planning only; numbers are proposals awaiting owner decisions. |
 | `plan.md` | Legacy/superseded; broad original product plan. §9.22 (Kafka/RabbitMQ) survives only as the design referenced by `plans/plan-kafka-rabbitmq-adoption.md`, which wins where they conflict. |
 | `plans/plan-kafka-rabbitmq-adoption.md` | **Active** for the Kafka/RabbitMQ message-broker workstream (outside the AI-attribution scope of `ROADMAP.md`). |
 | `planai.md`, `planai2.md` | Architecture/reference only. |
