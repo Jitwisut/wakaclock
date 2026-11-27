@@ -36,6 +36,7 @@ import { FxPoints, FxRings } from '../voyage/place-fx';
 import { fxBurst, placeFx, voyage } from '../voyage/state';
 import { TOUR } from '../voyage/world-places';
 
+import { buildPlace } from './buildings';
 import { chartBars } from './charts';
 import { demoMinute, ROOM } from './desk';
 import {
@@ -57,9 +58,10 @@ import {
   type TokenKind,
 } from './file-plan';
 import { IslandHeart } from './hearts';
-import { buildIsland, ISLAND_RADIUS } from './island';
+import { buildIsland, buildIslandWater, ISLAND_RADIUS, islandPlan } from './island';
 import { registerPick } from './pick';
 import { play, showTip, towerText } from './play';
+import { Birds, IslandSky, makeSkyMaterials, SkyClock, type SkyMaterials } from './sky';
 import { SPEAKERS } from './story';
 
 /**
@@ -871,21 +873,42 @@ function StopFx({ id, particles, stop }: { id: string; particles: number; stop: 
  * a soft contact shadow under the chart, and the chart itself. It bobs very slightly.
  */
 function FloatingIsland({
+  detail,
   id,
   materials,
   particles,
   shapes,
+  sky,
   stop,
 }: {
+  detail: number;
   id: string;
-  materials: { brass: Material; ground: Material; shade: Material };
+  materials: { brass: Material; ground: MeshStandardMaterial; shade: Material };
   particles: number;
   shapes: SharedShapes;
+  sky: SkyMaterials;
   stop: number;
 }) {
   const float = useRef<Group>(null);
-  const geometry = useMemo(() => buildIsland(stop * 31 + 7), [stop]);
-  useEffect(() => () => geometry.dispose(), [geometry]);
+  const seed = stop * 31 + 7;
+  const built = useMemo(() => {
+    const plan = islandPlan(seed);
+    return {
+      ground: buildIsland(seed, detail),
+      place: buildPlace(id, plan, seed, detail),
+      plan,
+      water: buildIslandWater(seed),
+    };
+  }, [detail, id, seed]);
+  useEffect(
+    () => () => {
+      built.ground.dispose();
+      built.water.dispose();
+      built.place.body.dispose();
+      built.place.glow.dispose();
+    },
+    [built]
+  );
   useFrame(() => {
     const group = float.current;
     if (!group) return;
@@ -909,7 +932,10 @@ function FloatingIsland({
         receiveShadow
       />
       <group ref={float}>
-        <mesh castShadow geometry={geometry} material={materials.ground} receiveShadow />
+        <mesh castShadow geometry={built.ground} material={materials.ground} receiveShadow />
+        <mesh geometry={built.water} material={sky.water} receiveShadow />
+        <mesh castShadow geometry={built.place.body} material={materials.ground} receiveShadow />
+        <mesh geometry={built.place.glow} material={sky.glow} />
         <mesh
           geometry={shapes.plane}
           material={materials.shade}
@@ -920,6 +946,16 @@ function FloatingIsland({
         <ChartTowers id={id} stop={stop} />
         <IslandHeart stop={stop} />
         <StopFx id={id} particles={particles} stop={stop} />
+        <IslandSky
+          anchors={built.place.anchors}
+          detail={detail}
+          ground={materials.ground}
+          id={id}
+          materials={sky}
+          plan={built.plan}
+          seed={seed}
+          stop={stop}
+        />
       </group>
     </>
   );
@@ -933,7 +969,7 @@ interface SharedShapes {
 }
 
 /** Every place's landmark beside the file, turned a little toward the approaching camera. */
-export function Landmarks({ particles }: { particles: number }) {
+export function Landmarks({ detail = 1, particles }: { detail?: number; particles: number }) {
   const shared = useMemo(() => {
     const shadow = dotTexture();
     return {
@@ -958,6 +994,7 @@ export function Landmarks({ particles }: { particles: number }) {
         plane: new BoxGeometry(1, 1, 0.001),
         rod: new CylinderGeometry(0.32, 0.32, 1, 16),
       },
+      sky: makeSkyMaterials(),
       texture: shadow,
     };
   }, []);
@@ -965,22 +1002,36 @@ export function Landmarks({ particles }: { particles: number }) {
     () => () => {
       for (const material of Object.values(shared.materials)) material.dispose();
       for (const shape of Object.values(shared.geometry)) shape.dispose();
+      for (const material of [
+        shared.sky.cloud,
+        shared.sky.fall,
+        shared.sky.glow,
+        shared.sky.rainbow,
+        shared.sky.water,
+      ]) {
+        material.dispose();
+      }
+      shared.sky.streaks.dispose();
       shared.texture.dispose();
     },
     [shared]
   );
   return (
     <group>
+      <SkyClock materials={shared.sky} />
+      <Birds count={Math.round(6 + 9 * detail)} />
       {TOUR.map((id, index) => {
         const stop = index + 1;
         const [x, y, z] = stopBase(stop);
         return (
           <group key={id} position={[x, y, z]} rotation={[0, 0.5, 0]}>
             <FloatingIsland
+              detail={detail}
               id={id}
               materials={shared.materials}
               particles={particles}
               shapes={shared.geometry}
+              sky={shared.sky}
               stop={stop}
             />
           </group>

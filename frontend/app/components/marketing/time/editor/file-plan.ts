@@ -32,8 +32,11 @@ export const INDENT = 3.2;
  */
 export const STEP_DROP = 0.05;
 export const VALLEY_DROP = 0.85;
-/** Landmarks stand in the left margin, beyond the gutter. */
-export const LANDMARK_X = -38;
+/**
+ * Landmarks stand in the left margin, beyond the gutter. Moved out from −38 when the islands
+ * grew 40% (owner 2026-11-27), so their rims still clear the line numbers.
+ */
+export const LANDMARK_X = -43;
 
 export type TokenKind = 'comment' | 'keyword' | 'name' | 'number' | 'string';
 

@@ -166,6 +166,15 @@ function dayNow() {
   return { ...light, lamp: light.lamp * lampOff, room: light.room * (1 - 0.3 * day.ended) };
 }
 
+/**
+ * How far into the evening the day is, 0 (bright afternoon) to 1 (night): the islands'
+ * windows and lanterns light up and the fireflies come out with it.
+ */
+export function eveningLevel() {
+  const light = dayNow();
+  return Math.min(1, Math.max(0, (light.lamp - 1.6) / 3.6));
+}
+
 const sunColour = new Color('#ffcf9a');
 const nightColour = new Color('#7f95c8');
 const roomDay = new Color('#2c231b');

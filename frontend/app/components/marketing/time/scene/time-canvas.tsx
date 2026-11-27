@@ -163,7 +163,7 @@ function Scene({ quality }: { quality: TimeSceneQuality }) {
           <RouteHearts />
         </>
       ) : null}
-      {stage >= 2 ? <Landmarks particles={quality.fxParticles} /> : null}
+      {stage >= 2 ? <Landmarks detail={quality.islandDetail} particles={quality.fxParticles} /> : null}
       {stage >= 3 ? (
         <>
           <RingClock stops={TOUR.length} />
