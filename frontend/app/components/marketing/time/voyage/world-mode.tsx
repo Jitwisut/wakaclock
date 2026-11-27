@@ -65,6 +65,22 @@ const COMMIT = 0.18;
 const SETTLE_MS = 240;
 /** Time the camera gets to arrive before a linked-to place opens by itself. */
 const ARRIVE_MS = 1100;
+/** Screen heights a finger drags for the camera to follow one whole stop. */
+const TOUCH_SPAN = 1.6;
+/** A swipe at least this long (px) moves one stop, like a slide; shorter ones settle back. */
+const SWIPE_PX = 40;
+
+/**
+ * Whether a scroll container under the input still has room to move in that direction.
+ * A container that does not scroll (it fits) never holds the input.
+ */
+function canScroll(element: Element | null, delta: number) {
+  if (!(element instanceof HTMLElement)) return false;
+  const { overflowY } = window.getComputedStyle(element);
+  if (overflowY !== 'auto' && overflowY !== 'scroll') return false;
+  if (delta > 0) return element.scrollTop + element.clientHeight < element.scrollHeight - 1;
+  return element.scrollTop > 0;
+}
 
 interface Hotspot {
   href?: string;
@@ -253,8 +269,20 @@ export function WorldMode({ rootId }: { rootId: string }) {
   useEffect(() => {
     const site = frame.current;
     if (!site) return;
+    let touchX: null | number = null;
     let touchY: null | number = null;
     let touching = false;
+    /** Vertical distance (px) this touch has moved the tour, not counting what a panel took. */
+    let swept = 0;
+    /** The gesture is sideways: it never moves the tour. */
+    let sideways = false;
+    /**
+     * Where the touch began. Its moves and its end are heard there, not on the window: the
+     * title card unmounts as the tour leaves a place, and a touch that began on it keeps
+     * firing at the detached card, which no longer bubbles to the window (the tour would
+     * wait for an end that never came).
+     */
+    let touchTarget: EventTarget | null = null;
 
     const settle = () => {
       const from = base.current;
@@ -298,37 +326,72 @@ export function WorldMode({ rootId }: { rootId: string }) {
     /**
      * Input over an open reading panel belongs to the panel, whether or not it has more to
      * scroll: reading must never sail the visitor away. The voyage continues from the scene
-     * beside the panel, the compass, the keys or the close button.
+     * beside the panel, the compass, the keys or the close button. On the map view the hero
+     * scrolls itself where it does not fit (phones, short windows) and holds the input until
+     * its end; past that the tour starts. `delta` > 0 is forward.
      */
-    const heldByPanel = (target: EventTarget | null) => {
+    const holds = (target: EventTarget | null, delta: number) => {
       const element = target instanceof Element ? target : null;
-      const reading = site.dataset.worldOpen && site.dataset.worldOpen !== TRAVEL;
-      return Boolean(reading && element?.closest('.tx-chapters, .tx-day'));
+      const scroller = element?.closest('.tx-chapters, .tx-day') ?? null;
+      const shown = site.dataset.worldOpen;
+      if (shown && shown !== TRAVEL) return Boolean(scroller);
+      return !shown && canScroll(scroller, delta);
     };
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
       const pixels = event.deltaMode === 1 ? event.deltaY * 32 : event.deltaY;
-      if (heldByPanel(event.target)) return;
+      if (holds(event.target, pixels)) return;
       advance(pixels / STOP_PIXELS);
     };
+    const onTargetMove = (event: Event) => onTouchMove(event as TouchEvent);
+    const release = () => {
+      touchTarget?.removeEventListener('touchmove', onTargetMove);
+      touchTarget?.removeEventListener('touchend', onTouchEnd);
+      touchTarget?.removeEventListener('touchcancel', onTouchEnd);
+      touchTarget = null;
+    };
     const onTouchStart = (event: TouchEvent) => {
+      release();
+      touchTarget = event.target;
+      touchTarget?.addEventListener('touchmove', onTargetMove, { passive: true });
+      touchTarget?.addEventListener('touchend', onTouchEnd, { passive: true });
+      touchTarget?.addEventListener('touchcancel', onTouchEnd, { passive: true });
       touching = true;
+      touchX = event.touches[0]?.clientX ?? null;
       touchY = event.touches[0]?.clientY ?? null;
+      swept = 0;
+      sideways = false;
     };
-    const onTouchMove = (event: TouchEvent) => {
+    function onTouchMove(event: TouchEvent) {
+      const x = event.touches[0]?.clientX;
       const y = event.touches[0]?.clientY;
-      if (y === undefined || touchY === null) return;
+      if (x === undefined || y === undefined || touchX === null || touchY === null) return;
       const moved = touchY - y;
+      // A gesture that starts sideways (a carousel, a horizontal list) stays sideways.
+      if (swept === 0 && Math.abs(touchX - x) > Math.abs(moved)) sideways = true;
+      touchX = x;
       touchY = y;
-      if (heldByPanel(event.target)) return;
-      advance(moved / (window.innerHeight * 3.2));
-    };
-    const onTouchEnd = () => {
+      if (sideways || holds(event.target, moved)) return;
+      swept += moved;
+      advance(moved / (window.innerHeight * TOUCH_SPAN));
+    }
+    function onTouchEnd() {
+      release();
       touching = false;
+      touchX = null;
       touchY = null;
       window.clearTimeout(settleTimer.current);
+      // A deliberate swipe moves one stop each way, however short; a nudge settles back.
+      if (Math.abs(swept) >= SWIPE_PX) {
+        const forward = swept > 0;
+        swept = 0;
+        if (forward && base.current === TOUR.length) endDay();
+        else lockTo(base.current + (forward ? 1 : -1));
+        return;
+      }
+      swept = 0;
       settleTimer.current = window.setTimeout(settle, 80);
-    };
+    }
     const onKey = (event: KeyboardEvent) => {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
@@ -339,7 +402,7 @@ export function WorldMode({ rootId }: { rootId: string }) {
       else if (event.key === 'End') lockTo(TOUR.length);
       else if (forward || back) {
         // With the panel open the arrow keys read it; they do not leave the island.
-        if (heldByPanel(document.activeElement)) return;
+        if (holds(document.activeElement, forward ? 1 : -1)) return;
         if (forward && base.current === TOUR.length) endDay();
         else lockTo(base.current + (forward ? 1 : -1));
       } else return;
@@ -347,16 +410,11 @@ export function WorldMode({ rootId }: { rootId: string }) {
     };
     window.addEventListener('wheel', onWheel, { passive: true });
     window.addEventListener('touchstart', onTouchStart, { passive: true });
-    window.addEventListener('touchmove', onTouchMove, { passive: true });
-    window.addEventListener('touchend', onTouchEnd, { passive: true });
-    window.addEventListener('touchcancel', onTouchEnd, { passive: true });
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('touchstart', onTouchStart);
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('touchend', onTouchEnd);
-      window.removeEventListener('touchcancel', onTouchEnd);
+      release();
       window.removeEventListener('keydown', onKey);
     };
   }, [lockTo]);

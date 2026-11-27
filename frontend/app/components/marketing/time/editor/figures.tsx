@@ -760,10 +760,21 @@ function toPage(point: Vector3, camera: Camera, box: { height: number; width: nu
   };
 }
 
+/**
+ * The width the bubble may use: the window, less the minimap when it stands on the right
+ * edge (tablets and desktops), so the bubble never slides under it.
+ */
+function usableWidth(minimap: HTMLElement | null) {
+  const rect = minimap?.getBoundingClientRect();
+  if (!rect || rect.width === 0 || rect.left < window.innerWidth / 2) return window.innerWidth;
+  return rect.left;
+}
+
 export function StoryProjector() {
   const { camera, gl } = useThree();
   const bubble = useRef<HTMLElement | null>(null);
   const card = useRef<HTMLElement | null>(null);
+  const minimap = useRef<HTMLElement | null>(null);
   /** Where the bubble is drawn, eased toward where it should be: no jitter, no jumps. */
   const shown = useRef({ ready: false, x: 0, y: 0 });
   useFrame((_, rawDelta) => {
@@ -775,6 +786,9 @@ export function StoryProjector() {
     const speaker = element?.dataset.speaker as Speaker | undefined;
     if (!element || !speaker) return;
     if (!card.current?.isConnected) card.current = document.querySelector('.tx-world-card');
+    if (!minimap.current?.isConnected) {
+      minimap.current = document.querySelector('.tx-world-compass');
+    }
     // The canvas can be wider than the window (phones): place by its real box on the page.
     const box = gl.domElement.getBoundingClientRect();
     const speakerHead = toPage(speakerAt.copy(figureHeads[speaker]), camera, box);
@@ -785,7 +799,7 @@ export function StoryProjector() {
       card: rect && rect.width > 0 ? rect : null,
       head: speakerHead,
       other,
-      viewWidth: window.innerWidth,
+      viewWidth: usableWidth(minimap.current),
     });
     const state = shown.current;
     if (!state.ready) Object.assign(state, { ready: true, x: place.x, y: place.y });
