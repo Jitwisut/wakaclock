@@ -89,8 +89,9 @@ function useStagedScene(post: boolean) {
 
 /**
  * The miniature's lens (owner decision 2026-11-15, full tier only): soft ambient occlusion
- * where parts meet, a gentle tilt-shift that softens only the far edge of the frame (the
- * band with the islands and the figurines stays sharp — uv y 0.4, low on the screen), and the tone mapping the renderer gives up to the pass.
+ * where parts meet, a gentle tilt-shift that softens only the very edges of the frame (the
+ * band with the islands and the figurines stays sharp — uv y 0.55 with a wide taper; moved up
+ * and softened 2026-11-27 when the owner asked for sharper islands), and the tone mapping the renderer gives up to the pass.
  * Off until the scene has compiled; its own shaders compile on its first frame, and the
  * staged loader holds the reveal until after that frame (measured: ~120 ms, unseen).
  */
@@ -105,7 +106,7 @@ function MiniatureLens({ on }: { on: boolean }) {
         intensity={2.4}
         quality="medium"
       />
-      <TiltShift2 blur={0.05} end={[1, 0.4]} start={[0, 0.4]} taper={0.75} />
+      <TiltShift2 blur={0.035} end={[1, 0.55]} start={[0, 0.55]} taper={0.95} />
       <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
     </EffectComposer>
   );
@@ -152,7 +153,7 @@ function Scene({ quality }: { quality: TimeSceneQuality }) {
       <Invalidator />
       <RoomLight stops={TOUR.length} />
       <ScenePicker />
-      <Lamp shadows={quality.shadows} />
+      <Lamp shadows={quality.shadows} sharp={quality.bloom} />
       <RoomGlow />
       <Desk />
       <CodeFile />
@@ -163,7 +164,9 @@ function Scene({ quality }: { quality: TimeSceneQuality }) {
           <RouteHearts />
         </>
       ) : null}
-      {stage >= 2 ? <Landmarks particles={quality.fxParticles} /> : null}
+      {stage >= 2 ? (
+        <Landmarks detail={quality.islandDetail} particles={quality.fxParticles} />
+      ) : null}
       {stage >= 3 ? (
         <>
           <RingClock stops={TOUR.length} />
