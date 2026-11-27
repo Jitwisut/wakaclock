@@ -2824,3 +2824,175 @@ html:has(.wakaclock-marketing[data-world='on']) {
     }
   }
 }
+
+/* ─── Phones and short screens (2026-11-27) ─────────────────────────────────────────────
+   Owner: keep the world on phones, but it must scroll and nothing may overlap. The hero is
+   taller than a phone (and than a laptop's window), so on the map view it scrolls by itself:
+   world-mode.tsx lets its own scroll run until the end, then the swipe or wheel starts the
+   tour. */
+@media (max-width: 767px), (max-height: 820px) {
+  .wakaclock-marketing[data-world='on']:is(:not([data-world-open]), [data-world-open='']) {
+    & .tx-chapters:has(#tx-c0[data-world-open]) {
+      position: fixed;
+      z-index: 20;
+      inset: 60px 0 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: none;
+    }
+    & .tx-chapters:has(#tx-c0[data-world-open])::-webkit-scrollbar {
+      display: none;
+    }
+    & #tx-c0 {
+      min-height: 0;
+    }
+  }
+}
+@media (max-width: 767px), (max-height: 560px) {
+  .wakaclock-marketing[data-world='on']:is(:not([data-world-open]), [data-world-open='']) {
+    & #tx-c0 {
+      flex-direction: column;
+      align-items: stretch;
+      min-height: 0;
+      padding-top: 40px;
+      padding-bottom: calc(40px + env(safe-area-inset-bottom));
+    }
+    /* The hero's own cue closes it: keep swiping and the tour begins. */
+    & #tx-c0 .tx-scroll-cue {
+      position: static;
+      display: flex !important;
+      align-self: center;
+      margin: 40px 0 0;
+      transform: none;
+    }
+    /* The hero is the reading here: no minimap or speech bubble over its copy. */
+    & :is(.tx-world-compass, .tx-story-bubble) {
+      display: none;
+    }
+  }
+}
+@media (max-width: 767px) {
+  .wakaclock-marketing[data-world='on'] #tx-c0 .tx-h1:not(:lang(th)) {
+    font-size: clamp(2.5rem, 11.5vw, 3rem);
+  }
+}
+@media (max-width: 767px), (max-height: 560px) {
+  .wakaclock-marketing[data-world='on'] {
+    /* The minimap sits top-right under the header, clear of the title card below. */
+    & .tx-world-compass {
+      top: 72px;
+      right: 12px;
+      bottom: auto;
+      left: auto;
+      height: 168px;
+      translate: none;
+    }
+    /* The title card rests on the bottom edge, above the browser's own bar. */
+    & .tx-world-card {
+      top: auto;
+      translate: none;
+      right: 12px;
+      bottom: calc(12px + env(safe-area-inset-bottom));
+      left: 12px;
+    }
+    /* The speech bubble docks under the header like a game's dialogue box, instead of
+       chasing a figurine that a narrow screen often crops. */
+    & .tx-story-bubble,
+    & .tx-story-bubble[data-side='left'] {
+      top: 72px;
+      right: 76px;
+      left: 12px;
+      width: auto;
+      max-width: none;
+      translate: none;
+    }
+    & .tx-story-bubble::after {
+      display: none;
+    }
+    /* The reading sheet covers most of the screen: its close button is the way back, so the
+       minimap and the place markers step aside instead of crowding its top edge. */
+    &[data-world-open]:not([data-world-open=''], [data-world-open='travel'])
+      :is(.tx-world-compass, .tx-world-hotspots) {
+      display: none;
+    }
+    /* Sailing past places shows their dots only; each place names itself on its card. */
+    &[data-world-open='travel'] .tx-world-hotspots li[data-edge=''] .tx-world-spot:not([data-far]) {
+      max-width: 30px;
+      gap: 0;
+      padding: 0 0 0 10px;
+    }
+    &[data-world-open='travel']
+      .tx-world-hotspots
+      li[data-edge='']
+      .tx-world-spot:not([data-far])
+      .tx-world-label {
+      opacity: 0;
+    }
+  }
+}
+/* Phones on their side: little height, so the card and the bubble go compact and keep to
+   their own corners (card bottom-left, bubble top-left, minimap top-right). */
+@media (max-height: 560px) {
+  .wakaclock-marketing[data-world='on'] {
+    & .tx-world-card {
+      right: auto;
+      width: min(440px, calc(100vw - 100px));
+      padding: 14px 18px;
+    }
+    & .tx-world-card-index {
+      margin-bottom: 6px;
+    }
+    & .tx-world-card-title {
+      margin-bottom: 12px;
+      font-size: 20px;
+    }
+    & .tx-world-card-open {
+      min-height: 40px;
+    }
+    & .tx-world-card-hint {
+      display: none;
+    }
+    & .tx-story-bubble,
+    & .tx-story-bubble[data-side='left'] {
+      right: auto;
+      width: min(440px, calc(100vw - 100px));
+      padding: 8px 12px 10px;
+      font-size: 14px;
+    }
+  }
+}
+/* The day's readout would sit on the hero copy and the title card of a short screen. */
+@media (max-height: 560px) {
+  .wakaclock-marketing[data-world='on'] .tx-root .tx-clock {
+    display: none;
+  }
+}
+/* Tablets: the hero copy runs most of the way across, and the opening line's bubble would
+   land on it. The map view reads as the hero alone; the story speaks from the first stop. */
+@media (max-width: 1023px) {
+  .wakaclock-marketing[data-world='on']:is(:not([data-world-open]), [data-world-open=''])
+    .tx-story-bubble {
+    display: none;
+  }
+}
+/* Very short screens (a phone on its side with Safari's bars, ~230px of page): the card
+   keeps the bottom-left, the bubble moves beside it at the bottom-right, and the minimap
+   shrinks to the height there is. */
+@media (max-height: 420px) {
+  .wakaclock-marketing[data-world='on'] {
+    & .tx-world-compass {
+      height: min(168px, calc(100svh - 84px));
+    }
+    & .tx-world-card {
+      width: min(400px, 48vw);
+    }
+    & .tx-story-bubble,
+    & .tx-story-bubble[data-side='left'] {
+      top: auto;
+      right: 76px;
+      bottom: calc(12px + env(safe-area-inset-bottom));
+      left: auto;
+      width: min(360px, calc(52vw - 100px));
+    }
+  }
+}

@@ -354,6 +354,84 @@ describe('world mode', () => {
     vi.useRealTimers();
   });
 
+  it('swipes one stop at a time on touch screens, wherever the swipe starts', () => {
+    vi.useFakeTimers();
+    const site = homepage();
+    const { container } = render(<WorldMode rootId="tx-experience" />);
+    // jsdom has no Touch: a plain event carrying the one finger the handlers read.
+    const touch = (type: string, target: EventTarget, y: number, x = 100) =>
+      act(() => {
+        const event = new Event(type, { bubbles: true });
+        const touches = type === 'touchend' ? [] : [{ clientX: x, clientY: y }];
+        Object.defineProperty(event, 'touches', { value: touches });
+        target.dispatchEvent(event);
+      });
+    const swipe = (target: EventTarget, from: number, to: number, x = 100, toX = x) => {
+      touch('touchstart', target, from, x);
+      touch('touchmove', target, to, toX);
+      touch('touchend', target, to, toX);
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+    };
+    const scene = site.querySelector('.tx-day') as HTMLElement;
+
+    // A short swipe (a thumb's flick, far less than a screen) moves one whole stop.
+    swipe(scene, 500, 440);
+    expect(timeMotion.tourTarget).toBe(1);
+    expect(site.dataset.worldAt).toBe(TOUR[0]);
+    // A nudge settles back where it was; a sideways swipe never moves the tour.
+    swipe(scene, 500, 480);
+    expect(timeMotion.tourTarget).toBe(1);
+    swipe(scene, 500, 490, 100, 260);
+    expect(timeMotion.tourTarget).toBe(1);
+    // And one back.
+    swipe(scene, 400, 460);
+    expect(timeMotion.tourTarget).toBe(0);
+
+    // A swipe that starts on the title card still ends: the card unmounts as the tour
+    // leaves its place, and the touch keeps firing at the detached card.
+    swipe(scene, 500, 440);
+    // The scene is not running here: say the camera has arrived at the first stop.
+    timeMotion.tour = 1;
+    const open = container.querySelector('.tx-world-card-open') as HTMLButtonElement;
+    touch('touchstart', open, 500);
+    touch('touchmove', open, 100);
+    expect(open.isConnected).toBe(false);
+    touch('touchend', open, 100);
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(timeMotion.tourTarget).toBe(2);
+    expect(site.dataset.worldAt).toBe(TOUR[1]);
+    vi.useRealTimers();
+  });
+
+  it('lets a hero taller than the screen scroll to its end before the tour starts', () => {
+    vi.useFakeTimers();
+    const site = homepage();
+    render(<WorldMode rootId="tx-experience" />);
+    // Phones and laptop windows: the stylesheet makes the hero's column scroll by itself.
+    const column = site.querySelector('.tx-chapters') as HTMLElement;
+    column.style.overflowY = 'auto';
+    Object.defineProperty(column, 'scrollHeight', { configurable: true, value: 1000 });
+    Object.defineProperty(column, 'clientHeight', { configurable: true, value: 400 });
+    const hero = site.querySelector('#tx-c0') as HTMLElement;
+    const wheel = (deltaY: number) =>
+      act(() => {
+        hero.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY }));
+        vi.advanceTimersByTime(400);
+      });
+    // Not at its end yet: the hero takes the input and the tour stays on the map.
+    wheel(5000);
+    expect(timeMotion.tourTarget).toBe(0);
+    // At its end, the same input sails on.
+    column.scrollTop = 600;
+    wheel(5000);
+    expect(timeMotion.tourTarget).toBe(1);
+    vi.useRealTimers();
+  });
+
   it('offers the stops on the compass', () => {
     homepage();
     const { container } = render(<WorldMode rootId="tx-experience" />);
