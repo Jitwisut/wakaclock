@@ -1,4 +1,4 @@
-import { type BufferGeometry, Vector3 } from 'three';
+import { type BufferGeometry, Float32BufferAttribute, Vector3 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 import { seededRandom } from '../time-data';
@@ -115,7 +115,7 @@ function twinlights(k: Kit) {
     k.body.push(post(1.2, 1.4, 0.8, [side, g, 0], STONE, 8));
     k.body.push(post(0.75, 0.95, 8, [side, g + 0.8, 0], WALL, 8));
     k.glow.push(post(0.6, 0.6, 1, [side, g + 8.8, 0], '#f2c27a', 8));
-    k.body.push(cone(1.05, 1.8, [side, g + 9.8, 0], cap, 8));
+    k.body.push(cone(1.05, 1.8, [side, g + 9.8, 0], cap, 8, 0, 'smooth'));
     k.anchors.lights.push([side, g + 9.3, 0]);
     pane(k, [side, g + 4, 0.82], [0.3, 0.8]);
   }
@@ -286,7 +286,7 @@ function trading(k: Kit) {
     k.body.push(eaves);
     y += 0.9;
   }
-  k.body.push(cone(0.35, 3, [0, y - 0.6, 0], GOLD, 8));
+  k.body.push(cone(0.35, 3, [0, y - 0.6, 0], GOLD, 8, 0, 'smooth'));
   for (let ring = 0; ring < 3; ring += 1) {
     k.body.push(post(0.5, 0.5, 0.12, [0, y + ring * 0.6, 0], GOLD, 10));
   }
@@ -376,6 +376,35 @@ function place(k: Kit, slot: Slot, facing: number) {
   }
 }
 
+/**
+ * Gives a building an `outlineNormal` per vertex: the average of every face normal meeting
+ * at that point. The outline shell (scene.tsx) pushes the surface out along it, so the shell
+ * stays closed round corners where the faces' own normals would split it apart.
+ */
+export function addOutlineNormals(geometry: BufferGeometry) {
+  const position = geometry.getAttribute('position');
+  const normal = geometry.getAttribute('normal');
+  const sums = new Map<string, [number, number, number]>();
+  const keyAt = (index: number) =>
+    `${position.getX(index).toFixed(3)},${position.getY(index).toFixed(3)},${position.getZ(index).toFixed(3)}`;
+  for (let index = 0; index < position.count; index += 1) {
+    const key = keyAt(index);
+    const sum = sums.get(key) ?? [0, 0, 0];
+    sum[0] += normal.getX(index);
+    sum[1] += normal.getY(index);
+    sum[2] += normal.getZ(index);
+    sums.set(key, sum);
+  }
+  const out = new Float32Array(position.count * 3);
+  for (let index = 0; index < position.count; index += 1) {
+    const [x, y, z] = sums.get(keyAt(index)) as [number, number, number];
+    const length = Math.hypot(x, y, z) || 1;
+    out.set([x / length, y / length, z / length], index * 3);
+  }
+  geometry.setAttribute('outlineNormal', new Float32BufferAttribute(out, 3));
+  return geometry;
+}
+
 function merge(parts: BufferGeometry[]) {
   const merged = mergeGeometries(parts, false) as BufferGeometry;
   for (const part of parts) part.dispose();
@@ -421,5 +450,9 @@ export function buildPlace(id: string, plan: IslandPlan, seed: number, detail = 
     );
     all.body.push(stone);
   }
-  return { anchors: all.anchors, body: merge(all.body), glow: merge(all.glow) };
+  return {
+    anchors: all.anchors,
+    body: addOutlineNormals(merge(all.body)),
+    glow: merge(all.glow),
+  };
 }

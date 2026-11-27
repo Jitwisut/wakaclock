@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef } from 'react';
 
 import { useFrame } from '@react-three/fiber';
 import {
+  BackSide,
   BufferAttribute,
   BufferGeometry,
   Color,
@@ -95,15 +96,38 @@ export interface SkyMaterials {
   cloud: MeshStandardMaterial;
   fall: MeshBasicMaterial;
   glow: MeshStandardMaterial;
+  outline: MeshBasicMaterial;
   rainbow: MeshBasicMaterial;
   streaks: DataTexture;
   water: MeshStandardMaterial;
+}
+
+/** How far the buildings' dark outline stands out from their surface (m): about a pixel. */
+const OUTLINE = 0.07;
+
+/**
+ * The buildings' thin dark outline (owner 2026-11-27, "sharper"): an inside-out shell pushed
+ * out along each vertex's averaged normal, drawn behind the building, like the figurines'.
+ */
+function outlineMaterial() {
+  const material = new MeshBasicMaterial({ color: '#1a130e', side: BackSide });
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec3 outlineNormal;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>\ntransformed += outlineNormal * ${OUTLINE.toFixed(3)};`
+      );
+  };
+  material.customProgramCacheKey = () => 'island-outline';
+  return material;
 }
 
 export function makeSkyMaterials(): SkyMaterials {
   const streaks = streakTexture();
   return {
     streaks,
+    outline: outlineMaterial(),
     // Cotton wool: pale, matte and a little self-lit, so it stays soft white in lamplight.
     cloud: new MeshStandardMaterial({
       color: '#f3ede4',

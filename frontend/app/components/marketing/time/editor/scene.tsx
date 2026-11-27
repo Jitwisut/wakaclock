@@ -935,6 +935,7 @@ function FloatingIsland({
         <mesh castShadow geometry={built.ground} material={materials.ground} receiveShadow />
         <mesh geometry={built.water} material={sky.water} receiveShadow />
         <mesh castShadow geometry={built.place.body} material={materials.ground} receiveShadow />
+        <mesh geometry={built.place.body} material={sky.outline} />
         <mesh geometry={built.place.glow} material={sky.glow} />
         <mesh
           geometry={shapes.plane}
@@ -974,8 +975,8 @@ export function Landmarks({ detail = 1, particles }: { detail?: number; particle
     const shadow = dotTexture();
     return {
       materials: {
+        // Lit by each part's own normals: smooth trees and stones, crisp cliffs and roofs.
         ground: new MeshStandardMaterial({
-          flatShading: true,
           metalness: 0,
           roughness: 0.92,
           vertexColors: true,
@@ -1006,6 +1007,7 @@ export function Landmarks({ detail = 1, particles }: { detail?: number; particle
         shared.sky.cloud,
         shared.sky.fall,
         shared.sky.glow,
+        shared.sky.outline,
         shared.sky.rainbow,
         shared.sky.water,
       ]) {

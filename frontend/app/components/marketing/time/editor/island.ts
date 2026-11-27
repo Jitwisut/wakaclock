@@ -132,7 +132,9 @@ function tree(parts: BufferGeometry[], at: [number, number, number], size: numbe
           1.5 * size,
           [x, y + (0.9 + tier * 0.75) * size, z],
           leaves,
-          7
+          7,
+          0,
+          'smooth'
         )
       );
     }
@@ -285,7 +287,7 @@ function addPond(parts: BufferGeometry[], plan: IslandPlan) {
   const pondAt = onTop(plan.pond.angle, plan.pond.radius);
   const bank = new CylinderGeometry(2.7, 2.9, 0.3, 14, 1);
   bank.translate(pondAt[0], ISLAND_TOP + 0.05, pondAt[2]);
-  parts.push(finish(bank, solid(STONE)));
+  parts.push(finish(bank, solid(STONE), 'smooth'));
   for (let index = 0; index < 5; index += 1) {
     const angle = (index / 5) * Math.PI * 2 + phase;
     parts.push(
@@ -311,17 +313,17 @@ export function buildIsland(seed: number, detail = 1): BufferGeometry {
   const parts: BufferGeometry[] = [];
 
   // The grassy cap: its top face is the island's surface.
-  const cap = wobble(new CylinderGeometry(R, R - 0.8, 1.6, 22, 1), 0.08, phase);
+  const cap = wobble(new CylinderGeometry(R, R - 0.8, 1.6, 64, 1), 0.08, phase);
   cap.translate(0, ISLAND_TOP - 0.8, 0);
   const grass = new Color(GRASS);
   const edge = new Color(GRASS_EDGE);
-  parts.push(finish(cap, (y) => (y > ISLAND_TOP - 0.05 ? grass : edge)));
+  parts.push(finish(cap, (y) => (y > ISLAND_TOP - 0.05 ? grass : edge), 'smooth'));
 
   // A band of earth under the grass.
-  const earth = wobble(new CylinderGeometry(R - 0.7, R - 2.2, 2.2, 22, 2), 0.09, phase + 0.3);
+  const earth = wobble(new CylinderGeometry(R - 0.7, R - 2.2, 2.2, 48, 2), 0.09, phase + 0.3);
   roughen(earth, 0.25, seed);
   earth.translate(0, ISLAND_TOP - 2.6, 0);
-  parts.push(finish(earth, solid(EARTH)));
+  parts.push(finish(earth, solid(EARTH), 'smooth'));
 
   addCliff(parts, random, seed, phase, detail);
   addTrails(parts, random, plan, detail);

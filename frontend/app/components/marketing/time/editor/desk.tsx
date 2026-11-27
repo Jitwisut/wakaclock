@@ -118,7 +118,10 @@ const ahead = new Vector3();
  * tour goes the subject stands in a pool of lamplight with crisp shadows. The rest of the
  * model falls off into the evening room.
  */
-export function Lamp({ shadows }: { shadows: boolean }) {
+export function Lamp({ sharp = false, shadows }: { shadows: boolean; sharp?: boolean }) {
+  // The full tier gets a finer shadow map (owner 2026-11-27, "sharper"): crisp edges under
+  // the buildings and trees instead of stair-stepped ones.
+  const mapSize = sharp ? 4096 : 2048;
   const lamp = useRef<SpotLight>(null);
   const target = useMemo(() => new Object3D(), []);
   useEffect(() => {
@@ -148,8 +151,8 @@ export function Lamp({ shadows }: { shadows: boolean }) {
         shadow-bias={-0.0004}
         shadow-camera-far={260}
         shadow-camera-near={20}
-        shadow-mapSize-height={2048}
-        shadow-mapSize-width={2048}
+        shadow-mapSize-height={mapSize}
+        shadow-mapSize-width={mapSize}
         shadow-normalBias={0.04}
       />
     </>
